@@ -9,17 +9,26 @@ export const runtime = "nodejs";
  * POST /api/plans/[planId]/approve
  * Marks a plan as approved (scoped to org) and stores approval metadata.
  */
+
+type OrgContext = {
+  orgId: string;
+  uid: string;
+  email?: string | null;
+};
+
 export async function POST(
   req: Request,
   context: { params: Promise<{ planId: string }> }
 ) {
   try {
-    const ctx: any = await requireOrgContext(req);
-    const orgId = ctx?.orgId;
-    const uid = ctx?.uid;
-    const email = ctx?.email;
+    // requireOrgContext should throw if invalid; we still validate shape defensively.
+    const ctx = (await requireOrgContext(req)) as OrgContext;
 
-    if (!orgId) {
+    const orgId = typeof ctx?.orgId === "string" ? ctx.orgId : "";
+    const uid = typeof ctx?.uid === "string" ? ctx.uid : "";
+    const email = typeof ctx?.email === "string" ? ctx.email : null;
+
+    if (!orgId || !uid) {
       return NextResponse.json({ error: "Missing org context" }, { status: 401 });
     }
 
@@ -32,9 +41,9 @@ export async function POST(
 
     const ref = adminDb
       .collection("organizations")
-      .doc(String(orgId))
+      .doc(orgId)
       .collection("plans")
-      .doc(String(planId));
+      .doc(planId);
 
     const snap = await ref.get();
     if (!snap.exists) {
@@ -45,16 +54,17 @@ export async function POST(
       {
         status: "approved",
         approvedAt: FieldValue.serverTimestamp(),
-        approvedBy: { uid: uid ?? null, email: email ?? null },
+        approvedBy: { uid, email },
         updatedAt: FieldValue.serverTimestamp(),
       },
       { merge: true }
     );
 
     return NextResponse.json({ ok: true });
-  } catch (e: any) {
+  } catch (e: unknown) {
     const { status, message } = errorToResponse(e);
     return NextResponse.json({ error: message }, { status });
   }
 }
+
 
