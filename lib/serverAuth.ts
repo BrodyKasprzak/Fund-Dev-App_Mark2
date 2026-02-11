@@ -16,12 +16,8 @@ type AuthContext = {
 
 type OrgContext = AuthContext & {
   orgId: string;
-  role: string; // keep flexible: "admin" | "member" | etc.
+  role: string;
 };
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null;
-}
 
 function asNonEmptyString(v: unknown): string | null {
   if (typeof v !== "string") return null;
@@ -49,31 +45,21 @@ export async function requireAuth(req: Request): Promise<AuthContext> {
 export async function requireOrgContext(req: Request): Promise<OrgContext> {
   const { uid, email } = await requireAuth(req);
 
-  const snap = await adminDb.collection("users").doc(uid).get();
-  if (!snap.exists) throw new HttpError(403, "User profile not found");
+  const orgId = asNonEmptyString(req.headers.get("x-org-id"));
+  if (!orgId) throw new HttpError(400, "Missing org context");
 
-  const data: unknown = snap.data();
-  const rec = isRecord(data) ? data : {};
+  const memberRef = adminDb
+    .collection("organizations")
+    .doc(orgId)
+    .collection("members")
+    .doc(uid);
 
-  // orgId can be string OR (sometimes) something else in legacy data, so coerce safely
-  const orgIdRaw = rec.orgId;
-  const orgId =
-    typeof orgIdRaw === "string"
-      ? orgIdRaw.trim()
-      : orgIdRaw != null
-        ? String(orgIdRaw).trim()
-        : "";
+  const memberSnap = await memberRef.get();
+  if (!memberSnap.exists) throw new HttpError(403, "Not a member of this org");
 
-  if (!orgId) throw new HttpError(403, "User has no org");
+  const role = asNonEmptyString(memberSnap.data()?.role) ?? "member";
 
-  const role = asNonEmptyString(rec.role) ?? "member"; // safe default
-
-  return {
-    uid,
-    email,
-    orgId,
-    role,
-  };
+  return { uid, email, orgId, role };
 }
 
 export async function requireAdmin(req: Request): Promise<OrgContext> {
@@ -83,13 +69,10 @@ export async function requireAdmin(req: Request): Promise<OrgContext> {
 }
 
 export function errorToResponse(err: unknown): { status: number; message: string } {
-  if (err instanceof HttpError) {
-    return { status: err.status, message: err.message };
-  }
-
-  if (err instanceof Error) {
-    return { status: 500, message: err.message || "Server error" };
-  }
-
+  if (err instanceof HttpError) return { status: err.status, message: err.message };
+  if (err instanceof Error) return { status: 500, message: err.message || "Server error" };
   return { status: 500, message: "Server error" };
 }
+
+
+

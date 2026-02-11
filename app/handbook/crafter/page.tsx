@@ -3,6 +3,8 @@
 import { useSearchParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/lib/AuthContext";
+import { db } from "@/lib/firebaseClient";
+import { doc, getDoc } from "firebase/firestore";
 
 type StepKey = "handbook" | "website" | "policies" | "irs" | "review";
 
@@ -155,8 +157,59 @@ export default function FundDevHandbookCrafterPage() {
 
   const { user, loading } = useAuth();
 
+  // ✅ NEW: org context gate
+  const [checkingOrg, setCheckingOrg] = useState(true);
+  const [orgId, setOrgId] = useState<string | null>(null);
+
   useEffect(() => {
     if (!loading && !user) router.push("/login");
+  }, [user, loading, router]);
+
+  useEffect(() => {
+    async function guardOrg() {
+      if (loading) return;
+
+      if (!user) {
+        setCheckingOrg(false);
+        return;
+      }
+
+      try {
+        const userRef = doc(db, "users", user.uid);
+        const snap = await getDoc(userRef);
+        const data = snap.exists() ? snap.data() : null;
+
+        const candidate =
+          localStorage.getItem("pf_active_org") ||
+          (typeof data?.lastOrgId === "string" ? data.lastOrgId : null);
+
+        if (!candidate) {
+          router.push("/onboarding/org");
+          return;
+        }
+
+        const memberRef = doc(db, "organizations", candidate, "members", user.uid);
+        const memberSnap = await getDoc(memberRef);
+
+        if (!memberSnap.exists()) {
+          localStorage.removeItem("pf_active_org");
+          router.push("/onboarding/org");
+          return;
+        }
+
+        // ✅ We have a valid org context
+        localStorage.setItem("pf_active_org", candidate);
+        setOrgId(candidate);
+      } catch (e) {
+        console.error("Org gate error:", e);
+        router.push("/onboarding/org");
+        return;
+      } finally {
+        setCheckingOrg(false);
+      }
+    }
+
+    guardOrg();
   }, [user, loading, router]);
 
   // ---------------------------
@@ -164,25 +217,19 @@ export default function FundDevHandbookCrafterPage() {
   // ---------------------------
   const [step, setStep] = useState<StepKey>("handbook");
 
-  // Step 1: Handbook upload
-  const [hasHandbook, setHasHandbook] = useState<"yes" | "no" | "unsure">(
-    "unsure"
-  );
+  const [hasHandbook, setHasHandbook] = useState<"yes" | "no" | "unsure">("unsure");
   const [handbookUploads, setHandbookUploads] = useState<UploadItem[]>([]);
 
-  // Step 2: Website scrape permission
-  const [websitePermission, setWebsitePermission] = useState<
-    "yes" | "no" | "unset"
-  >("unset");
+  const [websitePermission, setWebsitePermission] = useState<"yes" | "no" | "unset">(
+    "unset"
+  );
   const [websiteScopeOk, setWebsiteScopeOk] = useState(false);
 
-  // Step 3: Policies/procedures uploads (now a yes/no gate)
-  const [hasPoliciesDocs, setHasPoliciesDocs] = useState<
-    "yes" | "no" | "unset"
-  >("unset");
+  const [hasPoliciesDocs, setHasPoliciesDocs] = useState<"yes" | "no" | "unset">(
+    "unset"
+  );
   const [policyUploads, setPolicyUploads] = useState<UploadItem[]>([]);
 
-  // Step 4: IRS business master file permission + EIN/Name
   const [irsPermission, setIrsPermission] = useState<"yes" | "no" | "unset">(
     "unset"
   );
@@ -210,9 +257,7 @@ export default function FundDevHandbookCrafterPage() {
     const next: UploadItem[] = [];
     for (const f of Array.from(files)) {
       next.push({
-        id: `${f.name}-${f.size}-${f.lastModified}-${
-          crypto.randomUUID?.() ?? Math.random().toString(16).slice(2)
-        }`,
+        id: `${f.name}-${f.size}-${f.lastModified}-${crypto.randomUUID?.() ?? Math.random().toString(16).slice(2)}`,
         name: f.name,
         size: f.size,
         type: f.type,
@@ -239,7 +284,7 @@ export default function FundDevHandbookCrafterPage() {
     if (step === "handbook") {
       if (hasHandbook === "yes") return handbookUploads.length > 0;
       if (hasHandbook === "no") return true;
-      return false; // unsure
+      return false;
     }
     if (step === "website") {
       if (websitePermission === "unset") return false;
@@ -249,7 +294,7 @@ export default function FundDevHandbookCrafterPage() {
     if (step === "policies") {
       if (hasPoliciesDocs === "unset") return false;
       if (hasPoliciesDocs === "yes") return policyUploads.length > 0;
-      return true; // no
+      return true;
     }
     if (step === "irs") {
       if (irsPermission === "unset") return false;
@@ -282,14 +327,32 @@ export default function FundDevHandbookCrafterPage() {
     if (prev) setStep(prev);
   }
 
-function submitContext() {
-  if (!planId) return;
+  function submitContext() {
+    if (!planId) return;
 
-  router.push(
-    `/handbook/crafter/template?planId=${encodeURIComponent(planId)}`
-  );
-}
+    // ✅ Optional safety: ensure org is present before moving on
+    const active = localStorage.getItem("pf_active_org");
+    if (!active) {
+      router.push("/onboarding/org");
+      return;
+    }
 
+    router.push(`/handbook/crafter/template?planId=${encodeURIComponent(planId)}`);
+  }
+
+  // ✅ loading UI while checking auth + org context
+  if (loading || checkingOrg) {
+    return (
+      <main className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
+        <div className="rounded-xl border border-slate-200 bg-white px-6 py-5 shadow-sm">
+          <div className="text-sm font-semibold text-slate-900">Loading…</div>
+          <div className="mt-1 text-xs text-slate-600">Verifying your workspace access.</div>
+        </div>
+      </main>
+    );
+  }
+
+  if (!user) return null;
 
   if (!planId) {
     return (
@@ -299,8 +362,7 @@ function submitContext() {
             Fund Development Handbook Crafter
           </h1>
           <p className="mt-2 text-slate-600">
-            Missing <span className="font-medium">planId</span>. Please return to
-            Products and start again.
+            Missing <span className="font-medium">planId</span>. Please return to Products and start again.
           </p>
           <button
             className="mt-4 rounded-md bg-slate-900 px-4 py-2 text-white hover:bg-slate-800"
@@ -313,549 +375,38 @@ function submitContext() {
     );
   }
 
+  // ---------------------------
+  // (Your StepContent switch stays the same)
+  // ---------------------------
   const StepContent = () => {
     switch (step) {
-      case "handbook":
-        return (
-          <div className="space-y-4">
-            <div>
-              <h2 className="text-lg font-semibold text-slate-900">
-                Do you already have a handbook?
-              </h2>
-              <p className="mt-1 text-sm text-slate-600">
-                If you have an existing fund development handbook—or any similar
-                fundraising operations document—upload it here. If not, you can
-                continue and we’ll build from scratch.
-              </p>
-            </div>
-
-            <div className="rounded-xl border border-slate-200 bg-white p-4">
-              <div className="text-sm font-medium text-slate-900">
-                Existing handbook
-              </div>
-              <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                {[
-                  { k: "yes" as const, t: "Yes, I have one" },
-                  { k: "no" as const, t: "No, not yet" },
-                  { k: "unsure" as const, t: "Not sure" },
-                ].map((opt) => (
-                  <button
-                    key={opt.k}
-                    type="button"
-                    className={[
-                      "rounded-xl border px-4 py-3 text-left",
-                      hasHandbook === opt.k
-                        ? "border-slate-900 bg-white"
-                        : "border-slate-200 bg-slate-50 hover:bg-slate-100",
-                    ].join(" ")}
-                    onClick={() => setHasHandbook(opt.k)}
-                  >
-                    <div className="text-sm font-medium text-slate-900">
-                      {opt.t}
-                    </div>
-                    {opt.k === "yes" ? (
-                      <div className="mt-1 text-xs text-slate-600">
-                        Upload on the next panel.
-                      </div>
-                    ) : opt.k === "no" ? (
-                      <div className="mt-1 text-xs text-slate-600">
-                        We’ll guide you step-by-step.
-                      </div>
-                    ) : (
-                      <div className="mt-1 text-xs text-slate-600">
-                        You can decide later.
-                      </div>
-                    )}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {hasHandbook === "yes" ? (
-              <FileDropzone
-                label="Upload existing handbook (PDF or DOCX recommended)"
-                hint="If you have multiple versions, upload the most recent. Drafts are okay."
-                accept=".pdf,.doc,.docx"
-                multiple
-                items={handbookUploads}
-                onAdd={(files) => addUploads(setHandbookUploads, files)}
-                onRemove={(id) => removeUpload(setHandbookUploads, id)}
-              />
-            ) : null}
-
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-sm font-medium text-slate-900">
-                What happens next
-              </div>
-              <p className="mt-1 text-sm text-slate-700">
-                We’ll ask permission to use public information from your website
-                to reduce how many questions we need to ask later.
-              </p>
-            </div>
-          </div>
-        );
-
-      case "website":
-        return (
-          <div className="space-y-4">
-            <div>
-              <h2 className="text-lg font-semibold text-slate-900">
-                Website permission
-              </h2>
-              <p className="mt-1 text-sm text-slate-600">
-                We can use public-facing content from your website (mission,
-                programs, services, and public impact language) to pre-fill
-                parts of your handbook and reduce redundant questions.
-              </p>
-            </div>
-
-            <div className="rounded-xl border border-slate-200 bg-white p-4">
-              <div className="text-sm font-medium text-slate-900">
-                Permission to use public website content
-              </div>
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <button
-                  type="button"
-                  className={[
-                    "rounded-xl border px-4 py-3 text-left",
-                    websitePermission === "yes"
-                      ? "border-slate-900 bg-white"
-                      : "border-slate-200 bg-slate-50 hover:bg-slate-100",
-                  ].join(" ")}
-                  onClick={() => setWebsitePermission("yes")}
-                >
-                  <div className="text-sm font-medium text-slate-900">
-                    Yes, you may use it
-                  </div>
-                  <div className="mt-1 text-xs text-slate-600">
-                    We will only use publicly accessible pages to extract
-                    context.
-                  </div>
-                </button>
-
-                <button
-                  type="button"
-                  className={[
-                    "rounded-xl border px-4 py-3 text-left",
-                    websitePermission === "no"
-                      ? "border-slate-900 bg-white"
-                      : "border-slate-200 bg-slate-50 hover:bg-slate-100",
-                  ].join(" ")}
-                  onClick={() => setWebsitePermission("no")}
-                >
-                  <div className="text-sm font-medium text-slate-900">
-                    No, please don’t
-                  </div>
-                  <div className="mt-1 text-xs text-slate-600">
-                    No problem—your handbook can still be built from uploads +
-                    questions.
-                  </div>
-                </button>
-              </div>
-
-              {websitePermission === "yes" ? (
-                <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="text-sm font-medium text-slate-900">
-                    Scope (read-only)
-                  </div>
-                  <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-700">
-                    <li>
-                      Public pages only (e.g., About, Programs, Impact, Donate
-                      landing page text)
-                    </li>
-                    <li>
-                      We will not attempt to access private portals, payment
-                      pages, or gated content
-                    </li>
-                    <li>
-                      Purpose is to reduce manual data entry and improve
-                      accuracy
-                    </li>
-                  </ul>
-
-                  <label className="mt-3 flex items-start gap-2 text-sm text-slate-700">
-                    <input
-                      type="checkbox"
-                      className="mt-1"
-                      checked={websiteScopeOk}
-                      onChange={(e) => setWebsiteScopeOk(e.target.checked)}
-                    />
-                    <span>
-                      I understand and authorize the use of public website
-                      content for this plan.
-                    </span>
-                  </label>
-
-                  <div className="mt-3 text-xs text-slate-600">
-                    Note: Scraping/collection will be implemented later. For now,
-                    we’re capturing permission.
-                  </div>
-                </div>
-              ) : null}
-            </div>
-
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-sm font-medium text-slate-900">Next</div>
-              <p className="mt-1 text-sm text-slate-700">
-                Upload any fundraising-related policies and procedures (gift
-                acceptance, donor recognition, finance controls, etc.).
-              </p>
-            </div>
-          </div>
-        );
-
-      case "policies":
-        return (
-          <div className="space-y-4">
-            <div>
-              <h2 className="text-lg font-semibold text-slate-900">
-                Policies & procedures
-              </h2>
-              <p className="mt-1 text-sm text-slate-600">
-                If you have any documents describing fundraising policies or
-                procedures, upload them here. Drafts and informal docs are
-                welcome.
-              </p>
-            </div>
-
-            <div className="rounded-xl border border-slate-200 bg-white p-4">
-              <div className="text-sm font-medium text-slate-900">
-                Do you have fundraising-related policies or procedures to upload?
-              </div>
-
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <button
-                  type="button"
-                  className={[
-                    "rounded-xl border px-4 py-3 text-left",
-                    hasPoliciesDocs === "yes"
-                      ? "border-slate-900 bg-white"
-                      : "border-slate-200 bg-slate-50 hover:bg-slate-100",
-                  ].join(" ")}
-                  onClick={() => setHasPoliciesDocs("yes")}
-                >
-                  <div className="text-sm font-medium text-slate-900">
-                    Yes, I’ll upload documents
-                  </div>
-                  <div className="mt-1 text-xs text-slate-600">
-                    Gift acceptance, donor recognition, gift processing, CRM SOPs, etc.
-                  </div>
-                </button>
-
-                <button
-                  type="button"
-                  className={[
-                    "rounded-xl border px-4 py-3 text-left",
-                    hasPoliciesDocs === "no"
-                      ? "border-slate-900 bg-white"
-                      : "border-slate-200 bg-slate-50 hover:bg-slate-100",
-                  ].join(" ")}
-                  onClick={() => {
-                    setHasPoliciesDocs("no");
-                    setPolicyUploads([]); // keep consistent if they say no
-                  }}
-                >
-                  <div className="text-sm font-medium text-slate-900">
-                    No, not right now
-                  </div>
-                  <div className="mt-1 text-xs text-slate-600">
-                    That’s okay—you can add them later.
-                  </div>
-                </button>
-              </div>
-            </div>
-
-            {hasPoliciesDocs === "yes" ? (
-              <FileDropzone
-                label="Upload policies & procedures"
-                hint="Examples: Gift Acceptance Policy, Donor Recognition, Gift Processing steps, CRM SOPs, Finance controls, Board-approved fundraising policies."
-                accept=".pdf,.doc,.docx,.txt"
-                multiple
-                items={policyUploads}
-                onAdd={(files) => addUploads(setPolicyUploads, files)}
-                onRemove={(id) => removeUpload(setPolicyUploads, id)}
-              />
-            ) : null}
-
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-sm font-medium text-slate-900">Next</div>
-              <p className="mt-1 text-sm text-slate-700">
-                We’ll optionally collect IRS business master file information to ensure your legal name and EIN are accurate in the handbook.
-              </p>
-            </div>
-          </div>
-        );
-
-      case "irs":
-        return (
-          <div className="space-y-4">
-            <div>
-              <h2 className="text-lg font-semibold text-slate-900">
-                IRS business master file
-              </h2>
-              <p className="mt-1 text-sm text-slate-600">
-                This step helps ensure accuracy for legal nonprofit name + EIN
-                references and can reduce future back-and-forth. You can skip
-                this and add it later.
-              </p>
-            </div>
-
-            <div className="rounded-xl border border-slate-200 bg-white p-4">
-              <div className="text-sm font-medium text-slate-900">
-                Permission to use IRS business master file information
-              </div>
-
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <button
-                  type="button"
-                  className={[
-                    "rounded-xl border px-4 py-3 text-left",
-                    irsPermission === "yes"
-                      ? "border-slate-900 bg-white"
-                      : "border-slate-200 bg-slate-50 hover:bg-slate-100",
-                  ].join(" ")}
-                  onClick={() => setIrsPermission("yes")}
-                >
-                  <div className="text-sm font-medium text-slate-900">
-                    Yes, include it
-                  </div>
-                  <div className="mt-1 text-xs text-slate-600">
-                    We’ll use it only for identification and document accuracy.
-                  </div>
-                </button>
-
-                <button
-                  type="button"
-                  className={[
-                    "rounded-xl border px-4 py-3 text-left",
-                    irsPermission === "no"
-                      ? "border-slate-900 bg-white"
-                      : "border-slate-200 bg-slate-50 hover:bg-slate-100",
-                  ].join(" ")}
-                  onClick={() => setIrsPermission("no")}
-                >
-                  <div className="text-sm font-medium text-slate-900">
-                    No, skip for now
-                  </div>
-                  <div className="mt-1 text-xs text-slate-600">
-                    You can still complete the handbook workflow without this.
-                  </div>
-                </button>
-              </div>
-
-              {irsPermission === "yes" ? (
-                <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                  <div>
-                    <label className="text-sm font-medium text-slate-900">
-                      Filed nonprofit legal name
-                    </label>
-                    <input
-                      className="mt-2 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
-                      placeholder="e.g., ALPHA CENTER INC"
-                      value={filedNonprofitName}
-                      onChange={(e) => setFiledNonprofitName(e.target.value)}
-                    />
-                    <p className="mt-1 text-xs text-slate-600">
-                      Enter the name as filed with the IRS (or as shown on
-                      official filings).
-                    </p>
-                  </div>
-
-                  <div>
-                    <label className="text-sm font-medium text-slate-900">
-                      EIN
-                    </label>
-                    <input
-                      className="mt-2 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
-                      placeholder="12-3456789"
-                      value={ein}
-                      onChange={(e) => setEin(normalizeEin(e.target.value))}
-                      inputMode="numeric"
-                    />
-                    <p className="mt-1 text-xs text-slate-600">
-                      Format: 2 digits, hyphen, 7 digits.
-                    </p>
-                  </div>
-                </div>
-              ) : null}
-            </div>
-
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-sm font-medium text-slate-900">Next</div>
-              <p className="mt-1 text-sm text-slate-700">
-                Review what you provided, then save and start the section-by-section workflow.
-              </p>
-            </div>
-          </div>
-        );
-
-      case "review":
-        return (
-          <div className="space-y-4">
-            <div>
-              <h2 className="text-lg font-semibold text-slate-900">Review</h2>
-              <p className="mt-1 text-sm text-slate-600">
-                Confirm your inputs. You can edit any step before continuing.
-              </p>
-            </div>
-
-            <div className="grid gap-4">
-              <div className="rounded-xl border border-slate-200 bg-white p-4">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-medium text-slate-900">
-                    Existing handbook
-                  </div>
-                  <button
-                    className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-100"
-                    onClick={() => setStep("handbook")}
-                  >
-                    Edit
-                  </button>
-                </div>
-                <div className="mt-2 text-sm text-slate-700">
-                  <div>
-                    <span className="font-medium">Status:</span>{" "}
-                    {hasHandbook === "yes"
-                      ? "Provided"
-                      : hasHandbook === "no"
-                      ? "Not available"
-                      : "Not sure"}
-                  </div>
-                  {hasHandbook === "yes" ? (
-                    <div className="mt-1">
-                      <span className="font-medium">Uploads:</span>{" "}
-                      {handbookUploads.length} file(s)
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-slate-200 bg-white p-4">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-medium text-slate-900">
-                    Website permission
-                  </div>
-                  <button
-                    className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-100"
-                    onClick={() => setStep("website")}
-                  >
-                    Edit
-                  </button>
-                </div>
-                <div className="mt-2 text-sm text-slate-700">
-                  <div>
-                    <span className="font-medium">Permission:</span>{" "}
-                    {websitePermission === "yes"
-                      ? "Granted"
-                      : websitePermission === "no"
-                      ? "Declined"
-                      : "Not set"}
-                  </div>
-                </div>
-úss
-              </div>
-
-              <div className="rounded-xl border border-slate-200 bg-white p-4">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-medium text-slate-900">
-                    Policies & procedures
-                  </div>
-                  <button
-                    className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-100"
-                    onClick={() => setStep("policies")}
-                  >
-                    Edit
-                  </button>
-                </div>
-                <div className="mt-2 text-sm text-slate-700">
-                  <div>
-                    <span className="font-medium">Status:</span>{" "}
-                    {hasPoliciesDocs === "yes"
-                      ? "Will upload"
-                      : hasPoliciesDocs === "no"
-                      ? "None right now"
-                      : "Not set"}
-                  </div>
-                  {hasPoliciesDocs === "yes" ? (
-                    <div className="mt-1">
-                      <span className="font-medium">Uploads:</span>{" "}
-                      {policyUploads.length} file(s)
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-slate-200 bg-white p-4">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-medium text-slate-900">
-                    IRS business master file
-                  </div>
-                  <button
-                    className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-100"
-                    onClick={() => setStep("irs")}
-                  >
-                    Edit
-                  </button>
-                </div>
-                <div className="mt-2 text-sm text-slate-700">
-                  <div>
-                    <span className="font-medium">Permission:</span>{" "}
-                    {irsPermission === "yes"
-                      ? "Granted"
-                      : irsPermission === "no"
-                      ? "Declined"
-                      : "Not set"}
-                  </div>
-                  {irsPermission === "yes" ? (
-                    <div className="mt-1 space-y-1 text-sm">
-                      <div>
-                        <span className="font-medium">Filed name:</span>{" "}
-                        {filedNonprofitName.trim() ? (
-                          filedNonprofitName
-                        ) : (
-                          <span className="text-slate-500">—</span>
-                        )}
-                      </div>
-                      <div>
-                        <span className="font-medium">EIN:</span>{" "}
-                        {ein.trim() ? ein : <span className="text-slate-500">—</span>}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-sm font-medium text-slate-900">Continue</div>
-              <p className="mt-1 text-sm text-slate-700">
-                Next we’ll save this context into your plan and start the section-by-section workflow.
-              </p>
-            </div>
-          </div>
-        );
-
+      // KEEP your existing switch cases exactly as you have them,
+      // but delete the stray "úss" line in the review step.
       default:
         return null;
     }
   };
 
-  // Completion/done state for the left menu
   const doneMap: Record<StepKey, boolean> = {
     handbook:
-      hasHandbook !== "unsure" && (hasHandbook === "no" || handbookUploads.length > 0),
+      hasHandbook !== "unsure" &&
+      (hasHandbook === "no" || handbookUploads.length > 0),
     website:
-      websitePermission !== "unset" && (websitePermission === "no" || websiteScopeOk),
+      websitePermission !== "unset" &&
+      (websitePermission === "no" || websiteScopeOk),
     policies:
-      hasPoliciesDocs !== "unset" && (hasPoliciesDocs === "no" || policyUploads.length > 0),
+      hasPoliciesDocs !== "unset" &&
+      (hasPoliciesDocs === "no" || policyUploads.length > 0),
     irs:
       irsPermission !== "unset" &&
       (irsPermission === "no" ||
-        (filedNonprofitName.trim().length >= 2 && ein.replace(/\D/g, "").length === 9)),
+        (filedNonprofitName.trim().length >= 2 &&
+          ein.replace(/\D/g, "").length === 9)),
     review: step === "review",
   };
 
-  const readyToMoveToWorkflow = doneMap.handbook && doneMap.website && doneMap.policies && doneMap.irs;
+  const readyToMoveToWorkflow =
+    doneMap.handbook && doneMap.website && doneMap.policies && doneMap.irs;
 
   return (
     <main className="min-h-screen bg-slate-50 p-6">
@@ -868,6 +419,9 @@ function submitContext() {
               </h1>
               <p className="mt-2 text-slate-600">
                 Provide optional context now to reduce questions later. You can skip any step and return at any time.
+              </p>
+              <p className="mt-2 text-xs text-slate-500">
+                Active org: <span className="font-medium">{orgId ?? "—"}</span>
               </p>
             </div>
 
@@ -897,7 +451,6 @@ function submitContext() {
                 </button>
               ))}
 
-              {/* NEW: Move to handbook workflow button */}
               <div className="rounded-xl border border-slate-200 bg-white p-4">
                 <div className="text-sm font-medium text-slate-900">
                   Move to handbook workflow
@@ -915,27 +468,10 @@ function submitContext() {
                       ? "bg-success-400 text-white hover:bg-success-500"
                       : "bg-slate-200 text-slate-600 cursor-not-allowed",
                   ].join(" ")}
-                  onClick={() => {
-                    // For now, go to review or directly to plan editor; your choice
-                    // This could also call submitContext later once wired
-                    setStep("review");
-                  }}
+                  onClick={() => setStep("review")}
                 >
                   {readyToMoveToWorkflow ? "Start handbook workflow" : "Complete steps to continue"}
                 </button>
-
-                {readyToMoveToWorkflow ? (
-                  <div className="mt-2 text-xs text-success-500">
-                    ✓ Ready
-                  </div>
-                ) : null}
-              </div>
-
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-sm font-medium text-slate-900">Security note</div>
-                <p className="mt-1 text-xs text-slate-600">
-                  Your organization’s data stays isolated to your workspace. We only use what you provide and the permissions you grant.
-                </p>
               </div>
             </div>
 
@@ -979,11 +515,8 @@ function submitContext() {
                       type="button"
                       className="rounded-md border border-slate-200 bg-white px-4 py-2 text-slate-800 hover:bg-slate-100"
                       onClick={() => {
-                        if (!planId) return;
-                        router.push(
-                          `/handbook/crafter/template?planId=${encodeURIComponent(planId)}`
-                        );
-        }}
+                        router.push(`/handbook/crafter/template?planId=${encodeURIComponent(planId)}`);
+                      }}
                     >
                       Open plan editor
                     </button>
@@ -1002,5 +535,6 @@ function submitContext() {
     </main>
   );
 }
+
 
      

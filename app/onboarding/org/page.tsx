@@ -23,7 +23,7 @@ function isValidYear(y: string) {
 
 export default function OrgOnboardingPage() {
   const router = useRouter();
-  const { user, loading } = useAuth();
+  const { user, loading, setActiveOrgId, authedFetch } = useAuth();
 
   const [orgName, setOrgName] = useState("");
   const [mission, setMission] = useState("");
@@ -41,9 +41,7 @@ export default function OrgOnboardingPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!loading && !user) {
-      router.push("/login");
-    }
+    if (!loading && !user) router.push("/login");
   }, [user, loading, router]);
 
   const trimmedOrg = useMemo(() => orgName.trim(), [orgName]);
@@ -79,11 +77,9 @@ export default function OrgOnboardingPage() {
       return;
     }
 
-    if (String(numEmployees ?? "").trim().length > 0) {
-      if (Number.isNaN(parsedEmployees)) {
-        setError("Number of employees must be a valid number.");
-        return;
-      }
+    if (String(numEmployees ?? "").trim().length > 0 && Number.isNaN(parsedEmployees)) {
+      setError("Number of employees must be a valid number.");
+      return;
     }
 
     if (hasWebsite) {
@@ -101,6 +97,8 @@ export default function OrgOnboardingPage() {
     setError(null);
 
     try {
+      // Important: create-org should NOT require x-org-id (no org yet),
+      // so use fetch (or authedFetch only if it does not force x-org-id).
       const idToken = await user.getIdToken();
 
       const res = await fetch("/api/create-org", {
@@ -117,8 +115,7 @@ export default function OrgOnboardingPage() {
           fiscalYear: fiscalYear.trim() || null,
           crm: crm.trim() || null,
           address: trimmedAddress || null,
-          numEmployees:
-            String(numEmployees ?? "").trim().length > 0 ? parsedEmployees : null,
+          numEmployees: String(numEmployees ?? "").trim().length > 0 ? parsedEmployees : null,
           foundedYear: trimmedFoundedYear || null,
           websiteUrl: hasWebsite ? trimmedUrl : null,
           websiteConsent: hasWebsite ? true : false,
@@ -129,6 +126,11 @@ export default function OrgOnboardingPage() {
         const body = await res.text();
         throw new Error(body || "Failed to create organization");
       }
+
+      const json = await res.json();
+
+      // ✅ NEW: set active org via AuthContext (persists to localStorage inside context)
+      setActiveOrgId(json.orgId);
 
       router.push("/dashboard");
     } catch (err: any) {
@@ -162,7 +164,7 @@ export default function OrgOnboardingPage() {
                 <div className="h-2 w-2 rounded-full bg-gradient-to-r from-primary-500 to-accent-400"></div>
                 <div className="text-sm font-bold text-slate-900">Organization details</div>
               </div>
-              
+
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm font-semibold text-slate-700 mb-2">
@@ -322,15 +324,23 @@ export default function OrgOnboardingPage() {
                       disabled={!hasWebsite}
                       onChange={(e) => setWebsiteConsent(e.target.checked)}
                     />
-                    <label 
+                    <label
                       htmlFor="website-consent"
-                      className={hasWebsite ? "text-sm text-slate-700 cursor-pointer" : "text-sm text-slate-400"}
+                      className={
+                        hasWebsite
+                          ? "text-sm text-slate-700 cursor-pointer"
+                          : "text-sm text-slate-400"
+                      }
                     >
-                      I give permission to view <span className="font-semibold">publicly available</span> information on my organization's website
+                      I give permission to view{" "}
+                      <span className="font-semibold">publicly available</span> information on my
+                      organization's website
                     </label>
                   </div>
                   {!hasWebsite && (
-                    <p className="mt-2 text-xs text-slate-500 ml-7">Add a website URL to enable this option</p>
+                    <p className="mt-2 text-xs text-slate-500 ml-7">
+                      Add a website URL to enable this option
+                    </p>
                   )}
                 </div>
               </div>
@@ -360,320 +370,4 @@ export default function OrgOnboardingPage() {
   );
 }
 
-
-
-
-// // fund-dev-app/app/onboarding/org/page.tsx
-// "use client";
-
-// import { useEffect, useMemo, useState } from "react";
-// import { useRouter } from "next/navigation";
-// import { useAuth } from "@/lib/AuthContext";
-
-// function isValidHttpUrl(url: string) {
-//   try {
-//     const u = new URL(url);
-//     return u.protocol === "http:" || u.protocol === "https:";
-//   } catch {
-//     return false;
-//   }
-// }
-
-// export default function OrgOnboardingPage() {
-//   const router = useRouter();
-//   const { user, loading } = useAuth();
-
-//   const [orgName, setOrgName] = useState("");
-//   const [websiteUrl, setWebsiteUrl] = useState("");
-//   const [websiteConsent, setWebsiteConsent] = useState(false);
-
-//   const [saving, setSaving] = useState(false);
-//   const [error, setError] = useState<string | null>(null);
-
-//   // Protect the route
-//   useEffect(() => {
-//     if (!loading && !user) {
-//       router.push("/login");
-//     }
-//   }, [user, loading, router]);
-
-//   const trimmedOrg = useMemo(() => orgName.trim(), [orgName]);
-//   const trimmedUrl = useMemo(() => websiteUrl.trim(), [websiteUrl]);
-//   const hasWebsite = trimmedUrl.length > 0;
-
-//   async function handleCreateOrg(e: React.FormEvent<HTMLFormElement>) {
-//     e.preventDefault();
-
-//     if (!user) {
-//       setError("You must be logged in to create an organization.");
-//       return;
-//     }
-
-//     if (!trimmedOrg) {
-//       setError("Organization name is required.");
-//       return;
-//     }
-
-//     // Website is optional, but if provided must be valid and must have consent
-//     if (hasWebsite) {
-//       if (!isValidHttpUrl(trimmedUrl)) {
-//         setError("Website URL must be a valid http(s) URL (e.g., https://yourorg.org).");
-//         return;
-//       }
-//       if (!websiteConsent) {
-//         setError("Please grant permission to view public information on your website.");
-//         return;
-//       }
-//     }
-
-//     setSaving(true);
-//     setError(null);
-
-//     try {
-//       const idToken = await user.getIdToken();
-
-//       const res = await fetch("/api/create-org", {
-//         method: "POST",
-//         headers: {
-//           "Content-Type": "application/json",
-//           Authorization: `Bearer ${idToken}`,
-//         },
-//         body: JSON.stringify({
-//           orgName: trimmedOrg,
-//           websiteUrl: hasWebsite ? trimmedUrl : null,
-//           websiteConsent: hasWebsite ? true : false,
-//         }),
-//       });
-
-//       if (!res.ok) {
-//         const body = await res.text();
-//         throw new Error(body || "Failed to create organization");
-//       }
-
-//       // After org workspace is created, go to dashboard (or wherever you route next)
-//       router.push("/dashboard");
-//     } catch (err: any) {
-//       setError(err?.message ?? "Failed to create organization.");
-//     } finally {
-//       setSaving(false);
-//     }
-//   }
-
-//   if (loading) return <p className="p-6">Loading...</p>;
-//   if (!user) return null;
-
-//   return (
-//     <main className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
-//       <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-//         <h1 className="text-2xl font-semibold text-slate-900">Create your organization</h1>
-//         <p className="mt-1 text-sm text-slate-600">
-//           This sets up your workspace for building your Fund Development Handbook.
-//         </p>
-
-//         <form onSubmit={handleCreateOrg} className="mt-5 space-y-4">
-//           <div className="space-y-1">
-//             <label className="text-sm font-medium text-slate-900">Organization name</label>
-//             <input
-//               className="w-full rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-900 outline-none focus:border-slate-400"
-//               value={orgName}
-//               onChange={(e) => setOrgName(e.target.value)}
-//               placeholder="e.g., Friends of FoCo Parks"
-//               required
-//             />
-//           </div>
-
-//           <div className="space-y-1">
-//             <label className="text-sm font-medium text-slate-900">
-//               Website URL <span className="text-slate-500">(optional)</span>
-//             </label>
-//             <input
-//               className="w-full rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-900 outline-none focus:border-slate-400"
-//               value={websiteUrl}
-//               onChange={(e) => {
-//                 setWebsiteUrl(e.target.value);
-//                 // If they clear the URL, clear consent too.
-//                 if (e.target.value.trim().length === 0) setWebsiteConsent(false);
-//               }}
-//               placeholder="https://yourorg.org"
-//               type="url"
-//             />
-//             <p className="text-xs text-slate-600">
-//               If you provide a website, we can use public information to reduce the number of questions we ask.
-//             </p>
-//           </div>
-
-//           {/* Permission / consent */}
-//           <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-//             <div className="text-sm font-semibold text-slate-900">Permission</div>
-//             <p className="mt-1 text-sm text-slate-700">
-//               If you add a website, we’ll only use <span className="font-medium">publicly available</span> information
-//               from that site to help draft your handbook.
-//             </p>
-
-//             <label className="mt-3 flex items-start gap-3">
-//               <input
-//                 type="checkbox"
-//                 className="mt-1"
-//                 checked={websiteConsent}
-//                 disabled={!hasWebsite}
-//                 onChange={(e) => setWebsiteConsent(e.target.checked)}
-//               />
-//               <span className={hasWebsite ? "text-sm text-slate-800" : "text-sm text-slate-400"}>
-//                 I give permission for the app to view public information on my organization’s website.
-//               </span>
-//             </label>
-
-//             {!hasWebsite ? (
-//               <div className="mt-2 text-xs text-slate-500">Add a website URL to enable this option.</div>
-//             ) : null}
-//           </div>
-
-//           {error ? <p className="text-sm text-rose-600">{error}</p> : null}
-
-//           <button
-//             className="w-full rounded-xl bg-success-400 p-3 text-sm font-medium text-white hover:bg-success-500 disabled:cursor-not-allowed disabled:bg-slate-400"
-//             type="submit"
-//             disabled={saving || !trimmedOrg || (hasWebsite && !websiteConsent)}
-//           >
-//             {saving ? "Creating..." : "Create organization"}
-//           </button>
-//         </form>
-//       </div>
-//     </main>
-//   );
-// }
-
-// /*"use client";
-
-// import { useEffect, useState } from "react";
-// import { useRouter } from "next/navigation";
-// import { useAuth } from "@/lib/AuthContext";
-
-// export default function OrgOnboardingPage() {
-//   const router = useRouter();
-//   const { user, loading } = useAuth();
-
-//   const [orgName, setOrgName] = useState("");
-//   const [websiteUrl, setWebsiteUrl] = useState("");
-//   const [saving, setSaving] = useState(false);
-//   const [error, setError] = useState<string | null>(null);
-
-//   // Protect the route
-//   useEffect(() => {
-//     if (!loading && !user) {
-//       console.log("🔒 No user, redirecting to /login");
-//       router.push("/login");
-//     }
-//   }, [user, loading, router]);
-
-// async function handleCreateOrg(e: React.FormEvent<HTMLFormElement>) {
-//   e.preventDefault();
-
-//   if (!user) {
-//     setError("You must be logged in to create an organization.");
-//     return;
-//   }
-
-//   const trimmedOrg = orgName.trim();
-//   const trimmedUrl = websiteUrl.trim();
-
-//   if (!trimmedOrg) {
-//     setError("Organization name is required.");
-//     return;
-//   }
-
-//   if (!/^https?:\/\//i.test(trimmedUrl)) {
-//     setError("Website URL must start with https://");
-//     return;
-//   }
-
-//   setSaving(true);
-//   setError(null);
-
-//   try {
-//     const idToken = await user.getIdToken();
-
-//     const res = await fetch("/api/create-org", {
-//       method: "POST",
-//       headers: {
-//         "Content-Type": "application/json",
-//         Authorization: `Bearer ${idToken}`,
-//       },
-//       body: JSON.stringify({ orgName: trimmedOrg, websiteUrl: trimmedUrl }),
-//     });
-
-//     if (!res.ok) {
-//       const body = await res.text();
-//       throw new Error(body || "Failed to create organization");
-//     }
-
-//     router.push("/dashboard");
-//   } catch (err: any) {
-//     setError(err.message ?? "Failed to create organization.");
-//   } finally {
-//     setSaving(false);
-//   }
-// }
-
-//   if (loading) {
-//     return <p className="p-6">Loading...</p>;
-//   }
-
-//   if (!user) return null;
-
-//   return (
-//     <main className="min-h-screen flex items-center justify-center p-6">
-//       <div className="w-full max-w-lg border rounded-xl p-6">
-//         <h1 className="text-2xl font-semibold">Create your organization</h1>
-//         <p className="text-sm opacity-80 mt-1">
-//           This sets up your workspace for building a fund development plan.
-//         </p>
-
-//         <form
-//           onSubmit={handleCreateOrg}
-//           onSubmitCapture={() => console.log("✅ FORM SUBMIT CAPTURED")}
-//           className="space-y-3 mt-5"
-//         >
-//           <div className="space-y-1">
-//             <label className="text-sm">Organization name</label>
-//             <input
-//               className="w-full border rounded-md p-2"
-//               value={orgName}
-//               onChange={(e) => setOrgName(e.target.value)}
-//               placeholder="e.g., Friends of FoCo Parks"
-//               required
-//             />
-//           </div>
-
-//           <div className="space-y-1">
-//             <label className="text-sm">Website URL</label>
-//             <input
-//               className="w-full border rounded-md p-2"
-//               value={websiteUrl}
-//               onChange={(e) => setWebsiteUrl(e.target.value)}
-//               placeholder="https://yourorg.org"
-//               type="url"
-//               required
-//             />
-//             <p className="text-xs opacity-70">
-//               Tip: include <span className="font-mono">https://</span> (required
-//               by many browsers for URL fields).
-//             </p>
-//           </div>
-
-//           {error && <p className="text-sm text-red-600">{error}</p>}
-
-//           <button
-//             className="w-full border rounded-md p-2"
-//             type="submit"
-//             disabled={saving || loading || !user}
-//             onClick={() => console.log("✅ BUTTON CLICKED")}
-//           >
-//             {saving ? "Creating..." : "Create organization"}
-//           </button>
-//         </form>
-//       </div>
-//     </main>
-//   );
-// } */
 

@@ -36,7 +36,7 @@ export default function RegisterPage() {
             <span className="text-xl font-bold text-white whitespace-nowrap">PurposeFramework</span>
           </div>
           <h1 className="text-3xl font-bold text-slate-900 mb-2">Create your account</h1>
-          <p className="text-slate-600">Start building professional fundraising documents</p>
+          <p className="text-slate-600">Start building and managing professional fundraising documents</p>
         </div>
 
         {/* Register Card */}

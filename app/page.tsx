@@ -106,7 +106,7 @@ export default function Home() {
                   <div className="h-3 w-3 rounded-full bg-gradient-to-r from-purple-400 to-primary-500 mb-4"></div>
                   <h3 className="text-lg font-bold text-slate-900 mb-2">Secure Storage</h3>
                   <p className="text-sm text-slate-600 leading-relaxed">
-                    Enterprise-grade security for all your nonprofit's critical documents and data
+                    Secure storage for all your nonprofit's important documents, update them all in the same place, at the same time 
                   </p>
                 </div>
 
@@ -114,15 +114,15 @@ export default function Home() {
                   <div className="h-3 w-3 rounded-full bg-gradient-to-r from-accent-300 to-primary-500 mb-4"></div>
                   <h3 className="text-lg font-bold text-slate-900 mb-2">AI-Powered Builder</h3>
                   <p className="text-sm text-slate-600 leading-relaxed">
-                    Create professional fundraising documents with intelligent guidance and templates
+                    Create professional fundraising documents with your organization's context, intelligent guidance, and templates
                   </p>
                 </div>
 
-                <div className="rounded-2xl border-2 border-emerald-200 bg-white p-6 shadow-lg">
+                <div className="rounded-2xl border-2 border-primary-200 bg-white p-6 shadow-lg">
                   <div className="h-3 w-3 rounded-full bg-gradient-to-r from-success-300 to-success-400 mb-4"></div>
                   <h3 className="text-lg font-bold text-slate-900 mb-2">Team Collaboration</h3>
                   <p className="text-sm text-slate-600 leading-relaxed">
-                    Work together seamlessly with your team on strategic planning and documentation
+                    Work together seamlessly with your team on long term strategic planning and documentation
                   </p>
                 </div>
               </div>

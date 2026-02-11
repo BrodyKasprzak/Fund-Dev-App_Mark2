@@ -28,21 +28,23 @@ function isValidYearStr(y: string) {
 
 export async function POST(req: Request) {
   try {
-    // 🔐 1) Auth header
+    // 1) Auth header
     const authHeader = req.headers.get("authorization");
     if (!authHeader?.startsWith("Bearer ")) {
       return NextResponse.json({ error: "Missing auth token" }, { status: 401 });
     }
-    const idToken = authHeader.split("Bearer ")[1];
+    const idToken = authHeader.slice("Bearer ".length).trim();
+    if (!idToken) {
+      return NextResponse.json({ error: "Missing auth token" }, { status: 401 });
+    }
 
-    // 🔐 2) Verify token
+    // 2) Verify token
     const decoded = await getAuth().verifyIdToken(idToken);
     const uid = decoded.uid;
     const email = decoded.email ?? null;
 
     // 3) Parse body
     const body = await req.json().catch(() => ({}));
-
     const orgName = String(body?.orgName ?? "").trim();
     const mission = parseOptionalString(body?.mission);
     const homeState = parseOptionalString(body?.homeState);
@@ -50,10 +52,11 @@ export async function POST(req: Request) {
     const fiscalYear = parseOptionalString(body?.fiscalYear);
     const crm = parseOptionalString(body?.crm);
     const address = parseOptionalString(body?.address);
-
     const foundedYearRaw = parseOptionalString(body?.foundedYear);
     const foundedYear =
-      foundedYearRaw && isValidYearStr(foundedYearRaw) ? Number(foundedYearRaw) : null;
+      foundedYearRaw && isValidYearStr(foundedYearRaw)
+        ? Number(foundedYearRaw)
+        : null;
 
     const numEmployeesRaw = body?.numEmployees;
     const numEmployees =
@@ -75,16 +78,12 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
-
-    // Validate employees if provided (reject NaN)
     if (Number.isNaN(numEmployees as any)) {
       return NextResponse.json(
         { error: "numEmployees must be a non-negative number" },
         { status: 400 }
       );
     }
-
-    // Validate foundedYear if provided but invalid
     if (foundedYearRaw && foundedYear == null) {
       return NextResponse.json(
         { error: "foundedYear must be a valid 4-digit year" },
@@ -94,7 +93,6 @@ export async function POST(req: Request) {
 
     // 5) Validate website + consent
     let websiteUrl: string | null = null;
-
     if (websiteUrlRaw.length > 0) {
       if (!isValidHttpUrl(websiteUrlRaw)) {
         return NextResponse.json(
@@ -102,21 +100,29 @@ export async function POST(req: Request) {
           { status: 400 }
         );
       }
-
       if (!websiteConsent) {
         return NextResponse.json(
           { error: "Website consent is required when providing a website URL" },
           { status: 400 }
         );
       }
-
       websiteUrl = websiteUrlRaw;
     }
 
-    // 6) Create organization
+    // 6) Create org + memberships (atomic batch)
     const now = new Date();
+    const orgRef = adminDb.collection("organizations").doc();
+    const orgId = orgRef.id;
+    
+    // References for the 3-way link
+    const memberRef = orgRef.collection("members").doc(uid);
+    const userRef = adminDb.collection("users").doc(uid);
+    const userMembershipRef = userRef.collection("memberships").doc(orgId);
 
-    const orgRef = await adminDb.collection("organizations").add({
+    const batch = adminDb.batch();
+
+    // A: The Organization itself
+    batch.set(orgRef, {
       name: orgName,
       mission,
       homeState,
@@ -133,44 +139,49 @@ export async function POST(req: Request) {
       updatedAt: now,
     });
 
-    // 7) Create/update user profile (org context)
-    //    - don't overwrite createdAt if user doc already exists
-    const userRef = adminDb.collection("users").doc(uid);
-    const userSnap = await userRef.get();
-    const alreadyHasCreatedAt = userSnap.exists && userSnap.data()?.createdAt;
+    // B: Add user to Organization's member list
+    batch.set(
+      memberRef,
+      {
+        uid,
+        email,
+        role: "admin",
+        createdAt: now,
+        createdBy: uid,
+        updatedAt: now,
+      },
+      { merge: true }
+    );
 
-    const userPatch: Record<string, any> = {
-      orgId: orgRef.id,
-      role: "admin",
-      email,
-      updatedAt: now,
-    };
+    // C: Update User profile doc (convenience field)
+    batch.set(
+      userRef,
+      {
+        email,
+        updatedAt: now,
+        createdAt: now,
+        lastOrgId: orgId,
+      },
+      { merge: true }
+    );
 
-    if (!alreadyHasCreatedAt) {
-      userPatch.createdAt = now;
-    }
+    // D: NEW RULE - Add organization to User's personal membership list
+    batch.set(
+      userMembershipRef,
+      {
+        orgId,
+        role: "admin",
+        status: "active",
+        orgName: orgName, // Cache for UI efficiency
+        createdAt: now,
+        updatedAt: now,
+      },
+      { merge: true }
+    );
 
-    await userRef.set(userPatch, { merge: true });
+    await batch.commit();
 
-    // 8) REQUIRED for Option A rules:
-    //    Create membership doc so org reads are authorized by membership
-    await adminDb
-      .collection("organizations")
-      .doc(orgRef.id)
-      .collection("members")
-      .doc(uid)
-      .set(
-        {
-          uid,
-          email,
-          role: "admin",
-          createdAt: now,
-          updatedAt: now,
-        },
-        { merge: true }
-      );
-
-    return NextResponse.json({ ok: true, orgId: orgRef.id });
+    return NextResponse.json({ ok: true, orgId });
   } catch (err: any) {
     console.error("create-org error:", err);
     return NextResponse.json(
@@ -179,3 +190,5 @@ export async function POST(req: Request) {
     );
   }
 }
+
+

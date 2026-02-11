@@ -33,12 +33,15 @@ function initialsFromName(name?: string) {
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { user, loading } = useAuth();
+
+  // ✅ NEW: use activeOrgId + setter + authedFetch from AuthContext
+  const { user, loading, activeOrgId, setActiveOrgId, clearActiveOrgId, authedFetch } =
+    useAuth();
 
   const [checkingOrg, setCheckingOrg] = useState(true);
   const [org, setOrg] = useState<OrgProfile | null>(null);
   const [orgInfoOpen, setOrgInfoOpen] = useState(false);
-  
+
   // Sidebar collapse state
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
@@ -67,25 +70,36 @@ export default function DashboardPage() {
       }
 
       try {
+        // 1) Determine org context:
+        //    - primary: activeOrgId (context)
+        //    - fallback: users/{uid}.lastOrgId (hint only)
         const userRef = doc(db, "users", user.uid);
         const snap = await getDoc(userRef);
-
         const data = snap.exists() ? snap.data() : null;
-        const orgId = data?.orgId;
+
+        const orgId =
+          activeOrgId || (typeof data?.lastOrgId === "string" ? data.lastOrgId : null);
 
         if (!orgId) {
           router.push("/onboarding/org");
           return;
         }
 
+        // 2) Verify membership (authorization gate)
         const memberRef = doc(db, "organizations", orgId, "members", user.uid);
         const memberSnap = await getDoc(memberRef);
 
         if (!memberSnap.exists()) {
+          // stale org context -> clear to prevent redirect loops
+          clearActiveOrgId();
           router.push("/onboarding/org");
           return;
         }
 
+        // 3) Persist org context (now "known good")
+        if (orgId !== activeOrgId) setActiveOrgId(orgId);
+
+        // 4) Load org profile
         const orgRef = doc(db, "organizations", orgId);
         const orgSnap = await getDoc(orgRef);
 
@@ -108,7 +122,8 @@ export default function DashboardPage() {
           numEmployees: typeof o?.numEmployees === "number" ? o.numEmployees : null,
           foundedYear: typeof o?.foundedYear === "number" ? o.foundedYear : null,
           websiteUrl: typeof o?.websiteUrl === "string" ? o.websiteUrl : null,
-          websiteConsent: typeof o?.websiteConsent === "boolean" ? o.websiteConsent : null,
+          websiteConsent:
+            typeof o?.websiteConsent === "boolean" ? o.websiteConsent : null,
         };
 
         setOrg(loaded);
@@ -122,7 +137,14 @@ export default function DashboardPage() {
     }
 
     checkOrg();
-  }, [user, loading, router]);
+  }, [
+    user,
+    loading,
+    router,
+    activeOrgId,
+    setActiveOrgId,
+    clearActiveOrgId,
+  ]);
 
   function openInviteModal() {
     setInviteMsg(null);
@@ -153,15 +175,11 @@ export default function DashboardPage() {
     setInviteMsg(null);
 
     try {
-      const idToken = await user.getIdToken();
       const cleaned = inviteEmails.map((e) => e.trim()).filter(Boolean);
 
-      const res = await fetch("/api/invites/create", {
+      // ✅ NEW: use authedFetch so x-org-id + Authorization are attached consistently
+      const res = await authedFetch("/api/invites/create", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${idToken}`,
-        },
         body: JSON.stringify({ emails: cleaned }),
       });
 
@@ -181,7 +199,9 @@ export default function DashboardPage() {
       <main className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 via-white to-primary-50">
         <div className="text-center">
           <div className="inline-flex px-6 py-4 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-500 to-accent-400 mb-4 shadow-lg">
-            <span className="text-xl font-bold text-white whitespace-nowrap">PurposeFramework</span>
+            <span className="text-xl font-bold text-white whitespace-nowrap">
+              PurposeFramework
+            </span>
           </div>
           <p className="text-slate-600">Loading your workspace...</p>
         </div>
@@ -196,9 +216,9 @@ export default function DashboardPage() {
     <main className="min-h-screen bg-gradient-to-br from-primary-50 via-slate-50 to-primary-50">
       <div className="flex min-h-screen">
         {/* LEFT COLLAPSIBLE ORG PROFILE SIDEBAR */}
-        <aside 
+        <aside
           className={`bg-gradient-to-br from-primary-600 via-primary-500 to-accent-400 text-white transition-all duration-300 ease-in-out ${
-            sidebarCollapsed ? 'w-16' : 'w-[320px]'
+            sidebarCollapsed ? "w-16" : "w-[320px]"
           } relative shadow-xl`}
         >
           {/* Toggle button */}
@@ -209,17 +229,22 @@ export default function DashboardPage() {
           >
             <svg
               className={`h-4 w-4 text-primary-500 transition-transform duration-300 ${
-                sidebarCollapsed ? 'rotate-180' : ''
+                sidebarCollapsed ? "rotate-180" : ""
               }`}
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
             >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M15 19l-7-7 7-7"
+              />
             </svg>
           </button>
 
-          <div className={`h-full overflow-hidden ${sidebarCollapsed ? 'p-3' : 'p-6'}`}>
+          <div className={`h-full overflow-hidden ${sidebarCollapsed ? "p-3" : "p-6"}`}>
             {!sidebarCollapsed ? (
               <>
                 {/* Expanded view */}
@@ -266,17 +291,23 @@ export default function DashboardPage() {
                     <div className="mt-4 space-y-2 text-sm">
                       <div className="rounded-xl bg-white/10 backdrop-blur-sm p-3 border border-white/20">
                         <div className="text-xs font-semibold text-white/80">Home state</div>
-                        <div className="mt-1 font-medium">{org?.homeState?.trim() ? org.homeState : "—"}</div>
+                        <div className="mt-1 font-medium">
+                          {org?.homeState?.trim() ? org.homeState : "—"}
+                        </div>
                       </div>
 
                       <div className="rounded-xl bg-white/10 backdrop-blur-sm p-3 border border-white/20">
                         <div className="text-xs font-semibold text-white/80">Tax status</div>
-                        <div className="mt-1 font-medium">{org?.taxStatus?.trim() ? org.taxStatus : "—"}</div>
+                        <div className="mt-1 font-medium">
+                          {org?.taxStatus?.trim() ? org.taxStatus : "—"}
+                        </div>
                       </div>
 
                       <div className="rounded-xl bg-white/10 backdrop-blur-sm p-3 border border-white/20">
                         <div className="text-xs font-semibold text-white/80">Fiscal year</div>
-                        <div className="mt-1 font-medium">{org?.fiscalYear?.trim() ? org.fiscalYear : "—"}</div>
+                        <div className="mt-1 font-medium">
+                          {org?.fiscalYear?.trim() ? org.fiscalYear : "—"}
+                        </div>
                       </div>
 
                       <div className="rounded-xl bg-white/10 backdrop-blur-sm p-3 border border-white/20">
@@ -286,7 +317,9 @@ export default function DashboardPage() {
 
                       <div className="rounded-xl bg-white/10 backdrop-blur-sm p-3 border border-white/20">
                         <div className="text-xs font-semibold text-white/80">Address</div>
-                        <div className="mt-1 font-medium">{org?.address?.trim() ? org.address : "—"}</div>
+                        <div className="mt-1 font-medium">
+                          {org?.address?.trim() ? org.address : "—"}
+                        </div>
                       </div>
 
                       <div className="grid grid-cols-2 gap-2">
@@ -382,7 +415,7 @@ export default function DashboardPage() {
                   <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/20 text-sm font-bold backdrop-blur-sm">
                     {avatarText}
                   </div>
-                  
+
                   <div className="w-full border-t border-white/20"></div>
 
                   <button
@@ -486,9 +519,7 @@ export default function DashboardPage() {
                 <p className="text-sm text-slate-600 leading-relaxed">
                   Recently edited documents and updates across your team
                 </p>
-                <p className="text-sm text-slate-500 mt-4 italic">
-                  {activityNote}
-                </p>
+                <p className="text-sm text-slate-500 mt-4 italic">{activityNote}</p>
                 <p className="text-sm font-semibold text-accent-500 mt-4 group-hover:text-primary-500 transition">
                   View Activity →
                 </p>
@@ -502,7 +533,7 @@ export default function DashboardPage() {
                 <h3 className="text-lg font-bold text-slate-900">Getting Started</h3>
               </div>
               <p className="text-sm text-slate-600 leading-relaxed">
-                Welcome to PurposeFramework! Start by creating your first fundraising document in Products, 
+                Welcome to PurposeFramework! Start by creating your first fundraising document in Products,
                 or invite team members to collaborate on your organization's strategic planning.
               </p>
             </div>
@@ -512,11 +543,7 @@ export default function DashboardPage() {
 
       {/* Invite Modal */}
       {inviteOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4"
-          role="dialog"
-          aria-modal="true"
-        >
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={closeInviteModal} />
 
           <div className="relative w-full max-w-lg rounded-2xl border-2 border-slate-200 bg-white p-8 shadow-2xl">
@@ -524,9 +551,7 @@ export default function DashboardPage() {
               <div>
                 <div className="flex items-center gap-2 mb-2">
                   <div className="h-3 w-3 rounded-full bg-gradient-to-r from-accent-300 to-primary-500"></div>
-                  <h2 className="text-xl font-bold text-slate-900">
-                    Invite team members
-                  </h2>
+                  <h2 className="text-xl font-bold text-slate-900">Invite team members</h2>
                 </div>
                 <p className="text-sm text-slate-600">
                   Each invite includes a secure sign-up link and access code
@@ -543,9 +568,7 @@ export default function DashboardPage() {
             </div>
 
             <div className="space-y-4">
-              <p className="text-sm font-semibold text-slate-900">
-                Email addresses
-              </p>
+              <p className="text-sm font-semibold text-slate-900">Email addresses</p>
 
               {inviteEmails.map((email, idx) => (
                 <div key={idx} className="flex gap-2">
@@ -606,491 +629,4 @@ export default function DashboardPage() {
   );
 }
 
-
-
-
-// "use client";
-
-// import { useEffect, useMemo, useState } from "react";
-// import { useRouter } from "next/navigation";
-// import { signOut } from "firebase/auth";
-// import { auth, db } from "@/lib/firebaseClient";
-// import { useAuth } from "@/lib/AuthContext";
-// import { doc, getDoc } from "firebase/firestore";
-
-// type OrgProfile = {
-//   id: string;
-//   name: string;
-//   mission?: string | null;
-//   homeState?: string | null;
-//   taxStatus?: string | null;
-//   fiscalYear?: string | null;
-//   crm?: string | null;
-//   address?: string | null;
-//   numEmployees?: number | null;
-//   foundedYear?: number | null;
-//   websiteUrl?: string | null;
-//   websiteConsent?: boolean | null;
-// };
-
-// function initialsFromName(name?: string) {
-//   const n = String(name ?? "").trim();
-//   if (!n) return "O";
-//   const parts = n.split(/\s+/).filter(Boolean);
-//   const a = parts[0]?.[0] ?? "O";
-//   const b = parts.length > 1 ? parts[parts.length - 1]?.[0] ?? "" : "";
-//   return (a + b).toUpperCase();
-// }
-
-// export default function DashboardPage() {
-//   const router = useRouter();
-//   const { user, loading } = useAuth();
-
-//   const [checkingOrg, setCheckingOrg] = useState(true);
-
-//   // Org profile (new)
-//   const [org, setOrg] = useState<OrgProfile | null>(null);
-//   const [orgInfoOpen, setOrgInfoOpen] = useState(false);
-
-//   // Invite modal state (must stay)
-//   const [inviteOpen, setInviteOpen] = useState(false);
-//   const [inviteEmails, setInviteEmails] = useState<string[]>([""]);
-//   const [inviteSending, setInviteSending] = useState(false);
-//   const [inviteMsg, setInviteMsg] = useState<string | null>(null);
-
-//   // Activity placeholder (later)
-//   const [activityNote] = useState(
-//     "Recent activity will appear here once plans are created and edited."
-//   );
-
-//   const canSendInvites = useMemo(() => {
-//     const cleaned = inviteEmails.map((e) => e.trim()).filter(Boolean);
-//     return cleaned.length > 0 && !inviteSending;
-//   }, [inviteEmails, inviteSending]);
-
-//   useEffect(() => {
-//     async function checkOrg() {
-//       if (loading) return;
-
-//       if (!user) {
-//         router.push("/login");
-//         return;
-//       }
-
-//       try {
-//         // 1) Get user's orgId
-//         const userRef = doc(db, "users", user.uid);
-//         const snap = await getDoc(userRef);
-
-//         const data = snap.exists() ? snap.data() : null;
-//         const orgId = data?.orgId;
-
-//         if (!orgId) {
-//           router.push("/onboarding/org");
-//           return;
-//         }
-
-//         // ✅ 1.5) Verify membership doc exists (Option A rules)
-//         // If your Firestore rules authorize org reads via membership,
-//         // this prevents "Missing or insufficient permissions" on the org read.
-//         const memberRef = doc(db, "organizations", orgId, "members", user.uid);
-//         const memberSnap = await getDoc(memberRef);
-
-//         if (!memberSnap.exists()) {
-//           router.push("/onboarding/org");
-//           return;
-//         }
-
-//         // 2) Load org profile
-//         const orgRef = doc(db, "organizations", orgId);
-//         const orgSnap = await getDoc(orgRef);
-
-//         if (!orgSnap.exists()) {
-//           router.push("/onboarding/org");
-//           return;
-//         }
-
-//         const o = orgSnap.data() as any;
-
-//         const loaded: OrgProfile = {
-//           id: orgId,
-//           name: String(o?.name ?? "").trim() || "Your organization",
-//           mission: typeof o?.mission === "string" ? o.mission : null,
-//           homeState: typeof o?.homeState === "string" ? o.homeState : null,
-//           taxStatus: typeof o?.taxStatus === "string" ? o.taxStatus : null,
-//           fiscalYear: typeof o?.fiscalYear === "string" ? o.fiscalYear : null,
-//           crm: typeof o?.crm === "string" ? o.crm : null,
-//           address: typeof o?.address === "string" ? o.address : null,
-//           numEmployees: typeof o?.numEmployees === "number" ? o.numEmployees : null,
-//           foundedYear: typeof o?.foundedYear === "number" ? o.foundedYear : null,
-//           websiteUrl: typeof o?.websiteUrl === "string" ? o.websiteUrl : null,
-//           websiteConsent: typeof o?.websiteConsent === "boolean" ? o.websiteConsent : null,
-//         };
-
-//         setOrg(loaded);
-//       } catch (err) {
-//         console.error("Dashboard org check error:", err);
-//         router.push("/onboarding/org");
-//         return;
-//       } finally {
-//         setCheckingOrg(false);
-//       }
-//     }
-
-//     checkOrg();
-//   }, [user, loading, router]);
-
-//   function openInviteModal() {
-//     setInviteMsg(null);
-//     setInviteEmails([""]);
-//     setInviteOpen(true);
-//   }
-
-//   function closeInviteModal() {
-//     setInviteOpen(false);
-//   }
-
-//   function updateEmail(idx: number, value: string) {
-//     setInviteEmails((prev) => prev.map((e, i) => (i === idx ? value : e)));
-//   }
-
-//   function addAnotherEmail() {
-//     setInviteEmails((prev) => [...prev, ""]);
-//   }
-
-//   function removeEmail(idx: number) {
-//     setInviteEmails((prev) => prev.filter((_, i) => i !== idx));
-//   }
-
-//   async function handleSendInvites() {
-//     if (!user) return;
-
-//     setInviteSending(true);
-//     setInviteMsg(null);
-
-//     try {
-//       const idToken = await user.getIdToken();
-//       const cleaned = inviteEmails.map((e) => e.trim()).filter(Boolean);
-
-//       const res = await fetch("/api/invites/create", {
-//         method: "POST",
-//         headers: {
-//           "Content-Type": "application/json",
-//           Authorization: `Bearer ${idToken}`,
-//         },
-//         body: JSON.stringify({ emails: cleaned }),
-//       });
-
-//       const data = await res.json();
-//       if (!res.ok) throw new Error(data?.error || "Failed to send invites");
-
-//       setInviteMsg(`✅ Created ${data.created?.length ?? 0} invite(s).`);
-//     } catch (err: any) {
-//       setInviteMsg(`❌ ${err.message ?? "Failed to send invites"}`);
-//     } finally {
-//       setInviteSending(false);
-//     }
-//   }
-
-//   if (loading || checkingOrg) {
-//     return (
-//       <main className="min-h-screen flex items-center justify-center">
-//         <p>Loading...</p>
-//       </main>
-//     );
-//   }
-
-//   const orgName = org?.name ?? "Your organization";
-//   const avatarText = initialsFromName(orgName);
-
-//   return (
-//     <main className="min-h-screen bg-slate-50">
-//       <div className="flex min-h-screen">
-//         {/* LEFT PERMANENT ORG PROFILE SIDEBAR */}
-//         <aside className="w-[280px] max-w-[15vw] min-w-[220px] bg-primary-600 text-white">
-//           <div className="p-5 border-b border-white/15">
-//             <div className="flex items-center gap-3">
-//               <div className="flex h-11 w-11 items-center justify-center rounded-full bg-white/15 text-sm font-semibold">
-//                 {avatarText}
-//               </div>
-//               <div className="min-w-0">
-//                 <div className="text-sm font-semibold truncate">{orgName}</div>
-//                 <div className="text-xs text-white/80 truncate">
-//                   Signed in as {user?.email ?? "Unknown"}
-//                 </div>
-//               </div>
-//             </div>
-
-//             {/* Mission preview */}
-//             <div className="mt-4 rounded-xl bg-white/10 p-3">
-//               <div className="text-xs font-semibold text-white/80">Mission</div>
-//               <div className="mt-1 text-sm leading-snug">
-//                 {org?.mission?.trim() ? org.mission : "Not provided yet."}
-//               </div>
-//             </div>
-
-//             {/* Company info toggle */}
-//             <button
-//               type="button"
-//               className="mt-4 w-full rounded-xl bg-white/10 px-3 py-2 text-left hover:bg-white/15 transition"
-//               onClick={() => setOrgInfoOpen((v) => !v)}
-//             >
-//               <div className="flex items-center justify-between">
-//                 <div className="text-sm font-semibold">Company info</div>
-//                 <div className="text-sm">{orgInfoOpen ? "–" : "+"}</div>
-//               </div>
-//               <div className="mt-1 text-xs text-white/80">
-//                 Click to {orgInfoOpen ? "hide" : "view"} details
-//               </div>
-//             </button>
-
-//             {orgInfoOpen ? (
-//               <div className="mt-3 space-y-2 text-sm">
-//                 <div className="rounded-xl bg-white/10 p-3">
-//                   <div className="text-xs font-semibold text-white/80">Home state</div>
-//                   <div className="mt-0.5">{org?.homeState?.trim() ? org.homeState : "—"}</div>
-//                 </div>
-
-//                 <div className="rounded-xl bg-white/10 p-3">
-//                   <div className="text-xs font-semibold text-white/80">Tax status</div>
-//                   <div className="mt-0.5">{org?.taxStatus?.trim() ? org.taxStatus : "—"}</div>
-//                 </div>
-
-//                 <div className="rounded-xl bg-white/10 p-3">
-//                   <div className="text-xs font-semibold text-white/80">Fiscal year</div>
-//                   <div className="mt-0.5">{org?.fiscalYear?.trim() ? org.fiscalYear : "—"}</div>
-//                 </div>
-
-//                 <div className="rounded-xl bg-white/10 p-3">
-//                   <div className="text-xs font-semibold text-white/80">CRM</div>
-//                   <div className="mt-0.5">{org?.crm?.trim() ? org.crm : "—"}</div>
-//                 </div>
-
-//                 <div className="rounded-xl bg-white/10 p-3">
-//                   <div className="text-xs font-semibold text-white/80">Address</div>
-//                   <div className="mt-0.5">{org?.address?.trim() ? org.address : "—"}</div>
-//                 </div>
-
-//                 <div className="grid grid-cols-2 gap-2">
-//                   <div className="rounded-xl bg-white/10 p-3">
-//                     <div className="text-xs font-semibold text-white/80">Employees</div>
-//                     <div className="mt-0.5">
-//                       {typeof org?.numEmployees === "number" ? org.numEmployees : "—"}
-//                     </div>
-//                   </div>
-//                   <div className="rounded-xl bg-white/10 p-3">
-//                     <div className="text-xs font-semibold text-white/80">Founded</div>
-//                     <div className="mt-0.5">
-//                       {typeof org?.foundedYear === "number" ? org.foundedYear : "—"}
-//                     </div>
-//                   </div>
-//                 </div>
-
-//                 <div className="rounded-xl bg-white/10 p-3">
-//                   <div className="text-xs font-semibold text-white/80">Website</div>
-//                   <div className="mt-0.5 break-all">
-//                     {org?.websiteConsent && org?.websiteUrl ? org.websiteUrl : "—"}
-//                   </div>
-//                   <div className="mt-1 text-xs text-white/70">
-//                     {org?.websiteUrl
-//                       ? org?.websiteConsent
-//                         ? "Consent granted"
-//                         : "Consent not granted"
-//                       : "No website provided"}
-//                   </div>
-//                 </div>
-//               </div>
-//             ) : null}
-//           </div>
-
-//           {/* Sidebar nav actions */}
-//           <div className="p-5 space-y-2">
-//             <button
-//               type="button"
-//               className="w-full rounded-xl bg-white/10 px-3 py-2 text-left hover:bg-white/15 transition"
-//               onClick={() => router.push("/products")}
-//             >
-//               <div className="text-sm font-semibold">Products</div>
-//               <div className="text-xs text-white/80">Create and manage documents</div>
-//             </button>
-
-//             <button
-//               type="button"
-//               className="w-full rounded-xl bg-white/10 px-3 py-2 text-left hover:bg-white/15 transition"
-//               onClick={openInviteModal}
-//             >
-//               <div className="text-sm font-semibold">Invites</div>
-//               <div className="text-xs text-white/80">Invite teammates securely</div>
-//             </button>
-
-//             <button
-//               type="button"
-//               className="w-full rounded-xl bg-white/10 px-3 py-2 text-left hover:bg-white/15 transition"
-//               onClick={() => router.push("/activity")}
-//             >
-//               <div className="text-sm font-semibold">Activity</div>
-//               <div className="text-xs text-white/80">Recently edited documents</div>
-//             </button>
-
-//             <button
-//               type="button"
-//               className="w-full rounded-xl bg-white/10 px-3 py-2 text-left hover:bg-white/15 transition"
-//               onClick={async () => {
-//                 await signOut(auth);
-//                 router.push("/login");
-//               }}
-//             >
-//               <div className="text-sm font-semibold">Sign out</div>
-//               <div className="text-xs text-white/80">Log out of this account</div>
-//             </button>
-//           </div>
-//         </aside>
-
-//         {/* MAIN CONTENT */}
-//         <section className="flex-1 p-6">
-//           <div className="mx-auto max-w-6xl">
-//             <div className="flex items-center justify-between">
-//               <div>
-//                 <h1 className="text-2xl font-semibold text-slate-900">{orgName} Home</h1>
-//                 <p className="mt-1 text-sm text-slate-600">
-//                   Build and save organizational documents.
-//                 </p>
-//               </div>
-//             </div>
-
-//             <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-//               <button
-//                 type="button"
-//                 className="text-left border border-slate-200 bg-white rounded-xl p-5 hover:shadow-sm transition"
-//                 onClick={() => router.push("/products")}
-//               >
-//                 <h2 className="font-semibold text-slate-900">Products</h2>
-//                 <p className="text-sm text-slate-600 mt-1">
-//                   Create and manage strategic fundraising documents for your organization.
-//                 </p>
-//                 <p className="text-sm text-slate-500 mt-3">→ View Products</p>
-//               </button>
-
-//               <button
-//                 type="button"
-//                 className="text-left border border-slate-200 bg-white rounded-xl p-5 hover:shadow-sm transition"
-//                 onClick={openInviteModal}
-//               >
-//                 <h2 className="font-semibold text-slate-900">Invites</h2>
-//                 <p className="text-sm text-slate-600 mt-1">
-//                   Invite teammates to join your organization and collaborate securely.
-//                 </p>
-//                 <p className="text-sm text-slate-500 mt-3">→ Invite members</p>
-//               </button>
-
-//               <button
-//                 type="button"
-//                 className="text-left border border-slate-200 bg-white rounded-xl p-5 hover:shadow-sm transition"
-//                 onClick={() => router.push("/activity")}
-//               >
-//                 <h2 className="font-semibold text-slate-900">Activity</h2>
-//                 <p className="text-sm text-slate-600 mt-1">
-//                   Recently edited documents and updates across your team.
-//                 </p>
-//                 <p className="text-sm text-slate-500 mt-3">{activityNote}</p>
-//               </button>
-//             </div>
-
-//             {/* Modal */}
-//             {inviteOpen && (
-//               <div
-//                 className="fixed inset-0 z-50 flex items-center justify-center p-4"
-//                 role="dialog"
-//                 aria-modal="true"
-//               >
-//                 <div className="absolute inset-0 bg-black/40" onClick={closeInviteModal} />
-
-//                 <div className="relative w-full max-w-lg rounded-xl border border-slate-200 bg-white p-6 shadow-lg">
-//                   <div className="flex items-start justify-between gap-4">
-//                     <div>
-//                       <h2 className="text-xl font-semibold text-slate-900">
-//                         Invite team members
-//                       </h2>
-//                       <p className="text-sm text-slate-600 mt-1">
-//                         Each invite includes a secure sign-up link and a one-time access code to
-//                         join your organization.
-//                       </p>
-//                     </div>
-
-//                     <button
-//                       className="border border-slate-200 rounded-md px-3 py-1 text-slate-800 hover:bg-slate-100"
-//                       onClick={closeInviteModal}
-//                       type="button"
-//                     >
-//                       Close
-//                     </button>
-//                   </div>
-
-//                   <div className="mt-4 space-y-3">
-//                     <p className="text-sm font-medium text-slate-900">
-//                       Invitee email addresses
-//                     </p>
-
-//                     {inviteEmails.map((email, idx) => (
-//                       <div key={idx} className="flex gap-2">
-//                         <input
-//                           className="w-full border border-slate-200 rounded-md p-2"
-//                           value={email}
-//                           onChange={(e) => updateEmail(idx, e.target.value)}
-//                           placeholder="name@example.org"
-//                           type="email"
-//                         />
-//                         {inviteEmails.length > 1 && (
-//                           <button
-//                             type="button"
-//                             className="border border-slate-200 rounded-md px-3 text-slate-800 hover:bg-slate-100"
-//                             onClick={() => removeEmail(idx)}
-//                             aria-label="Remove email"
-//                           >
-//                             ✕
-//                           </button>
-//                         )}
-//                       </div>
-//                     ))}
-
-//                     {inviteMsg && (
-//                       <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-//                         {inviteMsg}
-//                       </div>
-//                     )}
-
-//                     <div className="flex items-center justify-between gap-3 pt-2">
-//                       <button
-//                         type="button"
-//                         className="border border-slate-200 rounded-md px-3 py-2 text-slate-800 hover:bg-slate-100"
-//                         onClick={addAnotherEmail}
-//                         disabled={inviteSending}
-//                       >
-//                         Add another
-//                       </button>
-
-//                       <button
-//                         type="button"
-//                         className="rounded-md bg-slate-900 px-3 py-2 text-white hover:bg-slate-800 disabled:opacity-60"
-//                         onClick={handleSendInvites}
-//                         disabled={!canSendInvites}
-//                       >
-//                         {inviteSending ? "Sending..." : "Send invite(s)"}
-//                       </button>
-//                     </div>
-
-//                     <p className="text-xs text-slate-500 pt-2">
-//                       Invites are scoped to your organization and require a one-time access code
-//                       during account creation.
-//                     </p>
-//                   </div>
-//                 </div>
-//               </div>
-//             )}
-//           </div>
-//         </section>
-//       </div>
-//     </main>
-//   );
-// }
 
