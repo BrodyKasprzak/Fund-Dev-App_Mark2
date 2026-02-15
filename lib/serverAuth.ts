@@ -70,7 +70,12 @@ export async function requireAdmin(req: Request): Promise<OrgContext> {
 
 export function errorToResponse(err: unknown): { status: number; message: string } {
   if (err instanceof HttpError) return { status: err.status, message: err.message };
-  if (err instanceof Error) return { status: 500, message: err.message || "Server error" };
+  if (err instanceof Error) {
+    if (process.env.NODE_ENV !== "production") {
+      return { status: 500, message: err.message || "Server error" };
+    }
+    return { status: 500, message: "Server error" };
+  }
   return { status: 500, message: "Server error" };
 }
 

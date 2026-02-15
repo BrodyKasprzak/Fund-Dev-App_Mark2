@@ -2,9 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { createUserWithEmailAndPassword, signOut } from "firebase/auth";
+import { createUserWithEmailAndPassword } from "firebase/auth";
 import { auth } from "@/lib/firebaseClient";
 import { useAuth } from "@/lib/AuthContext";
+
+function isValidEmail(email: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
 
 export default function InvitePage() {
   const router = useRouter();
@@ -13,13 +17,13 @@ export default function InvitePage() {
 
   const orgId = params.get("orgId") || "";
   const inviteId = params.get("inviteId") || "";
-
   const ready = useMemo(() => Boolean(orgId && inviteId), [orgId, inviteId]);
 
   const [inviteLoading, setInviteLoading] = useState(true);
   const [orgName, setOrgName] = useState<string | null>(null);
-  const [invitedEmail, setInvitedEmail] = useState<string>("");
+  const [inviteStatus, setInviteStatus] = useState<string | null>(null);
 
+  const [accountEmail, setAccountEmail] = useState("");
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
   const [position, setPosition] = useState("");
@@ -28,7 +32,6 @@ export default function InvitePage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  // Load invite metadata (public + safe)
   useEffect(() => {
     if (!ready) {
       setMsg("Invalid invite link.");
@@ -42,30 +45,54 @@ export default function InvitePage() {
         setMsg(null);
 
         const res = await fetch(
-          `/api/invites/details?orgId=${encodeURIComponent(orgId)}&inviteId=${encodeURIComponent(inviteId)}`
+          `/api/invites/details?orgId=${encodeURIComponent(orgId)}&inviteId=${encodeURIComponent(inviteId)}`,
         );
         const data = await res.json();
         if (!res.ok) throw new Error(data?.error || "Failed to load invite");
 
-        if (data.status !== "pending") {
-          setMsg(`Invite is ${data.status}.`);
-        }
-
         setOrgName(data.orgName ?? null);
-        setInvitedEmail(String(data.invitedEmail || "").trim().toLowerCase());
-      } catch (e: any) {
-        setMsg(`❌ ${e.message ?? "Failed to load invite"}`);
+        setInviteStatus(typeof data.status === "string" ? data.status : null);
+
+        if (data.status !== "pending") {
+          setMsg(`Invite is ${data.status}. Ask an admin for a new invite.`);
+        }
+      } catch (e: unknown) {
+        if (e instanceof Error) setMsg(`Error: ${e.message}`);
+        else setMsg("Failed to load invite.");
       } finally {
         setInviteLoading(false);
       }
     })();
   }, [ready, orgId, inviteId]);
 
+  async function acceptInviteWithToken(idToken: string) {
+    const res = await fetch("/api/invites/accept", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${idToken}`,
+      },
+      body: JSON.stringify({
+        orgId,
+        inviteId,
+        code: code.trim(),
+        name: name.trim(),
+        position: position.trim(),
+      }),
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || "Failed to join organization");
+  }
+
   async function createAccountAndJoin() {
     if (!ready) return;
+    if (inviteStatus !== "pending") return;
 
-    if (!invitedEmail) {
-      setMsg("Invite email not found. Ask the org admin to resend the invite.");
+    const normalizedEmail = accountEmail.trim().toLowerCase();
+
+    if (!isValidEmail(normalizedEmail)) {
+      setMsg("Please enter a valid email address.");
       return;
     }
     if (!code.trim()) {
@@ -80,15 +107,22 @@ export default function InvitePage() {
       setMsg("Please enter your position.");
       return;
     }
-    if (password.length < 8) {
+
+    if (auth.currentUser?.email && auth.currentUser.email.toLowerCase() !== normalizedEmail) {
+      setMsg(
+        `You are signed in as ${auth.currentUser.email}. Use the same invited email or sign out first.`,
+      );
+      return;
+    }
+
+    if (!auth.currentUser && password.length < 8) {
       setMsg("Password must be at least 8 characters.");
       return;
     }
 
-    // If user is logged in as a different email, force them to switch accounts
-    if (!loading && user?.email && user.email.toLowerCase() !== invitedEmail.toLowerCase()) {
+    if (!loading && user?.email && user.email.toLowerCase() !== normalizedEmail) {
       setMsg(
-        `You are signed in as ${user.email}. This invite is for ${invitedEmail}. Please sign out and try again.`
+        `You are signed in as ${user.email}. Use the same invited email or sign out first.`,
       );
       return;
     }
@@ -97,39 +131,22 @@ export default function InvitePage() {
     setMsg(null);
 
     try {
-      // Ensure we are signed out before creating an account (Firebase will error otherwise)
+      let idToken: string;
+
       if (auth.currentUser) {
-        await signOut(auth);
+        idToken = await auth.currentUser.getIdToken(true);
+      } else {
+        const cred = await createUserWithEmailAndPassword(auth, normalizedEmail, password);
+        idToken = await cred.user.getIdToken();
       }
 
-      // 1) Create Firebase Auth user using the INVITED email (locked)
-      const cred = await createUserWithEmailAndPassword(auth, invitedEmail, password);
+      await acceptInviteWithToken(idToken);
 
-      // 2) Accept invite (server verifies code + email match + joins org)
-      const idToken = await cred.user.getIdToken();
-
-      const res = await fetch("/api/invites/accept", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({
-          orgId,
-          inviteId,
-          code: code.trim(),
-          name: name.trim(),
-          position: position.trim(),
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || "Failed to join organization");
-
-      setMsg("✅ Account created and invite accepted! Redirecting...");
+      setMsg("Account ready. Invite accepted. Redirecting...");
       setTimeout(() => router.push("/dashboard"), 600);
-    } catch (e: any) {
-      setMsg(`❌ ${e.message ?? "Failed to create account & join"}`);
+    } catch (e: unknown) {
+      if (e instanceof Error) setMsg(`Error: ${e.message}`);
+      else setMsg("Failed to create account and accept invite.");
     } finally {
       setSubmitting(false);
     }
@@ -155,10 +172,21 @@ export default function InvitePage() {
         ) : (
           <>
             <p className="text-sm opacity-80 mt-2">
-              This invite is for: <span className="font-mono">{invitedEmail || "unknown"}</span>
+              Enter the same email address that received this invite.
             </p>
 
             <div className="mt-5 space-y-3">
+              <div className="space-y-1">
+                <label className="text-sm">Invite email</label>
+                <input
+                  className="w-full border rounded-md p-2"
+                  value={accountEmail}
+                  onChange={(e) => setAccountEmail(e.target.value)}
+                  placeholder="you@example.org"
+                  type="email"
+                />
+              </div>
+
               <div className="space-y-1">
                 <label className="text-sm">Access code</label>
                 <input
@@ -189,26 +217,28 @@ export default function InvitePage() {
                 />
               </div>
 
-              <div className="space-y-1">
-                <label className="text-sm">Create password</label>
-                <input
-                  className="w-full border rounded-md p-2"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  type="password"
-                  placeholder="At least 8 characters"
-                />
-              </div>
+              {!auth.currentUser ? (
+                <div className="space-y-1">
+                  <label className="text-sm">Create password</label>
+                  <input
+                    className="w-full border rounded-md p-2"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    type="password"
+                    placeholder="At least 8 characters"
+                  />
+                </div>
+              ) : null}
 
               {msg && <p className="text-sm">{msg}</p>}
 
               <button
                 className="w-full border rounded-md p-2 disabled:opacity-60"
-                disabled={submitting || inviteLoading}
+                disabled={submitting || inviteLoading || inviteStatus !== "pending"}
                 onClick={createAccountAndJoin}
                 type="button"
               >
-                {submitting ? "Creating & joining..." : "Create account & join"}
+                {submitting ? "Processing..." : "Create account and join"}
               </button>
             </div>
           </>

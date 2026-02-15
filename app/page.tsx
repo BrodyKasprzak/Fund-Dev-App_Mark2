@@ -5,344 +5,270 @@ import { useRouter } from "next/navigation";
 
 type Tab = "purpose" | "products" | "contact";
 
+function TabButton({
+  active,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
+        active
+          ? "border border-slate-300 bg-white text-slate-900 shadow-sm"
+          : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
 export default function Home() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<Tab>("purpose");
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-primary-50 via-white to-primary-50">
-      {/* Header with Tabs */}
-      <header className="border-b border-slate-200 bg-white/80 backdrop-blur-sm sticky top-0 z-50 shadow-sm">
-        <div className="mx-auto max-w-7xl px-6 py-4">
-          <div className="flex items-center justify-between">
-            {/* Left: Logo/Brand */}
-            <div className="flex items-center gap-3">
-              <div className="flex px-4 py-2 items-center justify-center rounded-xl bg-gradient-to-br from-primary-500 to-accent-400 shadow-lg">
-                <span className="text-base font-bold text-white whitespace-nowrap">PF</span>
-              </div>
-              <span className="text-lg font-bold text-slate-900 hidden sm:inline">PurposeFramework</span>
+    <main className="min-h-screen bg-[radial-gradient(circle_at_top_right,_#f8fafc_0%,_#f8fafc_55%,_#f1f5f9_100%)] text-slate-900">
+      <header className="sticky top-0 z-50 border-b border-slate-200/80 bg-white/95 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
+          <div className="flex items-center gap-3">
+            <div className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white">
+              <span className="text-sm font-bold text-slate-900">PF</span>
             </div>
-
-            {/* Center: Tab Navigation */}
-            <nav className="flex items-center gap-2">
-              <button
-                onClick={() => setActiveTab("purpose")}
-                className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
-                  activeTab === "purpose"
-                    ? "bg-gradient-to-r from-primary-500 to-accent-400 text-white shadow-lg shadow-primary-500/30"
-                    : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
-                }`}
-              >
-                PurposeFramework
-              </button>
-              <button
-                onClick={() => setActiveTab("products")}
-                className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
-                  activeTab === "products"
-                    ? "bg-gradient-to-r from-primary-500 to-accent-400 text-white shadow-lg shadow-primary-500/30"
-                    : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
-                }`}
-              >
-                Products
-              </button>
-              <button
-                onClick={() => setActiveTab("contact")}
-                className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
-                  activeTab === "contact"
-                    ? "bg-gradient-to-r from-primary-500 to-accent-400 text-white shadow-lg shadow-primary-500/30"
-                    : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
-                }`}
-              >
-                Contact Us
-              </button>
-            </nav>
-
-            {/* Right: Auth Buttons */}
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => router.push("/login")}
-                className="px-4 py-2 rounded-xl text-sm font-semibold text-slate-700 hover:bg-slate-100 transition"
-              >
-                Sign in
-              </button>
-              <button
-                onClick={() => router.push("/register")}
-                className="px-4 py-2 rounded-xl text-sm font-semibold bg-gradient-to-r from-primary-500 to-accent-400 text-white hover:from-primary-600 hover:to-primary-500 shadow-lg shadow-primary-500/30 hover:shadow-primary-500/50 transition"
-              >
-                New Organization
-              </button>
+            <div>
+              <p className="text-sm font-bold tracking-tight">PurposeFramework</p>
+              <p className="text-xs text-slate-500">Document systems for nonprofits</p>
             </div>
+          </div>
+
+          <nav className="hidden items-center gap-1 rounded-full border border-slate-200 bg-slate-50 p-1 md:flex">
+            <TabButton
+              active={activeTab === "purpose"}
+              label="PurposeFramework"
+              onClick={() => setActiveTab("purpose")}
+            />
+            <TabButton
+              active={activeTab === "products"}
+              label="Products"
+              onClick={() => setActiveTab("products")}
+            />
+            <TabButton
+              active={activeTab === "contact"}
+              label="Contact"
+              onClick={() => setActiveTab("contact")}
+            />
+          </nav>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => router.push("/login")}
+              className="rounded-full px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+            >
+              Sign in
+            </button>
+            <button
+              onClick={() => router.push("/register")}
+              className="rounded-full border border-primary-300 bg-primary-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-600"
+            >
+              New Organization
+            </button>
           </div>
         </div>
       </header>
 
-      {/* Content Area with Sliding Transitions */}
-      <div className="relative overflow-hidden">
-        <div
-          className="flex transition-transform duration-500 ease-in-out"
-          style={{
-            transform: `translateX(-${
-              activeTab === "purpose" ? 0 : activeTab === "products" ? 100 : 200
-            }%)`,
-          }}
-        >
-          {/* PurposeFramework Tab */}
-          <div className="min-w-full flex-shrink-0 px-6 py-16">
-            <div className="mx-auto max-w-4xl">
-              <div className="text-center mb-12">
-                <div className="inline-flex px-8 py-5 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-500 to-accent-400 mb-6 shadow-2xl">
-                  <span className="text-3xl font-bold text-white whitespace-nowrap">PurposeFramework</span>
-                </div>
-                <h1 className="text-5xl font-bold text-slate-900 mb-4">
-                  Welcome to PurposeFramework
+      <section className="mx-auto max-w-7xl px-5 py-10 sm:px-8">
+        {activeTab === "purpose" ? (
+          <div className="space-y-8">
+            <div className="grid gap-6 lg:grid-cols-[1.25fr_0.75fr]">
+              <div className="rounded-3xl border border-slate-200 bg-white p-7 shadow-sm sm:p-10">
+                <p className="inline-flex items-center gap-2 rounded-full border border-primary-200 bg-primary-50 px-3 py-1 text-xs font-semibold text-primary-700">
+                  <span className="h-1.5 w-1.5 rounded-full bg-primary-500" />
+                  Modern nonprofit DMS + planning workspace
+                </p>
+                <h1 className="mt-4 text-4xl font-bold leading-tight tracking-tight text-slate-900 sm:text-5xl">
+                  Purpose-built document operations for fundraising teams.
                 </h1>
-                <p className="text-xl text-slate-600 leading-relaxed max-w-2xl mx-auto">
-                  Secure document management and builder platform for Non-Profits
+                <p className="mt-4 max-w-3xl text-base leading-relaxed text-slate-600 sm:text-lg">
+                  PurposeFramework gives nonprofit leaders one place to store, structure, and produce
+                  high-value development documentation. It combines disciplined document management with
+                  guided strategy workflows so teams can move faster without losing governance quality.
                 </p>
+                <div className="mt-7 flex flex-wrap items-center gap-3">
+                  <button
+                    onClick={() => router.push("/register")}
+                    className="rounded-full bg-slate-900 px-6 py-3 text-sm font-semibold text-white transition hover:bg-slate-700"
+                  >
+                    Launch your workspace
+                  </button>
+                  <button
+                    onClick={() => setActiveTab("products")}
+                    className="rounded-full border border-slate-300 bg-white px-6 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-500 hover:text-slate-900"
+                  >
+                    Explore products
+                  </button>
+                </div>
               </div>
 
-              <div className="grid gap-6 md:grid-cols-3 mt-12">
-                <div className="rounded-2xl border-2 border-primary-200 bg-white p-6 shadow-lg">
-                  <div className="h-3 w-3 rounded-full bg-gradient-to-r from-purple-400 to-primary-500 mb-4"></div>
-                  <h3 className="text-lg font-bold text-slate-900 mb-2">Secure Storage</h3>
-                  <p className="text-sm text-slate-600 leading-relaxed">
-                    Secure storage for all your nonprofit's important documents, update them all in the same place, at the same time 
+              <div className="rounded-3xl border border-slate-200 bg-white p-7 shadow-sm sm:p-8">
+                <h2 className="text-xl font-bold text-slate-900">Who this is for</h2>
+                <div className="mt-4 space-y-3 text-sm text-slate-600">
+                  <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                    Development directors who need institutional consistency across plans and files.
+                  </p>
+                  <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                    Executive teams managing audit readiness, grant artifacts, and board-facing materials.
+                  </p>
+                  <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                    Consultants and operations staff building repeatable systems for multiple campaigns.
                   </p>
                 </div>
-
-                <div className="rounded-2xl border-2 border-primary-200 bg-white p-6 shadow-lg">
-                  <div className="h-3 w-3 rounded-full bg-gradient-to-r from-accent-300 to-primary-500 mb-4"></div>
-                  <h3 className="text-lg font-bold text-slate-900 mb-2">AI-Powered Builder</h3>
-                  <p className="text-sm text-slate-600 leading-relaxed">
-                    Create professional fundraising documents with your organization's context, intelligent guidance, and templates
-                  </p>
-                </div>
-
-                <div className="rounded-2xl border-2 border-primary-200 bg-white p-6 shadow-lg">
-                  <div className="h-3 w-3 rounded-full bg-gradient-to-r from-success-300 to-success-400 mb-4"></div>
-                  <h3 className="text-lg font-bold text-slate-900 mb-2">Team Collaboration</h3>
-                  <p className="text-sm text-slate-600 leading-relaxed">
-                    Work together seamlessly with your team on long term strategic planning and documentation
-                  </p>
-                </div>
-              </div>
-
-              <div className="mt-12 text-center">
-                <button
-                  onClick={() => router.push("/register")}
-                  className="inline-flex items-center gap-2 px-8 py-4 rounded-2xl text-lg font-bold bg-gradient-to-r from-primary-500 to-accent-400 text-white hover:from-primary-600 hover:to-primary-500 shadow-2xl shadow-primary-500/40 hover:shadow-primary-500/60 transition-all"
-                >
-                  Get Started Free
-                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Products Tab */}
-          <div className="min-w-full flex-shrink-0 px-6 py-16">
-            <div className="mx-auto max-w-4xl">
-              <div className="text-center mb-12">
-                <div className="inline-flex items-center gap-2 mb-6">
-                  <div className="h-3 w-3 rounded-full bg-gradient-to-r from-success-300 to-success-400"></div>
-                  <h1 className="text-5xl font-bold text-slate-900">Products</h1>
-                </div>
-                <p className="text-lg text-slate-600 max-w-2xl mx-auto">
-                  Professional tools designed specifically for nonprofit organizations
-                </p>
-              </div>
-
-              <div className="space-y-8">
-                {/* Product 1: Document Management */}
-                <div className="rounded-2xl border-2 border-primary-200 bg-white p-8 shadow-xl">
-                  <div className="flex items-start gap-4">
-                    <div className="flex-shrink-0">
-                      <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-primary-500 to-accent-400 flex items-center justify-center shadow-lg">
-                        <svg className="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
-                        </svg>
-                      </div>
-                    </div>
-                    <div className="flex-1">
-                      <h3 className="text-2xl font-bold text-slate-900 mb-3">
-                        Document Management System
-                      </h3>
-                      <p className="text-slate-600 leading-relaxed mb-4">
-                        <span className="font-semibold text-slate-900">Durably Harmonizing, Organizing, and Storing</span> your organization's documents. 
-                        Keep all your critical nonprofit documentation secure, accessible, and organized in one central location.
-                      </p>
-                      <ul className="space-y-2 text-sm text-slate-600">
-                        <li className="flex items-center gap-2">
-                          <div className="h-1.5 w-1.5 rounded-full bg-primary-500"></div>
-                          Secure cloud storage with enterprise-grade encryption
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <div className="h-1.5 w-1.5 rounded-full bg-primary-500"></div>
-                          Version control and audit trails
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <div className="h-1.5 w-1.5 rounded-full bg-primary-500"></div>
-                          Team collaboration and permissions management
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <div className="h-1.5 w-1.5 rounded-full bg-primary-500"></div>
-                          Update multiple documents at once
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <div className="h-1.5 w-1.5 rounded-full bg-primary-500"></div>
-                          Easy information and document retrieval  
-                        </li>
-                      </ul>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Product 2: Document Builder */}
-                <div className="rounded-2xl border-2 border-primary-200 bg-white p-8 shadow-xl">
-                  <div className="flex items-start gap-4">
-                    <div className="flex-shrink-0">
-                      <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-primary-500 to-primary-500 flex items-center justify-center shadow-lg">
-                        <svg className="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                        </svg>
-                      </div>
-                    </div>
-                    <div className="flex-1">
-                      <h3 className="text-2xl font-bold text-slate-900 mb-3">
-                        AI-Powered Document Builder
-                      </h3>
-                      <p className="text-slate-600 leading-relaxed mb-4">
-                        <span className="font-semibold text-slate-900">Build Fund Development Documents and Organizational Legacy Documents</span> with 
-                        expert guidance. Our AI-powered platform helps you create professional, consultant-grade documentation tailored to your nonprofit.
-                      </p>
-                      <ul className="space-y-2 text-sm text-slate-600">
-                        <li className="flex items-center gap-2">
-                          <div className="h-1.5 w-1.5 rounded-full bg-primary-500"></div>
-                          Fund Development Handbooks
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <div className="h-1.5 w-1.5 rounded-full bg-primary-500"></div>
-                          Annual Fund Development Plans
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <div className="h-1.5 w-1.5 rounded-full bg-primary-500"></div>
-                          Case for Support & Campaign Plans
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <div className="h-1.5 w-1.5 rounded-full bg-primary-500"></div>
-                          Grant Strategies & More
-                        </li>
-                      </ul>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-12 text-center">
-                <button
-                  onClick={() => router.push("/register")}
-                  className="inline-flex items-center gap-2 px-8 py-4 rounded-2xl text-lg font-bold bg-gradient-to-r from-primary-500 to-accent-400 text-white hover:from-primary-600 hover:to-primary-500 shadow-2xl shadow-primary-500/40 hover:shadow-primary-500/60 transition-all"
-                >
-                  Start Building Today
-                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Contact Us Tab */}
-          <div className="min-w-full flex-shrink-0 px-6 py-16">
-            <div className="mx-auto max-w-4xl">
-              <div className="text-center mb-12">
-                <div className="inline-flex items-center gap-2 mb-6">
-                  <div className="h-3 w-3 rounded-full bg-gradient-to-r from-success-300 to-success-400"></div>
-                  <h1 className="text-5xl font-bold text-slate-900">Contact Us</h1>
-                </div>
-                <p className="text-lg text-slate-600 max-w-2xl mx-auto">
-                  Get in touch with our team
-                </p>
-              </div>
-
-              <div className="rounded-2xl border-2 border-slate-200 bg-white p-12 shadow-xl text-center">
-                <div className="inline-flex h-24 w-24 items-center justify-center rounded-3xl bg-gradient-to-br from-primary-100 to-primary-100 mb-6">
-                  <svg className="h-12 w-12 text-primary-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                  </svg>
-                </div>
-                <h3 className="text-2xl font-bold text-slate-900 mb-3">
-                  Contact information coming soon
+                <h3 className="mt-6 text-sm font-semibold uppercase tracking-wide text-slate-500">
+                  Why PurposeFramework
                 </h3>
-                <p className="text-slate-600 mb-8">
-                  We're setting up the best way to connect with you. In the meantime, create your organization to get started.
+                <p className="mt-2 text-sm leading-relaxed text-slate-600">
+                  Most teams have documents everywhere and strategy nowhere. PurposeFramework connects both,
+                  so planning, execution, and accountability happen in one professional system.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-3">
+              <article className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div className="mb-3 h-1.5 w-16 rounded-full bg-primary-400" />
+                <h3 className="text-lg font-semibold text-slate-900">Standardized Documents</h3>
+                <p className="mt-2 text-sm leading-relaxed text-slate-600">
+                  Centralize critical files with structure, ownership, and clean retrieval across teams.
+                </p>
+              </article>
+              <article className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div className="mb-3 h-1.5 w-16 rounded-full bg-accent-400" />
+                <h3 className="text-lg font-semibold text-slate-900">Strategic Builders</h3>
+                <p className="mt-2 text-sm leading-relaxed text-slate-600">
+                  Build handbooks and plans through guided workflows tailored to your organizational context.
+                </p>
+              </article>
+              <article className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div className="mb-3 h-1.5 w-16 rounded-full bg-success-400" />
+                <h3 className="text-lg font-semibold text-slate-900">Operational Confidence</h3>
+                <p className="mt-2 text-sm leading-relaxed text-slate-600">
+                  Improve consistency, reduce rework, and keep your team aligned on what is approved and current.
+                </p>
+              </article>
+            </div>
+          </div>
+        ) : null}
+
+        {activeTab === "products" ? (
+          <div className="space-y-6">
+            <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm sm:p-10">
+              <h1 className="text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl">Products</h1>
+              <p className="mt-3 max-w-3xl text-base text-slate-600 sm:text-lg">
+                Professional tools designed for nonprofit development operations, with the reliability and
+                structure expected from modern document management platforms.
+              </p>
+            </div>
+
+            <div className="grid gap-5 lg:grid-cols-2">
+              <article className="rounded-3xl border border-slate-200 bg-white p-7 shadow-sm sm:p-8">
+                <p className="text-xs font-semibold uppercase tracking-wide text-primary-700">
+                  Product 01
+                </p>
+                <h2 className="mt-2 text-2xl font-bold text-slate-900">Document Management System</h2>
+                <p className="mt-3 text-sm leading-relaxed text-slate-600">
+                  Organize institutional records, governance artifacts, and fundraising materials in a secure,
+                  searchable, and team-accessible environment.
+                </p>
+                <ul className="mt-4 space-y-2 text-sm text-slate-600">
+                  <li>Role-aware organization-level access</li>
+                  <li>Version visibility and easier document retrieval</li>
+                  <li>Single source of truth for critical operational files</li>
+                </ul>
+              </article>
+
+              <article className="rounded-3xl border border-slate-200 bg-white p-7 shadow-sm sm:p-8">
+                <p className="text-xs font-semibold uppercase tracking-wide text-accent-700">
+                  Product 02
+                </p>
+                <h2 className="mt-2 text-2xl font-bold text-slate-900">AI-Assisted Development Builders</h2>
+                <p className="mt-3 text-sm leading-relaxed text-slate-600">
+                  Draft high-quality development assets with structure-first workflows that keep your team focused
+                  on strategic content, not formatting overhead.
+                </p>
+                <ul className="mt-4 space-y-2 text-sm text-slate-600">
+                  <li>Fund Development Handbook workflows</li>
+                  <li>Annual Fund Development Plan generation</li>
+                  <li>Case for Support and campaign planning templates</li>
+                </ul>
+              </article>
+            </div>
+
+            <div className="rounded-3xl border border-slate-200 bg-white p-7 shadow-sm sm:p-8">
+              <div className="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
+                <p className="max-w-2xl text-sm text-slate-600">
+                  Start with secure document operations, then layer in your strategic planning workflows as your
+                  team scales.
                 </p>
                 <button
                   onClick={() => router.push("/register")}
-                  className="inline-flex items-center gap-2 px-8 py-4 rounded-2xl text-lg font-bold bg-gradient-to-r from-primary-500 to-accent-400 text-white hover:from-primary-600 hover:to-primary-500 shadow-2xl shadow-primary-500/40 hover:shadow-primary-500/60 transition-all"
+                  className="rounded-full bg-slate-900 px-6 py-3 text-sm font-semibold text-white transition hover:bg-slate-700"
                 >
-                  Create Your Organization
-                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                  </svg>
+                  Create your organization
                 </button>
               </div>
             </div>
           </div>
-        </div>
-      </div>
+        ) : null}
 
-      {/* Footer */}
-      <footer className="border-t border-slate-200 bg-white/80 backdrop-blur-sm mt-16">
-        <div className="mx-auto max-w-7xl px-6 py-8">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="flex px-3 py-1.5 items-center justify-center rounded-lg bg-gradient-to-br from-primary-500 to-accent-400">
-                <span className="text-sm font-bold text-white">PF</span>
-              </div>
-              <span className="text-sm text-slate-600">© 2026 PurposeFramework</span>
+        {activeTab === "contact" ? (
+          <div className="space-y-6">
+            <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm sm:p-10">
+              <h1 className="text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl">Contact</h1>
+              <p className="mt-3 max-w-3xl text-base text-slate-600 sm:text-lg">
+                If you are evaluating PurposeFramework for your nonprofit or consulting team, we can help map
+                your current document and planning process into a cleaner operational model.
+              </p>
             </div>
-            <div className="text-sm text-slate-500">
-              Empowering nonprofits with professional tools
+
+            <div className="grid gap-5 md:grid-cols-2">
+              <article className="rounded-3xl border border-slate-200 bg-white p-7 shadow-sm">
+                <h2 className="text-xl font-bold text-slate-900">Best fit organizations</h2>
+                <p className="mt-3 text-sm leading-relaxed text-slate-600">
+                  Teams with growing fundraising complexity, shared ownership across staff/board, and a need for
+                  consistent documentation standards.
+                </p>
+              </article>
+              <article className="rounded-3xl border border-slate-200 bg-white p-7 shadow-sm">
+                <h2 className="text-xl font-bold text-slate-900">Current status</h2>
+                <p className="mt-3 text-sm leading-relaxed text-slate-600">
+                  Contact intake is being finalized. For now, create an organization to view the full product flow.
+                </p>
+              </article>
+            </div>
+
+            <div className="rounded-3xl border border-slate-200 bg-white p-7 shadow-sm">
+              <button
+                onClick={() => router.push("/register")}
+                className="rounded-full bg-slate-900 px-6 py-3 text-sm font-semibold text-white transition hover:bg-slate-700"
+              >
+                Start now
+              </button>
             </div>
           </div>
+        ) : null}
+      </section>
+
+      <footer className="border-t border-slate-200 bg-white">
+        <div className="mx-auto flex max-w-7xl flex-col gap-2 px-5 py-6 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:px-8">
+          <p>(c) 2026 PurposeFramework</p>
+          <p>Secure document operations for nonprofit fundraising teams</p>
         </div>
       </footer>
     </main>
   );
 }
-
-
-
-
-// export default function Home() {
-//   return (
-//     <main className="min-h-screen flex items-center justify-center p-6">
-//       <div className="w-full max-w-xl text-center space-y-4">
-//         <h1 className="text-3xl font-semibold">Fund Development Builder</h1>
-//         <p className="opacity-80">
-//           Build a professional fund development plan with structured intake.
-//         </p>
-
-//         <div className="flex items-center justify-center gap-3">
-//           <a className="border rounded-md px-4 py-2" href="/login">
-//             Log in
-//           </a>
-//           <a className="border rounded-md px-4 py-2" href="/register">
-//             Create account
-//           </a>
-//         </div>
-
-//         <div className="pt-2">
-//           <a className="underline text-sm opacity-80" href="/app/dashboard">
-//             Go to dashboard
-//           </a>
-//         </div>
-//       </div>
-//     </main>
-//   );
-// }
-
 

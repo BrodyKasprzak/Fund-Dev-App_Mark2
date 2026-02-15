@@ -120,8 +120,9 @@ export async function POST(
         "Content-Disposition": `attachment; filename="${filename}"`,
       },
     });
-  } catch (e: any) {
-    return errorToResponse(e);
+  } catch (e: unknown) {
+    const { status, message } = errorToResponse(e);
+    return NextResponse.json({ error: message }, { status });
   }
 }
 

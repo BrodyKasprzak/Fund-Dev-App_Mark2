@@ -1,14 +1,16 @@
 import { NextResponse } from "next/server";
 import crypto from "crypto";
 import { adminDb } from "@/lib/firebaseAdmin";
-import { requireOrgContext } from "@/lib/serverAuth";
+import { requireAdmin, errorToResponse } from "@/lib/serverAuth";
 import { resend, requireResendEnv } from "@/lib/resend";
+import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
 
-export const runtime = "nodejs"; // ensure Node runtime (not Edge)
+export const runtime = "nodejs";
 
-/* ---------------------------------------------------------
-   Helpers
---------------------------------------------------------- */
+const INVITE_EXPIRY_DAYS = 14;
+const MAX_INVITES_PER_REQUEST = 25;
+const INVITES_CREATE_LIMIT_PER_HOUR = 30;
+const INVITES_CREATE_IP_LIMIT_PER_HOUR = 120;
 
 function isValidEmail(email: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
@@ -24,10 +26,10 @@ function inviteEmailHtml(opts: {
 
   return `
   <div style="font-family: ui-sans-serif, system-ui, Arial; line-height: 1.5;">
-    <h2>You’ve been invited to join ${orgName ?? "an organization"}</h2>
+    <h2>You've been invited to join ${orgName ?? "an organization"}</h2>
 
     <p>
-      ${inviterEmail ? `${inviterEmail} has invited you` : "You’ve been invited"}
+      ${inviterEmail ? `${inviterEmail} has invited you` : "You've been invited"}
       to join their organization on Purpose Framework.
     </p>
 
@@ -40,84 +42,79 @@ function inviteEmailHtml(opts: {
     </p>
 
     <p style="font-size: 12px; color: #555;">
-      If you didn’t expect this invitation, you can safely ignore this email.
+      If you didn't expect this invitation, you can safely ignore this email.
     </p>
   </div>
   `;
 }
 
-/* ---------------------------------------------------------
-   Route
---------------------------------------------------------- */
-
 export async function POST(req: Request) {
   try {
-    // Ensure required env vars exist
     requireResendEnv();
 
-    console.log("INVITES CREATE ENV CHECK:", {
-      hasResendKey: Boolean(process.env.RESEND_API_KEY),
-      resendFrom: process.env.RESEND_FROM,
-      appBaseUrl: process.env.APP_BASE_URL,
+    const { uid, orgId, email: inviterEmail } = await requireAdmin(req);
+
+    await enforceRateLimit({
+      scope: "invites_create_user",
+      key: `${orgId}:${uid}`,
+      limit: INVITES_CREATE_LIMIT_PER_HOUR,
+      windowMs: 60 * 60 * 1000,
     });
 
-    const { uid, orgId, role, email: inviterEmail } =
-      await requireOrgContext(req);
+    await enforceRateLimit({
+      scope: "invites_create_ip",
+      key: getRequestIp(req),
+      limit: INVITES_CREATE_IP_LIMIT_PER_HOUR,
+      windowMs: 60 * 60 * 1000,
+    });
 
-    if (role !== "admin") {
-      return NextResponse.json({ error: "Admin only" }, { status: 403 });
-    }
-
-    const body = await req.json();
+    const body = await req.json().catch(() => ({}));
     const emailsRaw: unknown = body?.emails;
 
     if (!Array.isArray(emailsRaw) || emailsRaw.length === 0) {
       return NextResponse.json(
         { error: "emails must be a non-empty array" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
-    // Normalize & dedupe emails
     const emails = [
       ...new Set(
         emailsRaw
           .map((e) => (typeof e === "string" ? e.trim().toLowerCase() : ""))
-          .filter(Boolean)
+          .filter(Boolean),
       ),
     ];
+
+    if (emails.length > MAX_INVITES_PER_REQUEST) {
+      return NextResponse.json(
+        { error: `Too many emails. Max ${MAX_INVITES_PER_REQUEST} per request.` },
+        { status: 400 },
+      );
+    }
 
     const invalid = emails.filter((e) => !isValidEmail(e));
     if (invalid.length > 0) {
       return NextResponse.json(
         { error: `Invalid email(s): ${invalid.join(", ")}` },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
-    // Fetch org name (for nicer email copy)
-    const orgSnap = await adminDb
-      .collection("organizations")
-      .doc(orgId)
-      .get();
-
-    const orgName = orgSnap.exists
-      ? (orgSnap.data() as any)?.name
-      : undefined;
+    const orgSnap = await adminDb.collection("organizations").doc(orgId).get();
+    const orgData = orgSnap.data() as { name?: unknown } | undefined;
+    const orgName =
+      orgSnap.exists && typeof orgData?.name === "string" ? orgData.name : undefined;
 
     const created: Array<{ inviteId: string; email: string }> = [];
-
-    /* -----------------------------------------------------
-       Create + send each invite
-    ----------------------------------------------------- */
+    const now = new Date();
+    const expiresAt = new Date(
+      now.getTime() + INVITE_EXPIRY_DAYS * 24 * 60 * 60 * 1000,
+    );
 
     for (const inviteeEmail of emails) {
-      // Generate secure access code
       const rawCode = crypto.randomBytes(16).toString("hex");
-      const codeHash = crypto
-        .createHash("sha256")
-        .update(rawCode)
-        .digest("hex");
+      const codeHash = crypto.createHash("sha256").update(rawCode).digest("hex");
 
       const inviteRef = adminDb
         .collection("organizations")
@@ -128,16 +125,19 @@ export async function POST(req: Request) {
       await inviteRef.set({
         email: inviteeEmail,
         codeHash,
-        status: "pending", // pending | accepted | revoked | expired
-        createdAt: new Date(),
+        status: "pending",
+        failedAttempts: 0,
+        expiresAt,
+        createdAt: now,
+        updatedAt: now,
         createdBy: uid,
       });
 
       const link = `${process.env.APP_BASE_URL}/invite?orgId=${encodeURIComponent(
-        orgId
+        orgId,
       )}&inviteId=${encodeURIComponent(inviteRef.id)}`;
 
-      const text = `You’ve been invited to join ${
+      const text = `You've been invited to join ${
         orgName ?? "an organization"
       }.
 
@@ -147,12 +147,14 @@ ${link}
 Access code:
 ${rawCode}
 
-If you didn’t expect this invitation, you can ignore this email.`;
+This invite expires on ${expiresAt.toISOString().slice(0, 10)}.
+
+If you didn't expect this invitation, you can ignore this email.`;
 
       const result = await resend.emails.send({
         from: process.env.RESEND_FROM!,
         to: inviteeEmail,
-        subject: "Purpose Framework invite — action required",
+        subject: "Purpose Framework invite - action required",
         html: inviteEmailHtml({
           orgName,
           inviterEmail,
@@ -163,17 +165,10 @@ If you didn’t expect this invitation, you can ignore this email.`;
       });
 
       if (result?.error) {
-        console.error("RESEND ERROR:", result.error);
-
-        // Clean up failed invite
         await inviteRef.delete();
-
         return NextResponse.json(
-          {
-            error: result.error.message ?? "Failed to send invite email",
-            details: result.error,
-          },
-          { status: 502 }
+          { error: "Failed to send invite email" },
+          { status: 502 },
         );
       }
 
@@ -181,11 +176,18 @@ If you didn’t expect this invitation, you can ignore this email.`;
     }
 
     return NextResponse.json({ ok: true, created });
-  } catch (err: any) {
-    console.error("invites/create route error:", err);
-    return NextResponse.json(
-      { error: err.message ?? "Server error" },
-      { status: 500 }
-    );
+  } catch (err: unknown) {
+    if (err instanceof RateLimitError) {
+      return NextResponse.json(
+        { error: err.message },
+        {
+          status: 429,
+          headers: { "Retry-After": String(err.retryAfterSeconds) },
+        },
+      );
+    }
+
+    const { status, message } = errorToResponse(err);
+    return NextResponse.json({ error: message }, { status });
   }
 }
