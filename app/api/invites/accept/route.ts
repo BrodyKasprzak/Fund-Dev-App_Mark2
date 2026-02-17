@@ -94,9 +94,14 @@ export async function POST(req: Request) {
           failedAttempts?: unknown;
           email?: unknown;
           codeHash?: unknown;
+          createdBy?: unknown;
         }
       | undefined;
     const now = new Date();
+
+    if (!invite) {
+      return NextResponse.json({ error: "Invite payload missing" }, { status: 500 });
+    }
 
     if (invite.status !== "pending") {
       return NextResponse.json(
@@ -170,6 +175,16 @@ export async function POST(req: Request) {
     const memberRef = orgRef.collection("members").doc(uid);
     const userRef = adminDb.collection("users").doc(uid);
     const userMembershipRef = userRef.collection("memberships").doc(orgId);
+    const [existingMemberSnap, existingMembershipSnap, orgSnap] = await Promise.all([
+      memberRef.get(),
+      userMembershipRef.get(),
+      orgRef.get(),
+    ]);
+    const orgData = orgSnap.exists ? ((orgSnap.data() as Record<string, unknown>) ?? {}) : {};
+    const orgName = typeof orgData?.name === "string" && orgData.name.trim()
+      ? orgData.name
+      : null;
+    const inviteCreatedBy = asNonEmptyString(invite.createdBy) ?? uid;
 
     batch.set(
       memberRef,
@@ -180,8 +195,7 @@ export async function POST(req: Request) {
         status: "active",
         name,
         position: position ?? null,
-        createdAt: now,
-        createdBy: uid,
+        ...(existingMemberSnap.exists ? {} : { createdAt: now, createdBy: inviteCreatedBy }),
         updatedAt: now,
       },
       { merge: true },
@@ -205,9 +219,9 @@ export async function POST(req: Request) {
         orgId,
         role: "member",
         status: "active",
-        orgName: null,
+        orgName,
+        ...(existingMembershipSnap.exists ? {} : { createdAt: now }),
         updatedAt: now,
-        createdAt: now,
       },
       { merge: true },
     );

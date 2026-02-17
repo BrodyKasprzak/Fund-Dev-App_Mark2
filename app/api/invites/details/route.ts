@@ -19,7 +19,7 @@ function toDate(value: unknown): Date | null {
  * GET /api/invites/details?orgId=...&inviteId=...
  *
  * Public endpoint for invite landing page.
- * Returns only non-sensitive metadata (org name + invite status).
+ * Returns invite metadata for the invite landing page.
  */
 export async function GET(req: Request) {
   try {
@@ -52,8 +52,14 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "Invite not found" }, { status: 404 });
     }
 
-    const invite = snap.data() as { status?: unknown; expiresAt?: unknown } | undefined;
+    const invite = snap.data() as {
+      status?: unknown;
+      expiresAt?: unknown;
+      email?: unknown;
+    } | undefined;
     let status = String(invite?.status ?? "");
+    const inviteEmail =
+      typeof invite?.email === "string" ? invite.email.trim().toLowerCase() : null;
 
     const expiresAt = toDate(invite?.expiresAt);
     const isExpired = Boolean(expiresAt && expiresAt.getTime() <= Date.now());
@@ -80,6 +86,7 @@ export async function GET(req: Request) {
       orgId,
       inviteId,
       orgName,
+      inviteEmail,
       status: status || null,
     });
   } catch (err: unknown) {

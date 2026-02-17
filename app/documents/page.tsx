@@ -357,7 +357,7 @@ function FolderTreeItem(props: FolderTreeItemProps) {
 export default function DocumentsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, loading, activeOrgId, authedFetch } = useAuth();
+  const { user, loading, authedFetch } = useAuth();
 
   const [viewMode, setViewMode] = useState<ViewMode>("document");
   const [docs, setDocs] = useState<DocumentListItem[]>([]);
@@ -756,6 +756,14 @@ export default function DocumentsPage() {
 
   const deepLinkDocId = searchParams.get("docId");
   const deepLinkHighlight = searchParams.get("highlight");
+  const requestedMode = searchParams.get("mode");
+
+  useEffect(() => {
+    if (requestedMode === "chat" || requestedMode === "document") {
+      setViewMode(requestedMode);
+    }
+  }, [requestedMode]);
+
   useEffect(() => {
     if (!deepLinkDocId) {
       handledDeepLinkRef.current = null;
@@ -1062,17 +1070,12 @@ export default function DocumentsPage() {
   return (
     <main className="min-h-screen bg-gradient-to-b from-sky-50 via-white to-rose-50 px-4 pb-6 pt-2 sm:px-6 sm:pb-8 sm:pt-3 [font-family:var(--font-geist-sans)]">
       <div className="mx-auto max-w-[1400px] space-y-4">
-        <header className="rounded-2xl border border-sky-200/70 bg-gradient-to-r from-white via-sky-50 to-indigo-50 p-5 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h1 className="text-2xl font-bold text-slate-900 sm:text-3xl">Document Workspace</h1>
-              <p className="mt-1 text-sm text-slate-600">
-                Upload, search, and run persistent organization-scoped chat grounded in documents.
-              </p>
-            </div>
-            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-              Active Org: <span className="font-semibold text-slate-800">{activeOrgId ?? "auto"}</span>
-            </div>
+        <header className="rounded-2xl border border-slate-200 bg-white/95 p-5 shadow-sm">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl">Documents</h1>
+            <p className="mt-1 text-sm text-slate-600">
+              Upload, organize, search, and chat across your document library.
+            </p>
           </div>
           {error ? <p className="mt-3 text-sm text-rose-700">{error}</p> : null}
           {message ? <p className="mt-3 text-sm text-amber-700">{message}</p> : null}

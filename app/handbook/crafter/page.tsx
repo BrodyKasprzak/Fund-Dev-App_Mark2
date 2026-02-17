@@ -184,7 +184,7 @@ export default function FundDevHandbookCrafterPage() {
           (typeof data?.lastOrgId === "string" ? data.lastOrgId : null);
 
         if (!candidate) {
-          router.push("/onboarding/org");
+          router.push(`/org-picker?next=${encodeURIComponent("/handbook/crafter")}`);
           return;
         }
 
@@ -193,7 +193,7 @@ export default function FundDevHandbookCrafterPage() {
 
         if (!memberSnap.exists()) {
           localStorage.removeItem("pf_active_org");
-          router.push("/onboarding/org");
+          router.push(`/org-picker?next=${encodeURIComponent("/handbook/crafter")}`);
           return;
         }
 
@@ -202,7 +202,7 @@ export default function FundDevHandbookCrafterPage() {
         setOrgId(candidate);
       } catch (e) {
         console.error("Org gate error:", e);
-        router.push("/onboarding/org");
+        router.push(`/org-picker?next=${encodeURIComponent("/handbook/crafter")}`);
         return;
       } finally {
         setCheckingOrg(false);
@@ -333,7 +333,7 @@ export default function FundDevHandbookCrafterPage() {
     // ✅ Optional safety: ensure org is present before moving on
     const active = localStorage.getItem("pf_active_org");
     if (!active) {
-      router.push("/onboarding/org");
+      router.push(`/org-picker?next=${encodeURIComponent("/handbook/crafter")}`);
       return;
     }
 

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { KnowledgeAssetPanel } from "@/components/workspace/KnowledgeAssetPanel";
 
 type Tab = "purpose" | "products" | "contact";
 
@@ -160,6 +161,8 @@ export default function Home() {
                 </p>
               </article>
             </div>
+
+            <KnowledgeAssetPanel />
           </div>
         ) : null}
 
@@ -271,4 +274,3 @@ export default function Home() {
     </main>
   );
 }
-

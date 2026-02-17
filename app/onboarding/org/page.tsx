@@ -23,7 +23,7 @@ function isValidYear(y: string) {
 
 export default function OrgOnboardingPage() {
   const router = useRouter();
-  const { user, loading, setActiveOrgId, authedFetch } = useAuth();
+  const { user, loading, setActiveOrgId, refreshMe } = useAuth();
 
   const [orgName, setOrgName] = useState("");
   const [mission, setMission] = useState("");
@@ -131,7 +131,7 @@ export default function OrgOnboardingPage() {
 
       // ✅ NEW: set active org via AuthContext (persists to localStorage inside context)
       setActiveOrgId(json.orgId);
-
+      await refreshMe();
       router.push("/dashboard");
     } catch (err: any) {
       setError(err?.message ?? "Failed to create organization.");

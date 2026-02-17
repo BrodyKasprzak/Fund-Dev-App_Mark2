@@ -215,7 +215,7 @@ export default function FundDevHandbookTemplatePage() {
           const next = planId
             ? `/handbook/crafter/template?planId=${encodeURIComponent(planId)}`
             : "/handbook/crafter/template";
-          router.push(`/onboarding/org?next=${encodeURIComponent(next)}`);
+          router.push(`/org-picker?next=${encodeURIComponent(next)}`);
           return;
         }
 
@@ -228,7 +228,7 @@ export default function FundDevHandbookTemplatePage() {
           const next = planId
             ? `/handbook/crafter/template?planId=${encodeURIComponent(planId)}`
             : "/handbook/crafter/template";
-          router.push(`/onboarding/org?next=${encodeURIComponent(next)}`);
+          router.push(`/org-picker?next=${encodeURIComponent(next)}`);
           return;
         }
 

@@ -1,54 +1,104 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
-import { signOut } from "firebase/auth";
-import { auth, db } from "@/lib/firebaseClient";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { collection, doc, getDoc, getDocs } from "firebase/firestore";
+import { db } from "@/lib/firebaseClient";
 import { useAuth } from "@/lib/AuthContext";
-import { doc, getDoc } from "firebase/firestore";
+import { KnowledgeAssetPanel } from "@/components/workspace/KnowledgeAssetPanel";
 
 type OrgProfile = {
   id: string;
   name: string;
   mission?: string | null;
-  homeState?: string | null;
-  taxStatus?: string | null;
-  fiscalYear?: string | null;
-  crm?: string | null;
-  address?: string | null;
-  numEmployees?: number | null;
-  foundedYear?: number | null;
-  websiteUrl?: string | null;
-  websiteConsent?: boolean | null;
 };
 
-function initialsFromName(name?: string) {
-  const n = String(name ?? "").trim();
-  if (!n) return "O";
-  const parts = n.split(/\s+/).filter(Boolean);
-  const a = parts[0]?.[0] ?? "O";
-  const b = parts.length > 1 ? parts[parts.length - 1]?.[0] ?? "" : "";
-  return (a + b).toUpperCase();
+type DocumentSummary = {
+  id: string;
+  title: string;
+  createdAt: string | null;
+  updatedAt: string | null;
+};
+
+type ActivityRow = {
+  id: string;
+  type: "document";
+  label: string;
+  title: string;
+  when: string | null;
+};
+
+type QuickAction = {
+  label: string;
+  description: string;
+  href: string;
+  style: string;
+};
+
+const QUICK_ACTIONS: QuickAction[] = [
+  {
+    label: "Upload Document",
+    description: "Add new files to your organization workspace",
+    href: "/documents",
+    style:
+      "border-primary-200 bg-white text-slate-900 hover:border-primary-300 hover:shadow-primary-100",
+  },
+  {
+    label: "Ask a Question",
+    description: "Open grounded org chat over your documents",
+    href: "/documents?mode=chat",
+    style:
+      "border-sky-200 bg-white text-slate-900 hover:border-sky-300 hover:shadow-sky-100",
+  },
+  {
+    label: "Create Grant",
+    description: "Start from the existing grant strategy flow",
+    href: "/products",
+    style:
+      "border-accent-200 bg-white text-slate-900 hover:border-accent-300 hover:shadow-accent-100",
+  },
+  {
+    label: "Invite Member",
+    description: "Invite teammates with secure access codes",
+    href: "/dashboard?invite=1",
+    style:
+      "border-amber-200 bg-white text-slate-900 hover:border-amber-300 hover:shadow-amber-100",
+  },
+];
+
+function formatDateTime(value: string | null) {
+  if (!value) return "--";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "--";
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 export default function DashboardPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const inviteQueryHandledRef = useRef(false);
 
-  const { user, loading, activeOrgId, setActiveOrgId, clearActiveOrgId, authedFetch } =
-    useAuth();
+  const { user, loading, activeOrgId, clearActiveOrgId, authedFetch } = useAuth();
 
   const [checkingOrg, setCheckingOrg] = useState(true);
+  const [workspaceLoading, setWorkspaceLoading] = useState(true);
   const [org, setOrg] = useState<OrgProfile | null>(null);
-  const [orgInfoOpen, setOrgInfoOpen] = useState(false);
 
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [documentsCount, setDocumentsCount] = useState<number | null>(null);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
+  const [teamMembersCount, setTeamMembersCount] = useState<number | null>(null);
+  const [activity, setActivity] = useState<ActivityRow[]>([]);
 
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmails, setInviteEmails] = useState<string[]>([""]);
   const [inviteSending, setInviteSending] = useState(false);
   const [inviteMsg, setInviteMsg] = useState<string | null>(null);
-
-  const [activityNote] = useState("Recent activity will appear here once plans are created and edited.");
 
   const canSendInvites = useMemo(() => {
     const cleaned = inviteEmails.map((e) => e.trim()).filter(Boolean);
@@ -65,15 +115,10 @@ export default function DashboardPage() {
       }
 
       try {
-        const userRef = doc(db, "users", user.uid);
-        const snap = await getDoc(userRef);
-        const data = snap.exists() ? snap.data() : null;
-
-        const orgId =
-          activeOrgId || (typeof data?.lastOrgId === "string" ? data.lastOrgId : null);
+        const orgId = activeOrgId;
 
         if (!orgId) {
-          router.push("/onboarding/org");
+          router.push("/org-picker");
           return;
         }
 
@@ -82,49 +127,87 @@ export default function DashboardPage() {
 
         if (!memberSnap.exists()) {
           clearActiveOrgId();
-          router.push("/onboarding/org");
+          router.push("/org-picker");
           return;
         }
-
-        if (orgId !== activeOrgId) setActiveOrgId(orgId);
 
         const orgRef = doc(db, "organizations", orgId);
         const orgSnap = await getDoc(orgRef);
-
         if (!orgSnap.exists()) {
-          router.push("/onboarding/org");
+          router.push("/org-picker");
           return;
         }
 
-        const o = orgSnap.data() as any;
-
-        const loaded: OrgProfile = {
+        const raw = orgSnap.data() as Record<string, unknown>;
+        setOrg({
           id: orgId,
-          name: String(o?.name ?? "").trim() || "Your organization",
-          mission: typeof o?.mission === "string" ? o.mission : null,
-          homeState: typeof o?.homeState === "string" ? o.homeState : null,
-          taxStatus: typeof o?.taxStatus === "string" ? o.taxStatus : null,
-          fiscalYear: typeof o?.fiscalYear === "string" ? o.fiscalYear : null,
-          crm: typeof o?.crm === "string" ? o.crm : null,
-          address: typeof o?.address === "string" ? o.address : null,
-          numEmployees: typeof o?.numEmployees === "number" ? o.numEmployees : null,
-          foundedYear: typeof o?.foundedYear === "number" ? o.foundedYear : null,
-          websiteUrl: typeof o?.websiteUrl === "string" ? o.websiteUrl : null,
-          websiteConsent: typeof o?.websiteConsent === "boolean" ? o.websiteConsent : null,
-        };
-
-        setOrg(loaded);
+          name: String(raw?.name ?? "").trim() || "Your organization",
+          mission: typeof raw?.mission === "string" ? raw.mission : null,
+        });
       } catch (err) {
         console.error("Dashboard org check error:", err);
-        router.push("/onboarding/org");
+        router.push("/org-picker");
         return;
       } finally {
         setCheckingOrg(false);
       }
     }
 
-    checkOrg();
-  }, [user, loading, router, activeOrgId, setActiveOrgId, clearActiveOrgId]);
+    void checkOrg();
+  }, [activeOrgId, clearActiveOrgId, loading, router, user]);
+
+  useEffect(() => {
+    async function loadWorkspaceData() {
+      if (!user || !org?.id) {
+        setWorkspaceLoading(false);
+        return;
+      }
+
+      setWorkspaceLoading(true);
+
+      try {
+        const [documentsRes, membersSnap] = await Promise.all([
+          authedFetch("/api/documents"),
+          getDocs(collection(db, "organizations", org.id, "members")),
+        ]);
+
+        const documentPayload = await documentsRes.json().catch(() => ({}));
+        const documents: DocumentSummary[] = Array.isArray(documentPayload?.documents)
+          ? documentPayload.documents
+          : [];
+
+        const sortedDocuments = [...documents].sort((a, b) => {
+          const aTs = new Date(a.updatedAt || a.createdAt || 0).getTime();
+          const bTs = new Date(b.updatedAt || b.createdAt || 0).getTime();
+          return bTs - aTs;
+        });
+
+        setDocumentsCount(sortedDocuments.length);
+        setLastUpdatedAt(sortedDocuments[0]?.updatedAt || sortedDocuments[0]?.createdAt || null);
+
+        // TODO(ui-only): Add "answers saved" and "grants created" events when existing UI data is available.
+        const documentActivity: ActivityRow[] = sortedDocuments.slice(0, 8).map((d) => ({
+          id: d.id,
+          type: "document",
+          label: "Document uploaded",
+          title: d.title || "Untitled document",
+          when: d.createdAt || d.updatedAt || null,
+        }));
+        setActivity(documentActivity);
+
+        setTeamMembersCount(membersSnap.size);
+      } catch {
+        setDocumentsCount(null);
+        setLastUpdatedAt(null);
+        setTeamMembersCount(null);
+        setActivity([]);
+      } finally {
+        setWorkspaceLoading(false);
+      }
+    }
+
+    void loadWorkspaceData();
+  }, [authedFetch, org?.id, user]);
 
   function openInviteModal() {
     setInviteMsg(null);
@@ -135,6 +218,18 @@ export default function DashboardPage() {
   function closeInviteModal() {
     setInviteOpen(false);
   }
+
+  useEffect(() => {
+    const shouldOpenInvite = searchParams.get("invite") === "1";
+    if (shouldOpenInvite && !inviteQueryHandledRef.current) {
+      inviteQueryHandledRef.current = true;
+      openInviteModal();
+      router.replace("/dashboard");
+    }
+    if (!shouldOpenInvite) {
+      inviteQueryHandledRef.current = false;
+    }
+  }, [router, searchParams]);
 
   function updateEmail(idx: number, value: string) {
     setInviteEmails((prev) => prev.map((e, i) => (i === idx ? value : e)));
@@ -165,409 +260,144 @@ export default function DashboardPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Failed to send invites");
 
-      setInviteMsg(`✅ Created ${data.created?.length ?? 0} invite(s).`);
-    } catch (err: any) {
-      setInviteMsg(`❌ ${err.message ?? "Failed to send invites"}`);
+      setInviteMsg(`Created ${data.created?.length ?? 0} invite(s).`);
+    } catch (err: unknown) {
+      if (err instanceof Error) setInviteMsg(err.message);
+      else setInviteMsg("Failed to send invites");
     } finally {
       setInviteSending(false);
     }
   }
 
-  if (loading || checkingOrg) {
+  if (loading || checkingOrg || workspaceLoading) {
     return (
-      <main className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 via-white to-primary-50">
+      <main className="min-h-screen flex items-center justify-center">
         <div className="text-center">
-          <div className="inline-flex px-6 py-4 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-600 to-accent-400 mb-4 shadow-lg">
-            <span className="text-xl font-bold text-white whitespace-nowrap">
-              PurposeFramework
-            </span>
+          <div className="inline-flex items-center justify-center rounded-2xl bg-gradient-to-br from-primary-600 to-accent-400 px-6 py-4 shadow-lg">
+            <span className="whitespace-nowrap text-xl font-bold text-white">PurposeFramework</span>
           </div>
-          <p className="text-slate-600">Loading your workspace...</p>
+          <p className="mt-4 text-slate-600">Loading your workspace...</p>
         </div>
       </main>
     );
   }
 
+  if (!user) return null;
+
   const orgName = org?.name ?? "Your organization";
-  const orgMission = org?.mission?.trim() ? org.mission : null;
-  const avatarText = initialsFromName(orgName);
+  const mission = org?.mission?.trim()
+    ? org.mission
+    : "Add a mission statement during onboarding to strengthen workspace context.";
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-primary-50 via-slate-50 to-primary-50">
-      <div className="flex min-h-screen">
-        {/* LEFT COLLAPSIBLE ORG PROFILE SIDEBAR */}
-        <aside
-          className={`bg-gradient-to-br from-primary-700 via-primary-600 to-accent-500 text-white transition-all duration-300 ease-in-out ${
-            sidebarCollapsed ? "w-16" : "w-[320px]"
-          } relative shadow-xl`}
-        >
-          {/* Toggle button */}
-          <button
-            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-            className="absolute -right-3 top-6 z-10 flex h-7 w-7 items-center justify-center rounded-full bg-white shadow-lg hover:shadow-xl transition-all"
-            aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-          >
-            <svg
-              className={`h-4 w-4 text-primary-600 transition-transform duration-300 ${
-                sidebarCollapsed ? "rotate-180" : ""
-              }`}
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
-          </button>
-
-          <div className={`h-full overflow-hidden ${sidebarCollapsed ? "p-3" : "p-6"}`}>
-            {!sidebarCollapsed ? (
-              <>
-                {/* Expanded view */}
-                <div className="border-b border-white/20 pb-6">
-                  <div className="flex items-center gap-3 mb-4">
-                    <div className="flex h-12 w-12 items-center justify-center rounded-full bg-white/15 text-base font-bold backdrop-blur-sm border border-white/20">
-                      {avatarText}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="text-base font-semibold truncate">{orgName}</div>
-                      <div className="text-xs text-white/85 truncate">{user?.email ?? "Unknown"}</div>
-                    </div>
-                  </div>
-
-                  {/* Mission preview */}
-                  <div className="rounded-2xl bg-white/12 backdrop-blur-sm p-4 border border-white/20">
-                    <div className="flex items-center gap-2 mb-2">
-                      <div className="h-2 w-2 rounded-full bg-success-300"></div>
-                      <div className="text-xs font-semibold text-white/90">Mission</div>
-                    </div>
-                    <div className="text-sm leading-relaxed text-white/95">
-                      {orgMission ?? "Not provided yet."}
-                    </div>
-                  </div>
-
-                  {/* Company info toggle */}
-                  <button
-                    type="button"
-                    className="mt-4 w-full rounded-2xl bg-white/12 backdrop-blur-sm px-4 py-3 text-left hover:bg-white/18 transition border border-white/20"
-                    onClick={() => setOrgInfoOpen((v) => !v)}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className="h-2 w-2 rounded-full bg-accent-300"></div>
-                        <div className="text-sm font-semibold">Organization info</div>
-                      </div>
-                      <div className="text-sm font-semibold">{orgInfoOpen ? "−" : "+"}</div>
-                    </div>
-                  </button>
-
-                  {orgInfoOpen ? (
-                    <div className="mt-4 space-y-2 text-sm">
-                      <div className="rounded-2xl bg-white/8 backdrop-blur-sm p-3 border border-white/15">
-                        <div className="text-xs font-semibold text-white/80">Home state</div>
-                        <div className="mt-1 font-medium">{org?.homeState?.trim() ? org.homeState : "—"}</div>
-                      </div>
-
-                      <div className="rounded-2xl bg-white/8 backdrop-blur-sm p-3 border border-white/15">
-                        <div className="text-xs font-semibold text-white/80">Tax status</div>
-                        <div className="mt-1 font-medium">{org?.taxStatus?.trim() ? org.taxStatus : "—"}</div>
-                      </div>
-
-                      <div className="rounded-2xl bg-white/8 backdrop-blur-sm p-3 border border-white/15">
-                        <div className="text-xs font-semibold text-white/80">Fiscal year</div>
-                        <div className="mt-1 font-medium">{org?.fiscalYear?.trim() ? org.fiscalYear : "—"}</div>
-                      </div>
-
-                      <div className="rounded-2xl bg-white/8 backdrop-blur-sm p-3 border border-white/15">
-                        <div className="text-xs font-semibold text-white/80">CRM</div>
-                        <div className="mt-1 font-medium">{org?.crm?.trim() ? org.crm : "—"}</div>
-                      </div>
-
-                      <div className="rounded-2xl bg-white/8 backdrop-blur-sm p-3 border border-white/15">
-                        <div className="text-xs font-semibold text-white/80">Address</div>
-                        <div className="mt-1 font-medium">{org?.address?.trim() ? org.address : "—"}</div>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2">
-                        <div className="rounded-2xl bg-white/8 backdrop-blur-sm p-3 border border-white/15">
-                          <div className="text-xs font-semibold text-white/80">Employees</div>
-                          <div className="mt-1 font-medium">{typeof org?.numEmployees === "number" ? org.numEmployees : "—"}</div>
-                        </div>
-                        <div className="rounded-2xl bg-white/8 backdrop-blur-sm p-3 border border-white/15">
-                          <div className="text-xs font-semibold text-white/80">Founded</div>
-                          <div className="mt-1 font-medium">{typeof org?.foundedYear === "number" ? org.foundedYear : "—"}</div>
-                        </div>
-                      </div>
-
-                      <div className="rounded-2xl bg-white/8 backdrop-blur-sm p-3 border border-white/15">
-                        <div className="text-xs font-semibold text-white/80">Website</div>
-                        <div className="mt-1 font-medium break-all">
-                          {org?.websiteConsent && org?.websiteUrl ? org.websiteUrl : "—"}
-                        </div>
-                        <div className="mt-2 text-xs text-white/70">
-                          {org?.websiteUrl
-                            ? org?.websiteConsent
-                              ? "✓ Consent granted"
-                              : "Consent not granted"
-                            : "No website provided"}
-                        </div>
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-
-                {/* Sidebar nav actions */}
-                <div className="pt-6 space-y-2">
-                  <button
-                    type="button"
-                    className="w-full rounded-2xl bg-white/12 backdrop-blur-sm px-4 py-3 text-left hover:bg-white/18 transition border border-white/20"
-                    onClick={() => router.push("/products")}
-                  >
-                    <div className="flex items-center gap-2 mb-1">
-                      <div className="h-2 w-2 rounded-full bg-success-300"></div>
-                      <div className="text-sm font-semibold">Products</div>
-                    </div>
-                    <div className="text-xs text-white/80">Create and manage documents</div>
-                  </button>
-
-                  <button
-                    type="button"
-                    className="w-full rounded-2xl bg-white/12 backdrop-blur-sm px-4 py-3 text-left hover:bg-white/18 transition border border-white/20"
-                    onClick={() => router.push("/documents")}
-                  >
-                    <div className="flex items-center gap-2 mb-1">
-                      <div className="h-2 w-2 rounded-full bg-white/80"></div>
-                      <div className="text-sm font-semibold">Documents</div>
-                    </div>
-                    <div className="text-xs text-white/80">Upload, organize, and search files</div>
-                  </button>
-
-                  <button
-                    type="button"
-                    className="w-full rounded-2xl bg-white/12 backdrop-blur-sm px-4 py-3 text-left hover:bg-white/18 transition border border-white/20"
-                    onClick={openInviteModal}
-                  >
-                    <div className="flex items-center gap-2 mb-1">
-                      <div className="h-2 w-2 rounded-full bg-accent-300"></div>
-                      <div className="text-sm font-semibold">Invites</div>
-                    </div>
-                    <div className="text-xs text-white/80">Invite teammates securely</div>
-                  </button>
-
-                  <button
-                    type="button"
-                    className="w-full rounded-2xl bg-white/12 backdrop-blur-sm px-4 py-3 text-left hover:bg-white/18 transition border border-white/20"
-                    onClick={() => router.push("/activity")}
-                  >
-                    <div className="flex items-center gap-2 mb-1">
-                      <div className="h-2 w-2 rounded-full bg-purple-300"></div>
-                      <div className="text-sm font-semibold">Activity</div>
-                    </div>
-                    <div className="text-xs text-white/80">Recently edited documents</div>
-                  </button>
-
-                  <button
-                    type="button"
-                    className="w-full rounded-2xl bg-white/12 backdrop-blur-sm px-4 py-3 text-left hover:bg-white/18 transition border border-white/20"
-                    onClick={async () => {
-                      await signOut(auth);
-                      router.push("/login");
-                    }}
-                  >
-                    <div className="flex items-center gap-2 mb-1">
-                      <div className="h-2 w-2 rounded-full bg-slate-200"></div>
-                      <div className="text-sm font-semibold">Sign out</div>
-                    </div>
-                    <div className="text-xs text-white/80">Log out of this account</div>
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                {/* Collapsed view - dots only */}
-                <div className="flex flex-col items-center gap-4 pt-2">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/15 text-sm font-bold backdrop-blur-sm border border-white/20">
-                    {avatarText}
-                  </div>
-
-                  <div className="w-full border-t border-white/20"></div>
-
-                  <button
-                    type="button"
-                    className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white/12 backdrop-blur-sm hover:bg-white/18 transition border border-white/20"
-                    onClick={() => router.push("/products")}
-                    title="Products"
-                  >
-                    <div className="h-2 w-2 rounded-full bg-success-300"></div>
-                  </button>
-
-                  <button
-                    type="button"
-                    className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white/12 backdrop-blur-sm hover:bg-white/18 transition border border-white/20"
-                    onClick={() => router.push("/documents")}
-                    title="Documents"
-                  >
-                    <div className="h-2 w-2 rounded-full bg-white/80"></div>
-                  </button>
-
-                  <button
-                    type="button"
-                    className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white/12 backdrop-blur-sm hover:bg-white/18 transition border border-white/20"
-                    onClick={openInviteModal}
-                    title="Invites"
-                  >
-                    <div className="h-2 w-2 rounded-full bg-accent-300"></div>
-                  </button>
-
-                  <button
-                    type="button"
-                    className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white/12 backdrop-blur-sm hover:bg-white/18 transition border border-white/20"
-                    onClick={() => router.push("/activity")}
-                    title="Activity"
-                  >
-                    <div className="h-2 w-2 rounded-full bg-purple-300"></div>
-                  </button>
-
-                  <button
-                    type="button"
-                    className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white/12 backdrop-blur-sm hover:bg-white/18 transition border border-white/20"
-                    onClick={async () => {
-                      await signOut(auth);
-                      router.push("/login");
-                    }}
-                    title="Sign out"
-                  >
-                    <div className="h-2 w-2 rounded-full bg-slate-200"></div>
-                  </button>
-                </div>
-              </>
-            )}
+    <main className="min-h-screen overflow-y-auto p-6 md:p-8">
+      <div className="mx-auto max-w-6xl space-y-6">
+        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm md:p-8">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-xs font-semibold uppercase tracking-wide text-primary-700">
+                PurposeFramework Workspace
+              </p>
+              <h1 className="mt-2 truncate text-3xl font-semibold tracking-tight text-slate-900 md:text-4xl">
+                {orgName}
+              </h1>
+              <p className="mt-3 max-w-3xl text-sm leading-relaxed text-slate-600 md:text-base">
+                {mission}
+              </p>
+            </div>
           </div>
-        </aside>
 
-        {/* MAIN CONTENT */}
-        <section className="flex-1 p-8">
-          <div className="mx-auto max-w-6xl">
-            {/* Header */}
-            <div className="mb-8">
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <h1 className="text-4xl font-semibold tracking-tight text-slate-900 truncate">
-                    {orgName}
-                  </h1>
-                  {orgMission ? (
-                    <p className="mt-2 text-base text-slate-600 leading-relaxed max-w-3xl">
-                      {orgMission}
-                    </p>
-                  ) : (
-                    <p className="mt-2 text-base text-slate-500">
-                      Add a mission statement to help guide your workspace.
-                    </p>
-                  )}
-                  <div className="mt-4 flex items-center gap-2">
-                    <span className="inline-flex items-center rounded-full border border-primary-200 bg-white px-3 py-1 text-xs font-semibold text-primary-700">
-                      Partner for Purpose
-                    </span>
-                    <span className="text-xs text-slate-500">
-                      PurposeFramework workspace
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Tiles */}
-            <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-              <button
-                type="button"
-                className="group text-left border border-slate-200 bg-white rounded-2xl p-6 hover:border-primary-300 hover:shadow-lg hover:shadow-primary-100 transition-all"
-                onClick={() => router.push("/products")}
-              >
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="h-9 w-9 rounded-xl bg-primary-50 border border-primary-100 flex items-center justify-center">
-                    <div className="h-2.5 w-2.5 rounded-full bg-gradient-to-r from-accent-300 to-primary-500"></div>
-                  </div>
-                  <h2 className="font-semibold text-slate-900 text-lg">Create</h2>
-                </div>
-                <p className="text-sm text-slate-600 leading-relaxed">
-                  Build strategic fundraising documents for your organization.
-                </p>
-                <p className="text-sm font-semibold text-accent-500 mt-4 group-hover:text-primary-600 transition">
-                  View Crafters →
-                </p>
-              </button>
-
-              <button
-                type="button"
-                className="group text-left border border-slate-200 bg-white rounded-2xl p-6 hover:border-primary-300 hover:shadow-lg hover:shadow-primary-100 transition-all"
-                onClick={() => router.push("/documents")}
-              >
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="h-9 w-9 rounded-xl bg-primary-50 border border-primary-100 flex items-center justify-center">
-                    <div className="h-2.5 w-2.5 rounded-full bg-gradient-to-r from-primary-500 to-accent-400"></div>
-                  </div>
-                  <h2 className="font-semibold text-slate-900 text-lg">Documents</h2>
-                </div>
-                <p className="text-sm text-slate-600 leading-relaxed">
-                  Upload, organize, and search files securely at the org level.
-                </p>
-                <p className="text-sm font-semibold text-accent-500 mt-4 group-hover:text-primary-600 transition">
-                  Open Documents →
-                </p>
-              </button>
-
-              <button
-                type="button"
-                className="group text-left border border-slate-200 bg-white rounded-2xl p-6 hover:border-primary-300 hover:shadow-lg hover:shadow-primary-100 transition-all"
-                onClick={openInviteModal}
-              >
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="h-9 w-9 rounded-xl bg-primary-50 border border-primary-100 flex items-center justify-center">
-                    <div className="h-2.5 w-2.5 rounded-full bg-gradient-to-r from-accent-300 to-primary-500"></div>
-                  </div>
-                  <h2 className="font-semibold text-slate-900 text-lg">Invites</h2>
-                </div>
-                <p className="text-sm text-slate-600 leading-relaxed">
-                  Invite teammates to collaborate securely in your organization.
-                </p>
-                <p className="text-sm font-semibold text-accent-500 mt-4 group-hover:text-primary-600 transition">
-                  Invite members →
-                </p>
-              </button>
-
-              <button
-                type="button"
-                className="group text-left border border-slate-200 bg-white rounded-2xl p-6 hover:border-primary-300 hover:shadow-lg hover:shadow-primary-100 transition-all"
-                onClick={() => router.push("/activity")}
-              >
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="h-9 w-9 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-center">
-                    <div className="h-2.5 w-2.5 rounded-full bg-gradient-to-r from-success-300 to-success-400"></div>
-                  </div>
-                  <h2 className="font-semibold text-slate-900 text-lg">Activity</h2>
-                </div>
-                <p className="text-sm text-slate-600 leading-relaxed">
-                  Track recent edits and updates across your team.
-                </p>
-                <p className="text-sm text-slate-500 mt-4 italic">{activityNote}</p>
-                <p className="text-sm font-semibold text-accent-500 mt-4 group-hover:text-primary-600 transition">
-                  View Activity →
-                </p>
-              </button>
-            </div>
+          <div className="mt-6 grid gap-3 sm:grid-cols-3">
+            <article className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Documents</p>
+              <p className="mt-2 text-2xl font-semibold text-slate-900">
+                {typeof documentsCount === "number" ? documentsCount : "--"}
+              </p>
+            </article>
+            <article className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Last updated</p>
+              <p className="mt-2 text-lg font-semibold text-slate-900">{formatDateTime(lastUpdatedAt)}</p>
+            </article>
+            <article className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Team members</p>
+              <p className="mt-2 text-2xl font-semibold text-slate-900">
+                {typeof teamMembersCount === "number" ? teamMembersCount : "--"}
+              </p>
+            </article>
           </div>
         </section>
+
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-lg font-semibold text-slate-900">Quick Actions</h2>
+            <p className="text-xs text-slate-500">Fast paths into your core org workflows</p>
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {QUICK_ACTIONS.map((action) => (
+              <button
+                key={action.label}
+                type="button"
+                onClick={() => router.push(action.href)}
+                className={`rounded-xl border p-4 text-left shadow-sm transition hover:shadow-md ${action.style}`}
+              >
+                <p className="text-sm font-semibold">{action.label}</p>
+                <p className="mt-1 text-xs text-slate-600">{action.description}</p>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <div className="grid items-start gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-lg font-semibold text-slate-900">Recent Activity</h2>
+              <button
+                type="button"
+                onClick={() => router.push("/activity")}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+              >
+                Open full activity
+              </button>
+            </div>
+
+            {activity.length > 0 ? (
+              <ul className="mt-4 space-y-3">
+                {activity.map((item) => (
+                  <li key={item.id} className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{item.label}</p>
+                        <p className="truncate text-sm font-semibold text-slate-900">{item.title}</p>
+                      </div>
+                      <p className="text-xs text-slate-500">{formatDateTime(item.when)}</p>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="mt-4 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center">
+                <p className="text-sm text-slate-600">
+                  Recent activity will appear here as your team uploads documents, saves answers, and
+                  creates grants.
+                </p>
+              </div>
+            )}
+          </section>
+
+          <KnowledgeAssetPanel className="xl:sticky xl:top-6" />
+        </div>
       </div>
 
-      {/* Invite Modal */}
       {inviteOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={closeInviteModal} />
 
           <div className="relative w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-8 shadow-2xl">
-            <div className="flex items-start justify-between gap-4 mb-6">
+            <div className="mb-6 flex items-start justify-between gap-4">
               <div>
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="h-3 w-3 rounded-full bg-gradient-to-r from-accent-300 to-primary-500"></div>
+                <div className="mb-2 flex items-center gap-2">
+                  <div className="h-3 w-3 rounded-full bg-gradient-to-r from-accent-300 to-primary-500" />
                   <h2 className="text-xl font-semibold text-slate-900">Invite team members</h2>
                 </div>
                 <p className="text-sm text-slate-600">
@@ -576,7 +406,7 @@ export default function DashboardPage() {
               </div>
 
               <button
-                className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50 transition"
+                className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-800 transition hover:bg-slate-50"
                 onClick={closeInviteModal}
                 type="button"
               >
@@ -590,35 +420,35 @@ export default function DashboardPage() {
               {inviteEmails.map((email, idx) => (
                 <div key={idx} className="flex gap-2">
                   <input
-                    className="flex-1 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition"
+                    className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm transition focus:border-transparent focus:outline-none focus:ring-2 focus:ring-primary-500"
                     value={email}
                     onChange={(e) => updateEmail(idx, e.target.value)}
                     placeholder="name@example.org"
                     type="email"
                   />
-                  {inviteEmails.length > 1 && (
+                  {inviteEmails.length > 1 ? (
                     <button
                       type="button"
-                      className="border border-slate-200 rounded-xl px-3 text-slate-800 hover:bg-slate-50 transition"
+                      className="rounded-xl border border-slate-200 px-3 text-slate-800 transition hover:bg-slate-50"
                       onClick={() => removeEmail(idx)}
                       aria-label="Remove email"
                     >
-                      ✕
+                      x
                     </button>
-                  )}
+                  ) : null}
                 </div>
               ))}
 
-              {inviteMsg && (
+              {inviteMsg ? (
                 <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
                   {inviteMsg}
                 </div>
-              )}
+              ) : null}
 
               <div className="flex items-center justify-between gap-3 pt-2">
                 <button
                   type="button"
-                  className="border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 hover:bg-slate-50 transition"
+                  className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-800 transition hover:bg-slate-50"
                   onClick={addAnotherEmail}
                   disabled={inviteSending}
                 >
@@ -627,7 +457,7 @@ export default function DashboardPage() {
 
                 <button
                   type="button"
-                  className="bg-gradient-to-r from-primary-600 to-accent-500 hover:from-primary-700 hover:to-primary-600 text-white font-semibold rounded-xl px-6 py-2.5 text-sm transition shadow-lg shadow-primary-500/25 hover:shadow-primary-500/40 disabled:opacity-60"
+                  className="rounded-xl bg-gradient-to-r from-primary-600 to-accent-500 px-6 py-2.5 text-sm font-semibold text-white shadow-lg shadow-primary-500/25 transition hover:from-primary-700 hover:to-primary-600 hover:shadow-primary-500/40 disabled:opacity-60"
                   onClick={handleSendInvites}
                   disabled={!canSendInvites}
                 >
@@ -635,7 +465,7 @@ export default function DashboardPage() {
                 </button>
               </div>
 
-              <p className="text-xs text-slate-500 pt-2">
+              <p className="pt-2 text-xs text-slate-500">
                 Invites are scoped to your organization and require a one-time access code during signup.
               </p>
             </div>
@@ -645,5 +475,3 @@ export default function DashboardPage() {
     </main>
   );
 }
-
-

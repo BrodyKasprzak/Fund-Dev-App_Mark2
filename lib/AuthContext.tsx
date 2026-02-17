@@ -8,6 +8,13 @@ const ACTIVE_ORG_KEY = "pf_active_org";
 
 type AuthedFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
+type OrgMembership = {
+  orgId: string;
+  role: string;
+  status: string;
+  name: string | null;
+};
+
 type Me = {
   uid: string;
   email: string | null;
@@ -30,6 +37,8 @@ type AuthContextValue = {
   // “me” (discovered without requiring x-org-id)
   me: Me | null;
   meLoading: boolean;
+  orgs: OrgMembership[];
+  orgsLoading: boolean;
   refreshMe: () => Promise<Me | null>;
 
   // Helper for org-scoped API calls
@@ -46,6 +55,8 @@ const AuthContext = createContext<AuthContextValue>({
 
   me: null,
   meLoading: false,
+  orgs: [],
+  orgsLoading: false,
   refreshMe: async () => null,
 
   authedFetch: async () => {
@@ -59,6 +70,10 @@ function cleanOrgId(v: unknown): string | null {
   return s.length ? s : null;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -69,6 +84,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // “me” discovery
   const [me, setMe] = useState<Me | null>(null);
   const [meLoading, setMeLoading] = useState(false);
+  const [orgs, setOrgs] = useState<OrgMembership[]>([]);
 
   // Load active org from localStorage (client-only)
   useEffect(() => {
@@ -99,12 +115,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Auth state listener
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
+      if (u) setMeLoading(true);
       setUser(u);
       setLoading(false);
 
       if (!u) {
         clearActiveOrgId();
         setMe(null);
+        setOrgs([]);
+        setMeLoading(false);
       }
     });
     return () => unsub();
@@ -124,6 +143,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (!res.ok || !json?.ok) {
         setMe(null);
+        setOrgs([]);
+        if (activeOrgId !== null) setActiveOrgId(null);
         return null;
       }
 
@@ -139,16 +160,39 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           : null,
       };
 
-      setMe(next);
+      const nextOrgs: OrgMembership[] = Array.isArray(json.orgs)
+        ? json.orgs
+            .map((item: unknown) => {
+              const rec = asRecord(item);
+              const orgId = cleanOrgId(rec?.orgId);
+              if (!orgId) return null;
+              return {
+                orgId,
+                role: cleanOrgId(rec?.role) ?? "member",
+                status: cleanOrgId(rec?.status) ?? "active",
+                name: typeof rec?.name === "string" ? rec.name : null,
+              } as OrgMembership;
+            })
+            .filter((item: OrgMembership | null): item is OrgMembership => Boolean(item))
+        : [];
 
-      // ✅ AUTO-SET active org the first time we discover it
-      if (!activeOrgId && next.orgId) {
-        setActiveOrgId(next.orgId);
+      setMe(next);
+      setOrgs(nextOrgs);
+
+      // Org selection rule:
+      // - exactly 1 org -> auto-select
+      // - 0 orgs or >1 orgs -> require explicit state (null)
+      if (nextOrgs.length === 1) {
+        if (activeOrgId !== nextOrgs[0].orgId) setActiveOrgId(nextOrgs[0].orgId);
+      } else {
+        if (activeOrgId !== null) setActiveOrgId(null);
       }
 
       return next;
     } catch {
       setMe(null);
+      setOrgs([]);
+      if (activeOrgId !== null) setActiveOrgId(null);
       return null;
     } finally {
       setMeLoading(false);
@@ -173,7 +217,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       headers.set("Authorization", `Bearer ${idToken}`);
 
       // ✅ Attach org context: activeOrgId first, fallback to me.orgId
-      const orgIdToUse = activeOrgId || me?.orgId || null;
+      const orgIdToUse = activeOrgId || null;
       if (orgIdToUse) headers.set("x-org-id", orgIdToUse);
 
       if (init.body && !headers.has("Content-Type")) {
@@ -191,7 +235,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       return res;
     };
-  }, [user, activeOrgId, me?.orgId]);
+  }, [user, activeOrgId]);
 
   return (
     <AuthContext.Provider
@@ -203,6 +247,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         clearActiveOrgId,
         me,
         meLoading,
+        orgs,
+        orgsLoading: meLoading,
         refreshMe,
         authedFetch,
       }}

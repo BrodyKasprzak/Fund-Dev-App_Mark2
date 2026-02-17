@@ -1,9 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import { createUserWithEmailAndPassword } from "firebase/auth";
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from "firebase/auth";
 import { auth } from "@/lib/firebaseClient";
 import { useRouter } from "next/navigation";
+
+function getAuthErrorCode(err: unknown) {
+  if (typeof err === "object" && err !== null && "code" in err) {
+    return String((err as { code: unknown }).code);
+  }
+  return "";
+}
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -20,8 +27,32 @@ export default function RegisterPage() {
     try {
       await createUserWithEmailAndPassword(auth, email, password);
       router.push("/onboarding/org");
-    } catch (err: any) {
-      setError(err?.message ?? "Registration failed");
+    } catch (err: unknown) {
+      const code = getAuthErrorCode(err);
+
+      if (code === "auth/email-already-in-use") {
+        try {
+          await signInWithEmailAndPassword(auth, email, password);
+          router.push("/org-picker?force=1");
+          return;
+        } catch (signInErr: unknown) {
+          const signInCode = getAuthErrorCode(signInErr);
+          if (
+            signInCode === "auth/invalid-credential" ||
+            signInCode === "auth/wrong-password"
+          ) {
+            setError("Account already exists. Enter the existing password to continue.");
+          } else if (signInErr instanceof Error) {
+            setError(signInErr.message);
+          } else {
+            setError("Account exists, but sign-in failed.");
+          }
+          return;
+        }
+      }
+
+      if (err instanceof Error) setError(err.message);
+      else setError("Registration failed");
     } finally {
       setLoading(false);
     }

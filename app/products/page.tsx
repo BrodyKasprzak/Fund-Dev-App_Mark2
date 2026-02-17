@@ -229,7 +229,7 @@ export default function ProductsPage() {
         const stored = window.localStorage.getItem("pf_active_org");
         const candidate = typeof stored === "string" ? stored.trim() : "";
         if (!candidate) {
-          router.push(`/onboarding/org?next=${encodeURIComponent("/products")}`);
+          router.push(`/org-picker?next=${encodeURIComponent("/products")}`);
           return;
         }
 
@@ -238,7 +238,7 @@ export default function ProductsPage() {
         const memberSnap = await getDoc(memberRef);
         if (!memberSnap.exists()) {
           window.localStorage.removeItem("pf_active_org");
-          router.push(`/onboarding/org?next=${encodeURIComponent("/products")}`);
+          router.push(`/org-picker?next=${encodeURIComponent("/products")}`);
           return;
         }
 
@@ -255,7 +255,7 @@ export default function ProductsPage() {
         }
       } catch {
         // if anything goes wrong, route to onboarding to re-select org
-        router.push(`/onboarding/org?next=${encodeURIComponent("/products")}`);
+        router.push(`/org-picker?next=${encodeURIComponent("/products")}`);
       } finally {
         setCheckingOrg(false);
       }
@@ -317,7 +317,7 @@ export default function ProductsPage() {
         return null;
       }
       if (!orgId) {
-        router.push(`/onboarding/org?next=${encodeURIComponent("/products")}`);
+        router.push(`/org-picker?next=${encodeURIComponent("/products")}`);
         return null;
       }
 
@@ -426,17 +426,6 @@ export default function ProductsPage() {
                   }}
                 >
                   Return home
-                </button>
-
-                <button
-                  type="button"
-                  className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-left text-sm text-slate-800 hover:bg-slate-100"
-                  onClick={() => {
-                    setProfileOpen(false);
-                    router.push(`/onboarding/org?next=${encodeURIComponent("/products")}`);
-                  }}
-                >
-                  Switch organization
                 </button>
 
                 <button
