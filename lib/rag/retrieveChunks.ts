@@ -14,6 +14,13 @@ type MatchChunkRow = {
   similarity: number;
 };
 
+type ChunkMetadataRow = {
+  doc_id: string;
+  chunk_id: string;
+  version: number;
+  metadata: unknown;
+};
+
 type SupabaseRpcError = {
   message: string;
   code?: string | null;
@@ -30,6 +37,65 @@ function assertNonEmptyString(value: string, fieldName: string) {
   if (!value.trim()) {
     throw new Error(`Invalid ${fieldName}`);
   }
+}
+
+function metadataKey(docId: string, chunkId: string, version: number) {
+  return `${docId}:${chunkId}:${version}`;
+}
+
+function parseHeadingPath(raw: unknown): string | null {
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    return trimmed ? trimmed : null;
+  }
+  if (Array.isArray(raw)) {
+    const parts = raw
+      .map((item) => (typeof item === "string" ? item.trim() : ""))
+      .filter(Boolean);
+    if (parts.length > 0) return parts.join(" > ");
+  }
+  return null;
+}
+
+function headingPathFromMetadata(metadata: unknown): string | null {
+  if (!metadata || typeof metadata !== "object") return null;
+  const record = metadata as {
+    headingPath?: unknown;
+    headings?: unknown;
+    heading?: unknown;
+  };
+  return (
+    parseHeadingPath(record.headingPath) ||
+    parseHeadingPath(record.headings) ||
+    parseHeadingPath(record.heading)
+  );
+}
+
+async function loadChunkMetadata(orgId: string, rows: MatchChunkRow[]) {
+  if (rows.length === 0) return new Map<string, string | null>();
+
+  const uniqueDocIds = [...new Set(rows.map((row) => String(row.doc_id)))];
+  const uniqueChunkIds = [...new Set(rows.map((row) => String(row.chunk_id)))];
+
+  const { data, error } = await supabaseAdmin
+    .from("document_chunks")
+    .select("doc_id, chunk_id, version, metadata")
+    .eq("org_id", orgId)
+    .in("doc_id", uniqueDocIds)
+    .in("chunk_id", uniqueChunkIds);
+
+  if (error) {
+    throw new Error(`Chunk metadata lookup failed: ${error.message}`);
+  }
+
+  const rowsWithMetadata = Array.isArray(data) ? (data as ChunkMetadataRow[]) : [];
+  const metadataByKey = new Map<string, string | null>();
+  for (const row of rowsWithMetadata) {
+    const key = metadataKey(String(row.doc_id), String(row.chunk_id), Number(row.version) || 1);
+    metadataByKey.set(key, headingPathFromMetadata(row.metadata));
+  }
+
+  return metadataByKey;
 }
 
 async function getOrgIndexedChunkCount(orgId: string) {
@@ -100,6 +166,8 @@ export async function retrieveChunks(
     }
   }
 
+  const headingPathByChunkKey = await loadChunkMetadata(orgId, rows);
+
   return rows
     .filter((row) => typeof row?.content === "string" && row.content.trim().length > 0)
     .map((row) => ({
@@ -115,5 +183,9 @@ export async function retrieveChunks(
         typeof row.similarity === "number" && Number.isFinite(row.similarity)
           ? row.similarity
           : 0,
+      headingPath:
+        headingPathByChunkKey.get(
+          metadataKey(String(row.doc_id), String(row.chunk_id), Number(row.version) || 1),
+        ) ?? null,
     }));
 }

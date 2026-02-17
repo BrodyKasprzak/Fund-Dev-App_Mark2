@@ -5,18 +5,25 @@ export type RagChunk = {
   version: number;
   content: string;
   similarity: number;
+  headingPath: string | null;
 };
 
 export type RagCitation = {
   docId: string;
-  chunkId: string;
+  docTitle: string;
+  headingPath: string | null;
+  chunkId: string | null;
   snippet: string;
+  moreContext: string | null;
+  deepLink: string;
   similarity: number;
 };
 
 export type RagAnswerResponse = {
   answer: string;
   citations: RagCitation[];
+  supportLabel: string;
+  contextSummary: string | null;
 };
 
 export type RagRetrieveResponse = {

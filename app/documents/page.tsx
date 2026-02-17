@@ -1,14 +1,15 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ref, uploadBytesResumable } from "firebase/storage";
 import { useAuth } from "@/lib/AuthContext";
 import { storage } from "@/lib/firebaseClient";
-import type { RagAnswerResponse, RagCitation } from "@/lib/rag/types";
+import type { RagCitation } from "@/lib/rag/types";
 
 type DocStatus = "ready" | "processing" | "failed";
 type TextStatus = "pending" | "processing" | "ready" | "failed";
+type ViewMode = "document" | "chat";
 
 type DocumentListItem = {
   id: string;
@@ -46,6 +47,25 @@ type SearchResultItem = DocumentListItem & {
     inText?: boolean;
     snippet?: string | null;
   };
+};
+
+type ChatSummary = {
+  id: string;
+  title: string;
+  createdAt: string | null;
+  updatedAt: string | null;
+  lastMessageAt: string | null;
+  summary: string | null;
+};
+
+type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string | null;
+  citations: RagCitation[];
+  supportLabel: string | null;
+  contextSummary: string | null;
 };
 
 type FolderNode = {
@@ -127,8 +147,10 @@ function escapeRegExp(input: string) {
   return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-const RAG_TOP_K = 8;
 const RAG_SNIPPET_MAX_LENGTH = 200;
+const CHAT_MESSAGE_MAX_LENGTH = 4_000;
+const DOC_WINDOW_LIMIT = 50_000;
+const CHUNK_VIEW_OFFSET_PADDING = 8_000;
 
 function normalizeRagCitations(value: unknown): RagCitation[] {
   if (!Array.isArray(value)) return [];
@@ -138,18 +160,26 @@ function normalizeRagCitations(value: unknown): RagCitation[] {
       if (!item || typeof item !== "object") return null;
       const citation = item as {
         docId?: unknown;
+        docTitle?: unknown;
+        headingPath?: unknown;
         chunkId?: unknown;
         snippet?: unknown;
+        moreContext?: unknown;
+        deepLink?: unknown;
         similarity?: unknown;
       };
-      if (typeof citation.docId !== "string" || typeof citation.chunkId !== "string") {
+      if (typeof citation.docId !== "string" || typeof citation.docTitle !== "string") {
         return null;
       }
 
       return {
         docId: citation.docId,
-        chunkId: citation.chunkId,
+        docTitle: citation.docTitle,
+        headingPath: typeof citation.headingPath === "string" ? citation.headingPath : null,
+        chunkId: typeof citation.chunkId === "string" ? citation.chunkId : null,
         snippet: typeof citation.snippet === "string" ? citation.snippet : "",
+        moreContext: typeof citation.moreContext === "string" ? citation.moreContext : null,
+        deepLink: typeof citation.deepLink === "string" ? citation.deepLink : "/documents",
         similarity:
           typeof citation.similarity === "number" && Number.isFinite(citation.similarity)
             ? citation.similarity
@@ -163,6 +193,78 @@ function citationSnippet(snippet: string) {
   const trimmed = snippet.trim();
   if (trimmed.length <= RAG_SNIPPET_MAX_LENGTH) return trimmed;
   return `${trimmed.slice(0, RAG_SNIPPET_MAX_LENGTH)}...`;
+}
+
+function formatDateTime(iso: string | null) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function normalizeChatSummaries(value: unknown): ChatSummary[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const chat = item as {
+        id?: unknown;
+        title?: unknown;
+        createdAt?: unknown;
+        updatedAt?: unknown;
+        lastMessageAt?: unknown;
+        summary?: unknown;
+      };
+      if (typeof chat.id !== "string") return null;
+      return {
+        id: chat.id,
+        title: typeof chat.title === "string" ? chat.title : "New chat",
+        createdAt: typeof chat.createdAt === "string" ? chat.createdAt : null,
+        updatedAt: typeof chat.updatedAt === "string" ? chat.updatedAt : null,
+        lastMessageAt: typeof chat.lastMessageAt === "string" ? chat.lastMessageAt : null,
+        summary: typeof chat.summary === "string" ? chat.summary : null,
+      } satisfies ChatSummary;
+    })
+    .filter((chat): chat is ChatSummary => Boolean(chat));
+}
+
+function normalizeChatMessage(value: unknown): ChatMessage | null {
+  if (!value || typeof value !== "object") return null;
+  const message = value as {
+    id?: unknown;
+    role?: unknown;
+    content?: unknown;
+    createdAt?: unknown;
+    citations?: unknown;
+    supportLabel?: unknown;
+    contextSummary?: unknown;
+  };
+  if (typeof message.id !== "string") return null;
+  const role = message.role === "assistant" ? "assistant" : "user";
+  return {
+    id: message.id,
+    role,
+    content: typeof message.content === "string" ? message.content : "",
+    createdAt: typeof message.createdAt === "string" ? message.createdAt : null,
+    citations: role === "assistant" ? normalizeRagCitations(message.citations) : [],
+    supportLabel: role === "assistant" && typeof message.supportLabel === "string" ? message.supportLabel : null,
+    contextSummary:
+      role === "assistant" && typeof message.contextSummary === "string"
+        ? message.contextSummary
+        : null,
+  };
+}
+
+function supportChipClasses(label: string | null) {
+  if (!label) return "bg-slate-100 text-slate-700 border-slate-200";
+  if (label.startsWith("Supported by")) return "bg-emerald-50 text-emerald-700 border-emerald-200";
+  if (label === "Partial support") return "bg-amber-50 text-amber-700 border-amber-200";
+  return "bg-rose-50 text-rose-700 border-rose-200";
 }
 
 function ListSkeleton() {
@@ -254,8 +356,10 @@ function FolderTreeItem(props: FolderTreeItemProps) {
 
 export default function DocumentsPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { user, loading, activeOrgId, authedFetch } = useAuth();
 
+  const [viewMode, setViewMode] = useState<ViewMode>("document");
   const [docs, setDocs] = useState<DocumentListItem[]>([]);
   const [docsLoading, setDocsLoading] = useState(true);
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
@@ -270,6 +374,8 @@ export default function DocumentsPage() {
     collections: true,
   });
   const [detailAnchorQuery, setDetailAnchorQuery] = useState<string | null>(null);
+  const [detailOffset, setDetailOffset] = useState<number | null>(null);
+  const [viewerHighlightQuery, setViewerHighlightQuery] = useState<string | null>(null);
 
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadTitle, setUploadTitle] = useState("");
@@ -281,16 +387,23 @@ export default function DocumentsPage() {
   const [searchResults, setSearchResults] = useState<SearchResultItem[]>([]);
   const [searchSnippet, setSearchSnippet] = useState<string | null>(null);
 
-  const [ragQuery, setRagQuery] = useState("");
-  const [ragLoading, setRagLoading] = useState(false);
-  const [ragError, setRagError] = useState<string | null>(null);
-  const [ragAnswer, setRagAnswer] = useState<string | null>(null);
-  const [ragCitations, setRagCitations] = useState<RagCitation[]>([]);
+  const [chats, setChats] = useState<ChatSummary[]>([]);
+  const [chatsLoading, setChatsLoading] = useState(false);
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatSending, setChatSending] = useState(false);
+  const [chatInput, setChatInput] = useState("");
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [activeAssistantMessageId, setActiveAssistantMessageId] = useState<string | null>(null);
+  const [expandedCitationKeys, setExpandedCitationKeys] = useState<Record<string, boolean>>({});
 
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const firstMatchRef = useRef<HTMLElement | null>(null);
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  const handledDeepLinkRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!loading && !user) router.push("/login");
@@ -333,7 +446,7 @@ export default function DocumentsPage() {
     async (args: { docId: string; offset?: number; anchorQuery?: string | null }) => {
       const { docId, offset, anchorQuery } = args;
       const params = new URLSearchParams();
-      params.set("limit", "50000");
+      params.set("limit", String(DOC_WINDOW_LIMIT));
       if (typeof offset === "number" && Number.isFinite(offset) && offset >= 0) {
         params.set("offset", String(Math.floor(offset)));
       }
@@ -364,6 +477,7 @@ export default function DocumentsPage() {
       try {
         const doc = await fetchDocumentDetail({
           docId: selectedDocId,
+          offset: detailOffset ?? undefined,
           anchorQuery: detailAnchorQuery,
         });
         if (!cancelled) setSelectedDoc(doc);
@@ -383,7 +497,7 @@ export default function DocumentsPage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedDocId, user, fetchDocumentDetail, detailAnchorQuery]);
+  }, [selectedDocId, user, fetchDocumentDetail, detailAnchorQuery, detailOffset]);
 
   async function loadMoreExtractedText() {
     if (!selectedDocId || !selectedDoc?.textWindow?.hasMore || loadingMoreText) return;
@@ -438,65 +552,232 @@ export default function DocumentsPage() {
     }
   }
 
-  const askRagQuestion = useCallback(
-    async (query: string): Promise<RagAnswerResponse> => {
-      if (!user) throw new Error("Not authenticated");
-      if (!activeOrgId?.trim()) throw new Error("Missing active org context");
-
-      const idToken = await user.getIdToken();
-      const response = await fetch("/api/rag/answer", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${idToken}`,
-          "x-org-id": activeOrgId.trim(),
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          query,
-          topK: RAG_TOP_K,
-        }),
+  const loadChats = useCallback(async () => {
+    if (!user) return;
+    setChatsLoading(true);
+    setChatError(null);
+    try {
+      const res = await authedFetch("/api/chats?limit=25");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Failed to load chats");
+      const nextChats = normalizeChatSummaries(data?.chats);
+      setChats(nextChats);
+      setActiveChatId((current) => {
+        if (current && nextChats.some((chat) => chat.id === current)) return current;
+        return nextChats[0]?.id ?? null;
       });
+    } catch (err: unknown) {
+      if (err instanceof Error) setChatError(err.message);
+      else setChatError("Failed to load chats");
+    } finally {
+      setChatsLoading(false);
+    }
+  }, [authedFetch, user]);
 
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        const message =
-          typeof data?.error === "string" ? data.error : "Failed to get assistant answer";
-        throw new Error(message);
+  useEffect(() => {
+    if (!loading && user) void loadChats();
+  }, [loading, user, loadChats]);
+
+  useEffect(() => {
+    if (!activeChatId) {
+      setChatMessages([]);
+      setActiveAssistantMessageId(null);
+      return;
+    }
+    let cancelled = false;
+    const loadChatDetail = async () => {
+      setChatLoading(true);
+      setChatError(null);
+      try {
+        const res = await authedFetch(`/api/chats/${activeChatId}?limit=60`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.error || "Failed to load chat");
+        const messages = Array.isArray(data?.messages)
+          ? data.messages
+              .map((item: unknown) => normalizeChatMessage(item))
+              .filter((item: ChatMessage | null): item is ChatMessage => Boolean(item))
+          : [];
+        if (cancelled) return;
+        setChatMessages(messages);
+        const latestAssistant = [...messages].reverse().find((item) => item.role === "assistant");
+        setActiveAssistantMessageId(latestAssistant?.id ?? null);
+        setExpandedCitationKeys({});
+      } catch (err: unknown) {
+        if (!cancelled) {
+          setChatMessages([]);
+          setActiveAssistantMessageId(null);
+          if (err instanceof Error) setChatError(err.message);
+          else setChatError("Failed to load chat");
+        }
+      } finally {
+        if (!cancelled) setChatLoading(false);
       }
+    };
+    void loadChatDetail();
 
-      return {
-        answer:
-          typeof data?.answer === "string" && data.answer.trim().length > 0
-            ? data.answer
-            : "I don't know based on the provided context.",
-        citations: normalizeRagCitations(data?.citations),
-      };
+    return () => {
+      cancelled = true;
+    };
+  }, [activeChatId, authedFetch]);
+
+  const createChat = useCallback(
+    async (title?: string) => {
+      const res = await authedFetch("/api/chats", {
+        method: "POST",
+        body: JSON.stringify({ title: title?.trim() || "New chat" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Failed to create chat");
+      const next = normalizeChatSummaries([data?.chat])[0];
+      if (!next) throw new Error("Invalid chat response");
+      return next;
     },
-    [user, activeOrgId],
+    [authedFetch],
   );
 
-  async function handleAskRag() {
-    const query = ragQuery.trim();
-    if (!query || ragLoading) return;
-
-    setRagLoading(true);
-    setRagError(null);
-
+  async function handleNewChat() {
+    setChatError(null);
     try {
-      const response = await askRagQuestion(query);
-      setRagAnswer(response.answer);
-      setRagCitations(response.citations);
+      const nextChat = await createChat("New chat");
+      setChats((current) => [nextChat, ...current.filter((chat) => chat.id !== nextChat.id)]);
+      setActiveChatId(nextChat.id);
+      setChatMessages([]);
+      setActiveAssistantMessageId(null);
+      setExpandedCitationKeys({});
+      setViewMode("chat");
     } catch (err: unknown) {
-      setRagAnswer(null);
-      setRagCitations([]);
-      if (err instanceof Error) setRagError(err.message);
-      else setRagError("Failed to get assistant answer");
-    } finally {
-      setRagLoading(false);
+      if (err instanceof Error) setChatError(err.message);
+      else setChatError("Failed to create chat");
     }
   }
 
+  async function ensureActiveChatId(seedTitle: string) {
+    if (activeChatId) return activeChatId;
+    const nextChat = await createChat(seedTitle);
+    setChats((current) => [nextChat, ...current.filter((chat) => chat.id !== nextChat.id)]);
+    setActiveChatId(nextChat.id);
+    return nextChat.id;
+  }
+
+  async function handleResetContext() {
+    if (!activeChatId) return;
+    setChatError(null);
+    try {
+      const res = await authedFetch(`/api/chats/${activeChatId}/reset`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Failed to reset context");
+      const nextChat = normalizeChatSummaries([data?.chat])[0];
+      if (!nextChat) throw new Error("Invalid reset response");
+      setChats((current) => [nextChat, ...current.filter((chat) => chat.id !== nextChat.id)]);
+      setActiveChatId(nextChat.id);
+      setChatMessages([]);
+      setActiveAssistantMessageId(null);
+      setExpandedCitationKeys({});
+      setViewMode("chat");
+    } catch (err: unknown) {
+      if (err instanceof Error) setChatError(err.message);
+      else setChatError("Failed to reset context");
+    }
+  }
+
+  async function handleSendChatMessage() {
+    const content = chatInput.trim();
+    if (!content || chatSending) return;
+    if (content.length > CHAT_MESSAGE_MAX_LENGTH) {
+      setChatError(`Message too long (${CHAT_MESSAGE_MAX_LENGTH} char max).`);
+      return;
+    }
+
+    setChatSending(true);
+    setChatError(null);
+    setViewMode("chat");
+
+    try {
+      const chatId = await ensureActiveChatId(content);
+      const res = await authedFetch(`/api/chats/${chatId}/messages`, {
+        method: "POST",
+        body: JSON.stringify({ content }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Failed to send message");
+
+      const userMessage = normalizeChatMessage(data?.userMessage);
+      const assistantMessage = normalizeChatMessage(data?.assistantMessage);
+      const nextMessages = [userMessage, assistantMessage].filter(
+        (item): item is ChatMessage => Boolean(item),
+      );
+
+      setChatMessages((current) => [...current, ...nextMessages]);
+      if (assistantMessage?.role === "assistant") {
+        setActiveAssistantMessageId(assistantMessage.id);
+      }
+      setExpandedCitationKeys({});
+      setChatInput("");
+      await loadChats();
+    } catch (err: unknown) {
+      if (err instanceof Error) setChatError(err.message);
+      else setChatError("Failed to send message");
+    } finally {
+      setChatSending(false);
+    }
+  }
+
+  const resolveHighlightToAnchor = useCallback(
+    async (docId: string, chunkId: string) => {
+      try {
+        const res = await authedFetch(
+          `/api/documents/${encodeURIComponent(docId)}/chunk-context?chunkId=${encodeURIComponent(chunkId)}`,
+        );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) return;
+        const anchor = typeof data?.anchorQuery === "string" ? data.anchorQuery.trim() : "";
+        const highlightText =
+          typeof data?.highlightText === "string" ? data.highlightText.trim() : "";
+        const chunkStartOffset =
+          typeof data?.startOffset === "number" && Number.isFinite(data.startOffset)
+            ? Math.max(0, Math.floor(data.startOffset))
+            : null;
+
+        setDetailAnchorQuery(anchor || null);
+        setViewerHighlightQuery(highlightText || anchor || null);
+        setDetailOffset(
+          chunkStartOffset !== null
+            ? Math.max(0, chunkStartOffset - CHUNK_VIEW_OFFSET_PADDING)
+            : null,
+        );
+      } catch {
+        setDetailAnchorQuery(null);
+        setViewerHighlightQuery(null);
+        setDetailOffset(null);
+      }
+    },
+    [authedFetch],
+  );
+
+  const deepLinkDocId = searchParams.get("docId");
+  const deepLinkHighlight = searchParams.get("highlight");
+  useEffect(() => {
+    if (!deepLinkDocId) {
+      handledDeepLinkRef.current = null;
+      return;
+    }
+    const key = `${deepLinkDocId}:${deepLinkHighlight ?? ""}`;
+    if (handledDeepLinkRef.current === key) return;
+    handledDeepLinkRef.current = key;
+    setSelectedDocId(deepLinkDocId);
+    setViewMode("document");
+    setExpandedCitationKeys({});
+    if (deepLinkHighlight) {
+      void resolveHighlightToAnchor(deepLinkDocId, deepLinkHighlight);
+      return;
+    }
+    setDetailOffset(null);
+    setDetailAnchorQuery(null);
+    setViewerHighlightQuery(null);
+  }, [deepLinkDocId, deepLinkHighlight, resolveHighlightToAnchor]);
+
   const normalizedSearchQuery = searchQuery.trim();
+  const effectiveHighlightQuery = (normalizedSearchQuery || viewerHighlightQuery || "").trim();
   useEffect(() => {
     if (!user) return;
     if (!normalizedSearchQuery) {
@@ -551,6 +832,23 @@ export default function DocumentsPage() {
     () => docs.find((d) => d.id === selectedDocId) || null,
     [docs, selectedDocId],
   );
+
+  const activeChat = useMemo(
+    () => chats.find((chat) => chat.id === activeChatId) || null,
+    [chats, activeChatId],
+  );
+
+  const activeAssistantMessage = useMemo(() => {
+    if (chatMessages.length === 0) return null;
+    if (activeAssistantMessageId) {
+      const selected = chatMessages.find((msg) => msg.id === activeAssistantMessageId);
+      if (selected?.role === "assistant") return selected;
+    }
+    return [...chatMessages].reverse().find((msg) => msg.role === "assistant") || null;
+  }, [chatMessages, activeAssistantMessageId]);
+
+  const activeCitations = activeAssistantMessage?.citations ?? [];
+  const activeSupportLabel = activeAssistantMessage?.supportLabel ?? null;
 
   const extractedText = selectedDoc?.extractedText?.trim() || "";
   const paragraphs = extractedText ? splitParagraphs(extractedText) : [];
@@ -637,15 +935,46 @@ export default function DocumentsPage() {
     }
   }
 
+  function openCitationInDocument(citation: RagCitation) {
+    setViewMode("document");
+    setSelectedDocId(citation.docId);
+    setSearchQuery("");
+    setSearchResults([]);
+    setSearchSnippet(citation.snippet || null);
+    if (citation.chunkId) {
+      void resolveHighlightToAnchor(citation.docId, citation.chunkId);
+    }
+    if (citation.deepLink.trim()) {
+      router.replace(citation.deepLink);
+      return;
+    }
+    setDetailOffset(null);
+    if (citation.snippet.trim()) {
+      setDetailAnchorQuery(citation.snippet.slice(0, 120));
+      setViewerHighlightQuery(citation.snippet.slice(0, 200));
+      return;
+    }
+    setDetailAnchorQuery(null);
+    setViewerHighlightQuery(null);
+  }
+
   useEffect(() => {
-    if (!docLoading && selectedDocId && normalizedSearchQuery && firstMatchRef.current) {
+    if (!docLoading && selectedDocId && effectiveHighlightQuery && firstMatchRef.current) {
       firstMatchRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
     }
-  }, [docLoading, selectedDocId, extractedText, normalizedSearchQuery]);
+  }, [docLoading, selectedDocId, extractedText, effectiveHighlightQuery]);
+
+  useEffect(() => {
+    if (!chatScrollRef.current || viewMode !== "chat") return;
+    chatScrollRef.current.scrollTo({
+      top: chatScrollRef.current.scrollHeight,
+      behavior: "smooth",
+    });
+  }, [chatMessages, chatSending, viewMode]);
 
   if (loading || docsLoading) {
     return (
-      <main className="min-h-screen bg-slate-50 p-4 sm:p-8">
+      <main className="min-h-screen bg-gradient-to-b from-sky-50 via-white to-rose-50 px-4 pb-6 pt-2 sm:px-6 sm:pb-8 sm:pt-3 [font-family:var(--font-geist-sans)]">
         <div className="mx-auto max-w-[1400px] space-y-4">
           <div className="h-28 animate-pulse rounded-2xl border border-slate-200 bg-white" />
           <div className="grid grid-cols-1 gap-4 md:grid-cols-[280px_minmax(0,1fr)_320px]">
@@ -672,9 +1001,9 @@ export default function DocumentsPage() {
 
   if (docs.length === 0) {
     return (
-      <main className="min-h-screen bg-slate-50 p-4 sm:p-8">
+      <main className="min-h-screen bg-gradient-to-b from-sky-50 via-white to-rose-50 px-4 pb-6 pt-2 sm:px-6 sm:pb-8 sm:pt-3 [font-family:var(--font-geist-sans)]">
         <div className="mx-auto max-w-4xl space-y-4">
-          <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <section className="rounded-2xl border border-sky-100 bg-white/95 p-5 shadow-sm">
             <h2 className="text-lg font-semibold text-slate-900">Upload New Document</h2>
             <p className="mt-1 text-sm text-slate-600">
               Start by uploading your first file. It will be indexed for workspace search.
@@ -705,7 +1034,7 @@ export default function DocumentsPage() {
                 type="button"
                 disabled={!uploadFile || !uploadTitle.trim() || uploading}
                 onClick={handleUpload}
-                className="cursor-pointer rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+                className="cursor-pointer rounded-lg bg-sky-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {uploading ? "Uploading..." : "Upload"}
               </button>
@@ -715,7 +1044,7 @@ export default function DocumentsPage() {
             ) : null}
           </section>
 
-          <section className="rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+          <section className="rounded-2xl border border-sky-100 bg-gradient-to-r from-white to-sky-50 p-7 text-center shadow-sm">
             <h1 className="text-2xl font-bold text-slate-900">Document Workspace</h1>
             <p className="mt-2 text-sm text-slate-600">
               Your organization does not have any documents yet.
@@ -731,14 +1060,14 @@ export default function DocumentsPage() {
   let firstMatchAssigned = false;
 
   return (
-    <main className="min-h-screen bg-slate-50 p-4 sm:p-8">
+    <main className="min-h-screen bg-gradient-to-b from-sky-50 via-white to-rose-50 px-4 pb-6 pt-2 sm:px-6 sm:pb-8 sm:pt-3 [font-family:var(--font-geist-sans)]">
       <div className="mx-auto max-w-[1400px] space-y-4">
-        <header className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <header className="rounded-2xl border border-sky-200/70 bg-gradient-to-r from-white via-sky-50 to-indigo-50 p-5 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h1 className="text-2xl font-bold text-slate-900 sm:text-3xl">Document Workspace</h1>
               <p className="mt-1 text-sm text-slate-600">
-                Upload, search across all documents, and open matched content instantly.
+                Upload, search, and run persistent organization-scoped chat grounded in documents.
               </p>
             </div>
             <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
@@ -749,7 +1078,7 @@ export default function DocumentsPage() {
           {message ? <p className="mt-3 text-sm text-amber-700">{message}</p> : null}
         </header>
 
-        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <section className="rounded-2xl border border-sky-100 bg-white/95 p-4 shadow-sm">
           <div className="flex flex-wrap items-end gap-3">
             <div className="min-w-[220px] flex-1">
               <label className="mb-1 block text-sm font-medium text-slate-700">
@@ -778,7 +1107,7 @@ export default function DocumentsPage() {
               type="button"
               disabled={!uploadFile || !uploadTitle.trim() || uploading}
               onClick={handleUpload}
-              className="cursor-pointer rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+              className="cursor-pointer rounded-lg bg-sky-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {uploading ? "Uploading..." : "Upload"}
             </button>
@@ -788,7 +1117,7 @@ export default function DocumentsPage() {
           ) : null}
         </section>
 
-        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <section className="rounded-2xl border border-sky-100 bg-white/95 p-4 shadow-sm">
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-base font-semibold text-slate-900">Cross-Document Search</h2>
             <p className="text-xs text-slate-500">Searches title and extracted text across files</p>
@@ -812,9 +1141,13 @@ export default function DocumentsPage() {
                     key={result.id}
                     type="button"
                     onClick={() => {
+                      setViewMode("document");
                       setSelectedDocId(result.id);
+                      setDetailOffset(null);
                       setDetailAnchorQuery(normalizedSearchQuery);
+                      setViewerHighlightQuery(normalizedSearchQuery);
                       setSearchSnippet(result.match?.snippet || null);
+                      router.replace("/documents");
                     }}
                     className="w-full cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-2 text-left transition hover:border-slate-300 hover:bg-slate-50"
                   >
@@ -835,7 +1168,7 @@ export default function DocumentsPage() {
         </section>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-[280px_minmax(0,1fr)_320px]">
-          <aside className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <aside className="rounded-2xl border border-sky-100 bg-white/95 p-4 shadow-sm">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Folders</h2>
             <ul className="mt-3 space-y-2">
               {MOCK_FOLDERS.map((folder) => (
@@ -886,9 +1219,13 @@ export default function DocumentsPage() {
                     key={doc.id}
                     type="button"
                     onClick={() => {
+                      setViewMode("document");
+                      setDetailOffset(null);
                       setDetailAnchorQuery(null);
+                      setViewerHighlightQuery(null);
                       setSearchSnippet(null);
                       setSelectedDocId(doc.id);
+                      router.replace("/documents");
                     }}
                     className={`w-full cursor-pointer rounded-xl border px-3 py-2 text-left transition ${
                       selected
@@ -915,220 +1252,383 @@ export default function DocumentsPage() {
             </div>
           </aside>
 
-          <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            {!selectedDocId ? (
-              <div className="flex min-h-[60vh] items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
-                <div>
-                  <p className="text-base font-medium text-slate-800">Select a document to view it</p>
-                  <p className="mt-1 text-sm text-slate-500">
-                    Choose a file from the left panel or search results.
-                  </p>
-                </div>
+          <section className="rounded-2xl border border-sky-100 bg-white/95 p-5 shadow-sm">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div className="inline-flex rounded-lg border border-sky-200 bg-sky-50/70 p-1">
+                <button
+                  type="button"
+                  onClick={() => setViewMode("document")}
+                  className={`cursor-pointer rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                    viewMode === "document"
+                      ? "bg-white text-slate-900 shadow-sm"
+                      : "text-slate-600 hover:text-slate-900"
+                  }`}
+                >
+                  View Document
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode("chat")}
+                  className={`cursor-pointer rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                    viewMode === "chat"
+                      ? "bg-white text-slate-900 shadow-sm"
+                      : "text-slate-600 hover:text-slate-900"
+                  }`}
+                >
+                  Chat
+                </button>
               </div>
-            ) : docLoading ? (
-              <ViewerSkeleton />
-            ) : (
-              <div className="space-y-4">
-                <div>
-                  <h2 className="text-2xl font-bold text-slate-900">
-                    {selectedDoc?.title || selectedMeta?.title || "Untitled"}
-                  </h2>
-                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
-                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">
-                      {selectedDoc?.fileType || selectedMeta?.fileType || "application/octet-stream"}
-                    </span>
-                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">
-                      Updated {formatDate(selectedDoc?.updatedAt || selectedMeta?.updatedAt || null)}
-                    </span>
-                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">
-                      Text index {selectedDoc?.textStatus || selectedMeta?.textStatus || "pending"}
-                    </span>
-                  </div>
-                  {searchSnippet ? (
-                    <p className="mt-2 rounded-lg border border-slate-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                      Matching context: {searchSnippet}
+              {viewMode === "chat" ? (
+                <p className="text-xs text-slate-500">Persistent org chat with retrieval every turn</p>
+              ) : null}
+            </div>
+
+            {viewMode === "document" ? (
+              !selectedDocId ? (
+                <div className="flex min-h-[60vh] items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
+                  <div>
+                    <p className="text-base font-medium text-slate-800">Select a document to view it</p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Choose a file from the left panel or search results.
                     </p>
-                  ) : null}
-                  {selectedDoc?.textWindow ? (
-                    <p className="mt-2 text-xs text-slate-500">
-                      Loaded {selectedDoc.textWindow.returnedChars.toLocaleString()} of{" "}
-                      {selectedDoc.textWindow.totalChars.toLocaleString()} characters
-                      {selectedDoc.textWindow.anchoredQuery
-                        ? ` (anchored to "${selectedDoc.textWindow.anchoredQuery}")`
-                        : ""}
-                    </p>
-                  ) : null}
-                  <div className="mt-3">
-                    <button
-                      type="button"
-                      onClick={() => void handleReindexSelectedDoc()}
-                      disabled={reindexing}
-                      className="cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {reindexing ? "Re-indexing..." : "Re-index Extraction + Chunks"}
-                    </button>
                   </div>
                 </div>
-
-                <div className="min-h-[60vh] rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  {paragraphs.length === 0 ? (
-                    <div className="flex h-full min-h-[48vh] items-center justify-center text-center">
-                      <div className="space-y-3">
-                        <p className="text-base font-semibold text-slate-800">Text not available yet</p>
-                        <p className="text-sm text-slate-500">
-                          This file has not been extracted yet, or extraction returned no readable text.
-                        </p>
-                        <button
-                          type="button"
-                          onClick={() => void handleReindexSelectedDoc()}
-                          disabled={reindexing}
-                          className="cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-                        >
-                          {reindexing ? "Re-indexing..." : "Re-run extraction"}
-                        </button>
-                      </div>
+              ) : docLoading ? (
+                <ViewerSkeleton />
+              ) : (
+                <div className="space-y-4">
+                  <div>
+                    <h2 className="text-2xl font-bold text-slate-900">
+                      {selectedDoc?.title || selectedMeta?.title || "Untitled"}
+                    </h2>
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">
+                        {selectedDoc?.fileType || selectedMeta?.fileType || "application/octet-stream"}
+                      </span>
+                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">
+                        Updated {formatDate(selectedDoc?.updatedAt || selectedMeta?.updatedAt || null)}
+                      </span>
+                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">
+                        Text index {selectedDoc?.textStatus || selectedMeta?.textStatus || "pending"}
+                      </span>
                     </div>
-                  ) : normalizedSearchQuery ? (
-                    <article className="space-y-4 text-[15px] leading-7 text-slate-700">
-                      {paragraphs.map((paragraph, idx) => {
-                        const regex = new RegExp(`(${escapeRegExp(normalizedSearchQuery)})`, "ig");
-                        const parts = paragraph.split(regex);
-                        return (
-                          <p key={`${selectedDocId}-${idx}`} className="whitespace-pre-wrap">
-                            {parts.map((part, partIdx) => {
-                              const isMatch =
-                                part.toLowerCase() === normalizedSearchQuery.toLowerCase();
-                              if (!isMatch) return <span key={`${idx}-${partIdx}`}>{part}</span>;
-                              const attachFirstRef = !firstMatchAssigned;
-                              if (attachFirstRef) firstMatchAssigned = true;
-                              return (
-                                <mark
-                                  key={`${idx}-${partIdx}`}
-                                  ref={attachFirstRef ? firstMatchRef : undefined}
-                                  className="rounded bg-amber-200 px-0.5 text-slate-900"
-                                >
-                                  {part}
-                                </mark>
-                              );
-                            })}
-                          </p>
-                        );
-                      })}
-                    </article>
-                  ) : (
-                    <article className="space-y-4 text-[15px] leading-7 text-slate-700">
-                      {paragraphs.map((paragraph, idx) => (
-                        <p key={`${selectedDocId}-${idx}`} className="whitespace-pre-wrap">
-                          {paragraph}
-                        </p>
-                      ))}
-                    </article>
-                  )}
-
-                  {selectedDoc?.textWindow?.hasMore ? (
-                    <div className="mt-4 border-t border-slate-200 pt-4">
+                    {searchSnippet ? (
+                      <p className="mt-2 rounded-lg border border-slate-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        Matching context: {searchSnippet}
+                      </p>
+                    ) : null}
+                    {selectedDoc?.textWindow ? (
+                      <p className="mt-2 text-xs text-slate-500">
+                        Loaded {selectedDoc.textWindow.returnedChars.toLocaleString()} of{" "}
+                        {selectedDoc.textWindow.totalChars.toLocaleString()} characters
+                        {selectedDoc.textWindow.anchoredQuery
+                          ? ` (anchored to "${selectedDoc.textWindow.anchoredQuery}")`
+                          : ""}
+                      </p>
+                    ) : null}
+                    <div className="mt-3">
                       <button
                         type="button"
-                        onClick={() => void loadMoreExtractedText()}
-                        disabled={loadingMoreText}
-                        className="cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                        onClick={() => void handleReindexSelectedDoc()}
+                        disabled={reindexing}
+                        className="cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        {loadingMoreText ? "Loading more..." : "Load more text"}
+                        {reindexing ? "Re-indexing..." : "Re-index Extraction + Chunks"}
                       </button>
                     </div>
-                  ) : null}
+                  </div>
+
+                <div className="min-h-[60vh] rounded-xl border border-sky-100 bg-gradient-to-b from-sky-50/60 to-white p-4">
+                    {paragraphs.length === 0 ? (
+                      <div className="flex h-full min-h-[48vh] items-center justify-center text-center">
+                        <div className="space-y-3">
+                          <p className="text-base font-semibold text-slate-800">Text not available yet</p>
+                          <p className="text-sm text-slate-500">
+                            This file has not been extracted yet, or extraction returned no readable text.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => void handleReindexSelectedDoc()}
+                            disabled={reindexing}
+                            className="cursor-pointer rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
+                          >
+                            {reindexing ? "Re-indexing..." : "Re-run extraction"}
+                          </button>
+                        </div>
+                      </div>
+                    ) : effectiveHighlightQuery ? (
+                      <article className="space-y-4 text-[15px] leading-7 text-slate-700">
+                        {paragraphs.map((paragraph, idx) => {
+                          const regex = new RegExp(`(${escapeRegExp(effectiveHighlightQuery)})`, "ig");
+                          const parts = paragraph.split(regex);
+                          return (
+                            <p key={`${selectedDocId}-${idx}`} className="whitespace-pre-wrap">
+                              {parts.map((part, partIdx) => {
+                                const isMatch =
+                                  part.toLowerCase() === effectiveHighlightQuery.toLowerCase();
+                                if (!isMatch) return <span key={`${idx}-${partIdx}`}>{part}</span>;
+                                const attachFirstRef = !firstMatchAssigned;
+                                if (attachFirstRef) firstMatchAssigned = true;
+                                return (
+                                  <mark
+                                    key={`${idx}-${partIdx}`}
+                                    ref={attachFirstRef ? firstMatchRef : undefined}
+                                    className="rounded bg-amber-200 px-0.5 text-slate-900"
+                                  >
+                                    {part}
+                                  </mark>
+                                );
+                              })}
+                            </p>
+                          );
+                        })}
+                      </article>
+                    ) : (
+                      <article className="space-y-4 text-[15px] leading-7 text-slate-700">
+                        {paragraphs.map((paragraph, idx) => (
+                          <p key={`${selectedDocId}-${idx}`} className="whitespace-pre-wrap">
+                            {paragraph}
+                          </p>
+                        ))}
+                      </article>
+                    )}
+
+                    {selectedDoc?.textWindow?.hasMore ? (
+                      <div className="mt-4 border-t border-slate-200 pt-4">
+                        <button
+                          type="button"
+                          onClick={() => void loadMoreExtractedText()}
+                          disabled={loadingMoreText}
+                          className="cursor-pointer rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {loadingMoreText ? "Loading more..." : "Load more text"}
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
+              )
+            ) : (
+              <div className="flex min-h-[68vh] flex-col">
+                <div className="rounded-xl border border-sky-100 bg-gradient-to-r from-sky-50/70 to-white p-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      value={activeChatId ?? ""}
+                      onChange={(event) => setActiveChatId(event.target.value || null)}
+                      className="min-w-[220px] rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm"
+                    >
+                      <option value="" disabled>
+                        {chatsLoading ? "Loading chats..." : "Select chat"}
+                      </option>
+                      {chats.map((chat) => (
+                        <option key={chat.id} value={chat.id}>
+                          {chat.title}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => void handleNewChat()}
+                      className="cursor-pointer rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
+                    >
+                      New chat
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleResetContext()}
+                      disabled={!activeChatId}
+                      className="cursor-pointer rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Reset context
+                    </button>
+                    {activeChat ? (
+                      <p className="text-xs text-slate-500">
+                        Updated {formatDate(activeChat.updatedAt || activeChat.lastMessageAt)}
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div
+                  ref={chatScrollRef}
+                  className="mt-3 flex-1 space-y-3 overflow-y-auto rounded-xl border border-sky-100 bg-gradient-to-b from-sky-50/60 to-white p-4"
+                >
+                  {chatLoading ? (
+                    <ViewerSkeleton />
+                  ) : chatMessages.length === 0 ? (
+                    <div className="flex h-full min-h-[40vh] items-center justify-center text-center">
+                      <div>
+                        <p className="text-base font-semibold text-slate-800">Start a grounded chat</p>
+                        <p className="mt-1 text-sm text-slate-500">
+                          Ask a question to run retrieval and save conversation memory in this org.
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    chatMessages.map((chatMessage) => {
+                      const isAssistant = chatMessage.role === "assistant";
+                      const isActiveAssistant = isAssistant && activeAssistantMessageId === chatMessage.id;
+                      return (
+                        <button
+                          key={chatMessage.id}
+                          type="button"
+                          onClick={() => {
+                            if (isAssistant) setActiveAssistantMessageId(chatMessage.id);
+                          }}
+                          className={`block w-full rounded-xl border p-3 text-left transition ${
+                            isAssistant
+                              ? isActiveAssistant
+                                ? "border-slate-900 bg-white shadow-sm"
+                                : "border-slate-200 bg-white hover:border-slate-300"
+                              : "ml-auto max-w-[90%] border-slate-900 bg-slate-900 text-white"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <p
+                              className={`text-xs font-semibold uppercase tracking-wide ${
+                                isAssistant ? "text-slate-500" : "text-white/80"
+                              }`}
+                            >
+                              {isAssistant ? "Assistant" : "You"}
+                            </p>
+                            <p className={`text-xs ${isAssistant ? "text-slate-500" : "text-white/70"}`}>
+                              {formatDateTime(chatMessage.createdAt)}
+                            </p>
+                          </div>
+                          <p
+                            className={`mt-2 whitespace-pre-wrap text-sm leading-6 ${
+                              isAssistant ? "text-slate-700" : "text-white"
+                            }`}
+                          >
+                            {chatMessage.content}
+                          </p>
+                          {isAssistant && chatMessage.supportLabel ? (
+                            <span
+                              className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${supportChipClasses(chatMessage.supportLabel)}`}
+                            >
+                              {chatMessage.supportLabel}
+                            </span>
+                          ) : null}
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+
+                <form
+                  className="mt-3 space-y-2"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void handleSendChatMessage();
+                  }}
+                >
+                  <textarea
+                    value={chatInput}
+                    onChange={(event) => setChatInput(event.target.value)}
+                    rows={3}
+                    placeholder="Ask a question about your organization documents..."
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                  />
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs text-slate-500">
+                      {chatInput.trim().length}/{CHAT_MESSAGE_MAX_LENGTH}
+                    </p>
+                    <button
+                      type="submit"
+                      disabled={chatSending || !chatInput.trim()}
+                      className="cursor-pointer rounded-lg bg-sky-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {chatSending ? "Sending..." : "Send"}
+                    </button>
+                  </div>
+                </form>
+                {chatError ? <p className="mt-2 text-sm text-rose-700">{chatError}</p> : null}
               </div>
             )}
           </section>
 
-          <aside className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="text-lg font-semibold text-slate-900">Assistant</h2>
+          <aside className="rounded-2xl border border-sky-100 bg-gradient-to-b from-white to-sky-50 p-4 shadow-sm">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-lg font-semibold text-slate-900">Sources</h2>
+              {activeSupportLabel ? (
+                <span
+                  className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${supportChipClasses(activeSupportLabel)}`}
+                >
+                  {activeSupportLabel}
+                </span>
+              ) : null}
+            </div>
             <p className="mt-1 text-sm text-slate-600">
-              Ask organization-scoped questions grounded in indexed document chunks.
+              Select an assistant message in chat to inspect citations.
             </p>
 
-            <form
-              className="mt-4 space-y-3"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void handleAskRag();
-              }}
-            >
-              <textarea
-                value={ragQuery}
-                onChange={(event) => setRagQuery(event.target.value)}
-                placeholder="Ask a question about your organization documents..."
-                rows={4}
-                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
-              />
-              <button
-                type="submit"
-                disabled={ragLoading || !ragQuery.trim()}
-                className="w-full cursor-pointer rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {ragLoading ? "Thinking..." : "Ask"}
-              </button>
-            </form>
+            {activeAssistantMessage?.contextSummary ? (
+              <p className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                {activeAssistantMessage.contextSummary}
+              </p>
+            ) : null}
 
-            {ragError ? <p className="mt-3 text-sm text-rose-700">{ragError}</p> : null}
-
-            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Answer</p>
-              <div className="mt-2 rounded-lg border border-slate-200 bg-white p-3 text-sm text-slate-700">
-                {ragAnswer || "Submit a question to get a grounded answer."}
-              </div>
-
-              <div className="mt-3">
-                <p className="text-xs uppercase tracking-wide text-slate-500">Citations</p>
-                <div className="mt-2 space-y-2">
-                  {ragCitations.length > 0 ? (
-                    ragCitations.map((citation, index) => (
-                      <div
-                        key={`${citation.docId}-${citation.chunkId}-${index}`}
-                        className="rounded-lg border border-slate-200 bg-white p-3"
-                      >
-                        <p className="text-xs font-semibold text-slate-800">
-                          docId: {citation.docId}
-                        </p>
-                        <p className="mt-0.5 text-xs text-slate-600">
-                          Similarity: {citation.similarity.toFixed(4)}
-                        </p>
-                        <p className="mt-0.5 text-xs text-slate-600">
-                          chunkId: {citation.chunkId}
-                        </p>
-                        <p className="mt-1 text-xs text-slate-600">
-                          {citationSnippet(citation.snippet) || "(No snippet)"}
-                        </p>
+            <div className="mt-4 space-y-3">
+              {activeCitations.length > 0 ? (
+                activeCitations.map((citation, index) => {
+                  const citationKey = `${citation.docId}-${citation.chunkId ?? "none"}-${index}`;
+                  const expanded = Boolean(expandedCitationKeys[citationKey]);
+                  return (
+                    <article
+                      key={citationKey}
+                      className="rounded-xl border border-sky-100 bg-white p-3"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span
+                          className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${supportChipClasses(activeSupportLabel)}`}
+                        >
+                          {activeSupportLabel || "No supporting sources found"}
+                        </span>
+                        <span className="text-[11px] text-slate-500">
+                          {citation.similarity.toFixed(4)}
+                        </span>
                       </div>
-                    ))
-                  ) : (
-                    <p className="rounded-lg border border-dashed border-slate-300 bg-white px-3 py-2 text-sm text-slate-500">
-                      No citations yet.
-                    </p>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Suggested Prompts</p>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {[
-                  "What is our policy on volunteer onboarding?",
-                  "Summarize our fundraising guidance.",
-                  "Where do we define board approval requirements?",
-                ].map((prompt) => (
-                  <button
-                    key={prompt}
-                    type="button"
-                    onClick={() => setRagQuery(prompt)}
-                    className="cursor-pointer rounded-full border border-slate-300 bg-white px-3 py-1 text-xs text-slate-700 transition hover:bg-slate-100"
-                  >
-                    {prompt}
-                  </button>
-                ))}
-              </div>
+                      <p className="mt-2 text-sm font-semibold text-slate-900">{citation.docTitle}</p>
+                      <p className="mt-0.5 text-xs text-slate-500">
+                        {citation.headingPath || "Heading path unavailable"}
+                      </p>
+                      <p className="mt-2 text-sm text-slate-700">
+                        {citationSnippet(citation.snippet) || "(No snippet)"}
+                      </p>
+                      {expanded && citation.moreContext ? (
+                        <p className="mt-2 whitespace-pre-wrap rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-600">
+                          {citation.moreContext}
+                        </p>
+                      ) : null}
+                      <div className="mt-3 flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => openCitationInDocument(citation)}
+                          className="cursor-pointer rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
+                        >
+                          Open in document
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedCitationKeys((current) => ({
+                              ...current,
+                              [citationKey]: !current[citationKey],
+                            }))
+                          }
+                          className="cursor-pointer rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
+                        >
+                          {expanded ? "Hide context" : "Show more context"}
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })
+              ) : (
+                <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-500">
+                  No citations yet. Ask a question in Chat and click an assistant response.
+                </p>
+              )}
             </div>
           </aside>
         </div>
