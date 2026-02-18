@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
 import { errorToResponse, requireOrgContext } from "@/lib/serverAuth";
 import { generateGroundedAnswer, isMissingMatchChunksFunctionError } from "@/lib/server/ragAnswer";
+import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
 
 const DEFAULT_TOP_K = 8;
 const MAX_TOP_K = 20;
+const RAG_ANSWER_LIMIT_PER_10_MIN = 120;
+const RAG_ANSWER_IP_LIMIT_PER_10_MIN = 240;
 
 type AnswerBody = {
   query?: unknown;
@@ -26,8 +29,21 @@ function parseQuery(value: unknown) {
 
 export async function POST(req: Request) {
   try {
-    const { orgId } = await requireOrgContext(req);
+    const { orgId, uid } = await requireOrgContext(req);
     const body = (await req.json().catch(() => ({}))) as AnswerBody;
+
+    await enforceRateLimit({
+      scope: "rag_answer_user",
+      key: `${orgId}:${uid}`,
+      limit: RAG_ANSWER_LIMIT_PER_10_MIN,
+      windowMs: 10 * 60 * 1000,
+    });
+    await enforceRateLimit({
+      scope: "rag_answer_ip",
+      key: getRequestIp(req),
+      limit: RAG_ANSWER_IP_LIMIT_PER_10_MIN,
+      windowMs: 10 * 60 * 1000,
+    });
 
     const query = parseQuery(body.query);
     if (!query) {
@@ -43,6 +59,15 @@ export async function POST(req: Request) {
 
     return NextResponse.json(response);
   } catch (err: unknown) {
+    if (err instanceof RateLimitError) {
+      return NextResponse.json(
+        { error: err.message },
+        {
+          status: 429,
+          headers: { "Retry-After": String(err.retryAfterSeconds) },
+        },
+      );
+    }
     if (isMissingMatchChunksFunctionError(err)) {
       return NextResponse.json(
         {

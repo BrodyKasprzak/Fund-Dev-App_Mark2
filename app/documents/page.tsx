@@ -88,9 +88,9 @@ const MOCK_FOLDERS: FolderNode[] = [
     ],
   },
   {
-    id: "collections",
-    name: "Collections",
-    note: "Mock structure for future folders",
+    id: "folders",
+    name: "Folders",
+    note: "Structured folders",
     children: [
       { id: "governance", name: "Governance", note: "Policies and compliance" },
       { id: "operations", name: "Operations", note: "Internal process docs" },
@@ -102,7 +102,7 @@ const MOCK_FOLDERS: FolderNode[] = [
 const FOLDER_FILTERS: Record<string, (doc: DocumentListItem) => boolean> = {
   all: () => true,
   status: () => true,
-  collections: () => true,
+  folders: () => true,
   ready: (doc) => doc.textStatus === "ready",
   processing: (doc) => doc.status === "processing" || doc.textStatus !== "ready",
   failed: (doc) => doc.status === "failed" || doc.textStatus === "failed",
@@ -121,13 +121,6 @@ function formatDate(iso: string | null) {
     day: "numeric",
     year: "numeric",
   });
-}
-
-function textStatusClasses(status: TextStatus) {
-  if (status === "ready") return "bg-emerald-50 text-emerald-700 border-emerald-200";
-  if (status === "failed") return "bg-rose-50 text-rose-700 border-rose-200";
-  if (status === "processing") return "bg-sky-50 text-sky-700 border-sky-200";
-  return "bg-slate-100 text-slate-700 border-slate-200";
 }
 
 function splitParagraphs(text: string) {
@@ -290,6 +283,20 @@ function ViewerSkeleton() {
   );
 }
 
+function ThinkingDots() {
+  return (
+    <span className="ml-1 inline-flex items-end gap-1 align-middle" aria-hidden="true">
+      {[0, 1, 2].map((idx) => (
+        <span
+          key={idx}
+          className="h-1.5 w-1.5 rounded-full bg-current animate-bounce"
+          style={{ animationDelay: `${idx * 0.12}s` }}
+        />
+      ))}
+    </span>
+  );
+}
+
 type FolderTreeItemProps = {
   node: FolderNode;
   depth: number;
@@ -370,8 +377,8 @@ export default function DocumentsPage() {
   const [leftFilter, setLeftFilter] = useState("");
   const [activeFolderId, setActiveFolderId] = useState("all");
   const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({
-    status: true,
-    collections: true,
+    status: false,
+    folders: false,
   });
   const [detailAnchorQuery, setDetailAnchorQuery] = useState<string | null>(null);
   const [detailOffset, setDetailOffset] = useState<number | null>(null);
@@ -385,7 +392,6 @@ export default function DocumentsPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResultItem[]>([]);
-  const [searchSnippet, setSearchSnippet] = useState<string | null>(null);
 
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [chatsLoading, setChatsLoading] = useState(false);
@@ -396,7 +402,9 @@ export default function DocumentsPage() {
   const [chatInput, setChatInput] = useState("");
   const [chatError, setChatError] = useState<string | null>(null);
   const [activeAssistantMessageId, setActiveAssistantMessageId] = useState<string | null>(null);
-  const [expandedCitationKeys, setExpandedCitationKeys] = useState<Record<string, boolean>>({});
+  const [statusInfoOpen, setStatusInfoOpen] = useState(false);
+  const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false);
+  const [rightPanelCollapsed, setRightPanelCollapsed] = useState(true);
 
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -601,7 +609,6 @@ export default function DocumentsPage() {
         setChatMessages(messages);
         const latestAssistant = [...messages].reverse().find((item) => item.role === "assistant");
         setActiveAssistantMessageId(latestAssistant?.id ?? null);
-        setExpandedCitationKeys({});
       } catch (err: unknown) {
         if (!cancelled) {
           setChatMessages([]);
@@ -643,7 +650,6 @@ export default function DocumentsPage() {
       setActiveChatId(nextChat.id);
       setChatMessages([]);
       setActiveAssistantMessageId(null);
-      setExpandedCitationKeys({});
       setViewMode("chat");
     } catch (err: unknown) {
       if (err instanceof Error) setChatError(err.message);
@@ -672,7 +678,6 @@ export default function DocumentsPage() {
       setActiveChatId(nextChat.id);
       setChatMessages([]);
       setActiveAssistantMessageId(null);
-      setExpandedCitationKeys({});
       setViewMode("chat");
     } catch (err: unknown) {
       if (err instanceof Error) setChatError(err.message);
@@ -711,7 +716,6 @@ export default function DocumentsPage() {
       if (assistantMessage?.role === "assistant") {
         setActiveAssistantMessageId(assistantMessage.id);
       }
-      setExpandedCitationKeys({});
       setChatInput("");
       await loadChats();
     } catch (err: unknown) {
@@ -774,7 +778,6 @@ export default function DocumentsPage() {
     handledDeepLinkRef.current = key;
     setSelectedDocId(deepLinkDocId);
     setViewMode("document");
-    setExpandedCitationKeys({});
     if (deepLinkHighlight) {
       void resolveHighlightToAnchor(deepLinkDocId, deepLinkHighlight);
       return;
@@ -790,7 +793,6 @@ export default function DocumentsPage() {
     if (!user) return;
     if (!normalizedSearchQuery) {
       setSearchResults([]);
-      setSearchSnippet(null);
       setSearching(false);
       return;
     }
@@ -860,6 +862,22 @@ export default function DocumentsPage() {
 
   const extractedText = selectedDoc?.extractedText?.trim() || "";
   const paragraphs = extractedText ? splitParagraphs(extractedText) : [];
+  const layoutGridClass = useMemo(() => {
+    if (leftPanelCollapsed && rightPanelCollapsed) {
+      return "grid-cols-1 md:grid-cols-[24px_minmax(0,1fr)_24px]";
+    }
+    if (leftPanelCollapsed) {
+      return "grid-cols-1 md:grid-cols-[24px_minmax(0,1fr)_320px]";
+    }
+    if (rightPanelCollapsed) {
+      return "grid-cols-1 md:grid-cols-[280px_minmax(0,1fr)_24px]";
+    }
+    return "grid-cols-1 md:grid-cols-[280px_minmax(0,1fr)_320px]";
+  }, [leftPanelCollapsed, rightPanelCollapsed]);
+
+  useEffect(() => {
+    setStatusInfoOpen(false);
+  }, [selectedDocId]);
 
   async function handleUpload() {
     if (!user || !uploadFile || !uploadTitle.trim()) return;
@@ -948,18 +966,22 @@ export default function DocumentsPage() {
     setSelectedDocId(citation.docId);
     setSearchQuery("");
     setSearchResults([]);
-    setSearchSnippet(citation.snippet || null);
+    router.replace("/documents");
+    setDetailOffset(null);
+    setDetailAnchorQuery(null);
+    setViewerHighlightQuery(null);
+
     if (citation.chunkId) {
       void resolveHighlightToAnchor(citation.docId, citation.chunkId);
-    }
-    if (citation.deepLink.trim()) {
-      router.replace(citation.deepLink);
       return;
     }
-    setDetailOffset(null);
-    if (citation.snippet.trim()) {
-      setDetailAnchorQuery(citation.snippet.slice(0, 120));
-      setViewerHighlightQuery(citation.snippet.slice(0, 200));
+
+    const querySource = `${citation.snippet || ""} ${citation.moreContext || ""}`
+      .replace(/\s+/g, " ")
+      .trim();
+    if (querySource) {
+      setDetailAnchorQuery(querySource.slice(0, 120));
+      setViewerHighlightQuery(querySource.slice(0, 200));
       return;
     }
     setDetailAnchorQuery(null);
@@ -1149,7 +1171,6 @@ export default function DocumentsPage() {
                       setDetailOffset(null);
                       setDetailAnchorQuery(normalizedSearchQuery);
                       setViewerHighlightQuery(normalizedSearchQuery);
-                      setSearchSnippet(result.match?.snippet || null);
                       router.replace("/documents");
                     }}
                     className="w-full cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-2 text-left transition hover:border-slate-300 hover:bg-slate-50"
@@ -1170,9 +1191,31 @@ export default function DocumentsPage() {
           ) : null}
         </section>
 
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-[280px_minmax(0,1fr)_320px]">
-          <aside className="rounded-2xl border border-sky-100 bg-white/95 p-4 shadow-sm">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Folders</h2>
+        <div className={`relative grid gap-4 ${layoutGridClass}`}>
+          {leftPanelCollapsed ? (
+            <div className="hidden min-h-[68vh] items-center justify-center rounded-2xl border border-slate-300 bg-slate-200/70 md:flex">
+              <button
+                type="button"
+                onClick={() => setLeftPanelCollapsed(false)}
+                aria-label="Show documents panel"
+                className="h-10 w-5 rounded-md border border-slate-300 bg-white text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                &gt;
+              </button>
+            </div>
+          ) : null}
+
+          {!leftPanelCollapsed ? (
+            <aside className="rounded-2xl border border-sky-100 bg-white/95 p-4 shadow-sm">
+            <div className="mb-2 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setLeftPanelCollapsed(true)}
+                className="rounded-md border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Hide
+              </button>
+            </div>
             <ul className="mt-3 space-y-2">
               {MOCK_FOLDERS.map((folder) => (
                 <FolderTreeItem
@@ -1226,7 +1269,6 @@ export default function DocumentsPage() {
                       setDetailOffset(null);
                       setDetailAnchorQuery(null);
                       setViewerHighlightQuery(null);
-                      setSearchSnippet(null);
                       setSelectedDocId(doc.id);
                       router.replace("/documents");
                     }}
@@ -1240,10 +1282,12 @@ export default function DocumentsPage() {
                     <div className="mt-1 flex items-center justify-between gap-2">
                       <span
                         className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
-                          selected ? "border-white/40 bg-white/15 text-white" : textStatusClasses(doc.textStatus)
+                          selected
+                            ? "border-emerald-200/50 bg-emerald-400/20 text-emerald-100"
+                            : "border-emerald-200 bg-emerald-50 text-emerald-700"
                         }`}
                       >
-                        {doc.textStatus}
+                        Status
                       </span>
                       <span className={`text-[11px] ${selected ? "text-white/80" : "text-slate-500"}`}>
                         {formatDate(doc.updatedAt || doc.createdAt)}
@@ -1253,9 +1297,14 @@ export default function DocumentsPage() {
                 );
               })}
             </div>
-          </aside>
+            </aside>
+          ) : null}
 
-          <section className="rounded-2xl border border-sky-100 bg-white/95 p-5 shadow-sm">
+          <section
+            className={`w-full rounded-2xl border border-sky-100 bg-white/95 p-5 shadow-sm ${
+              leftPanelCollapsed && rightPanelCollapsed ? "md:mx-auto md:w-4/5" : ""
+            }`}
+          >
             <div className="mb-4 flex items-center justify-between gap-3">
               <div className="inline-flex rounded-lg border border-sky-200 bg-sky-50/70 p-1">
                 <button
@@ -1267,7 +1316,7 @@ export default function DocumentsPage() {
                       : "text-slate-600 hover:text-slate-900"
                   }`}
                 >
-                  View Document
+                  Documents
                 </button>
                 <button
                   type="button"
@@ -1280,10 +1329,33 @@ export default function DocumentsPage() {
                 >
                   Chat
                 </button>
+                <button
+                  type="button"
+                  onClick={() => router.push("/products")}
+                  className="cursor-pointer rounded-md px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:bg-white hover:text-slate-900"
+                >
+                  Create New
+                </button>
               </div>
-              {viewMode === "chat" ? (
-                <p className="text-xs text-slate-500">Persistent org chat with retrieval every turn</p>
-              ) : null}
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setLeftPanelCollapsed((prev) => !prev)}
+                  className="rounded-md border border-slate-300 px-2.5 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  {leftPanelCollapsed ? "Show left" : "Hide left"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRightPanelCollapsed((prev) => !prev);
+                  }}
+                  className="rounded-md border border-slate-300 px-2.5 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  {rightPanelCollapsed ? "Show right" : "Hide right"}
+                </button>
+              </div>
             </div>
 
             {viewMode === "document" ? (
@@ -1305,20 +1377,32 @@ export default function DocumentsPage() {
                       {selectedDoc?.title || selectedMeta?.title || "Untitled"}
                     </h2>
                     <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
-                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">
-                        {selectedDoc?.fileType || selectedMeta?.fileType || "application/octet-stream"}
-                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setStatusInfoOpen((prev) => !prev)}
+                        className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 font-semibold text-emerald-700 transition hover:bg-emerald-100"
+                      >
+                        Status
+                      </button>
                       <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">
                         Updated {formatDate(selectedDoc?.updatedAt || selectedMeta?.updatedAt || null)}
                       </span>
-                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">
-                        Text index {selectedDoc?.textStatus || selectedMeta?.textStatus || "pending"}
-                      </span>
                     </div>
-                    {searchSnippet ? (
-                      <p className="mt-2 rounded-lg border border-slate-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                        Matching context: {searchSnippet}
-                      </p>
+                    {statusInfoOpen ? (
+                      <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-xs text-emerald-800">
+                        <p>
+                          File type:{" "}
+                          <span className="font-semibold">
+                            {selectedDoc?.fileType || selectedMeta?.fileType || "application/octet-stream"}
+                          </span>
+                        </p>
+                        <p className="mt-1">
+                          Text index:{" "}
+                          <span className="font-semibold">
+                            {selectedDoc?.textStatus || selectedMeta?.textStatus || "pending"}
+                          </span>
+                        </p>
+                      </div>
                     ) : null}
                     {selectedDoc?.textWindow ? (
                       <p className="mt-2 text-xs text-slate-500">
@@ -1471,48 +1555,50 @@ export default function DocumentsPage() {
                     chatMessages.map((chatMessage) => {
                       const isAssistant = chatMessage.role === "assistant";
                       const isActiveAssistant = isAssistant && activeAssistantMessageId === chatMessage.id;
-                      return (
-                        <button
-                          key={chatMessage.id}
-                          type="button"
-                          onClick={() => {
-                            if (isAssistant) setActiveAssistantMessageId(chatMessage.id);
-                          }}
-                          className={`block w-full rounded-xl border p-3 text-left transition ${
-                            isAssistant
-                              ? isActiveAssistant
-                                ? "border-slate-900 bg-white shadow-sm"
-                                : "border-slate-200 bg-white hover:border-slate-300"
-                              : "ml-auto max-w-[90%] border-slate-900 bg-slate-900 text-white"
-                          }`}
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <p
-                              className={`text-xs font-semibold uppercase tracking-wide ${
-                                isAssistant ? "text-slate-500" : "text-white/80"
-                              }`}
-                            >
-                              {isAssistant ? "Assistant" : "You"}
-                            </p>
-                            <p className={`text-xs ${isAssistant ? "text-slate-500" : "text-white/70"}`}>
-                              {formatDateTime(chatMessage.createdAt)}
-                            </p>
-                          </div>
-                          <p
-                            className={`mt-2 whitespace-pre-wrap text-sm leading-6 ${
-                              isAssistant ? "text-slate-700" : "text-white"
+                      if (isAssistant) {
+                        return (
+                          <button
+                            key={chatMessage.id}
+                            type="button"
+                            onClick={() => setActiveAssistantMessageId(chatMessage.id)}
+                            className={`block w-full cursor-pointer border-l-2 py-1 pl-3 pr-1 text-left transition ${
+                              isActiveAssistant
+                                ? "border-slate-900 bg-slate-100/50"
+                                : "border-transparent hover:border-slate-300"
                             }`}
                           >
-                            {chatMessage.content}
-                          </p>
-                          {isAssistant && chatMessage.supportLabel ? (
-                            <span
-                              className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${supportChipClasses(chatMessage.supportLabel)}`}
-                            >
-                              {chatMessage.supportLabel}
-                            </span>
-                          ) : null}
-                        </button>
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                Assistant
+                              </p>
+                              <p className="text-xs text-slate-500">{formatDateTime(chatMessage.createdAt)}</p>
+                            </div>
+                            <p className="mt-1 whitespace-pre-wrap text-[15px] leading-7 text-slate-700">
+                              {chatMessage.content}
+                            </p>
+                            {chatMessage.supportLabel ? (
+                              <span
+                                className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${supportChipClasses(chatMessage.supportLabel)}`}
+                              >
+                                {chatMessage.supportLabel}
+                              </span>
+                            ) : null}
+                          </button>
+                        );
+                      }
+
+                      return (
+                        <div key={chatMessage.id} className="flex justify-end">
+                          <div className="w-full max-w-[86%] rounded-2xl bg-slate-900 px-4 py-2.5 text-white shadow-sm">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="text-[11px] font-semibold uppercase tracking-wide text-white/80">You</p>
+                              <p className="text-xs text-white/70">{formatDateTime(chatMessage.createdAt)}</p>
+                            </div>
+                            <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-white">
+                              {chatMessage.content}
+                            </p>
+                          </div>
+                        </div>
                       );
                     })
                   )}
@@ -1539,30 +1625,53 @@ export default function DocumentsPage() {
                     <button
                       type="submit"
                       disabled={chatSending || !chatInput.trim()}
-                      className="cursor-pointer rounded-lg bg-sky-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-60"
+                      className="inline-flex cursor-pointer items-center rounded-lg bg-sky-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {chatSending ? "Sending..." : "Send"}
+                      {chatSending ? (
+                        <>
+                          Thinking
+                          <ThinkingDots />
+                        </>
+                      ) : (
+                        "Send"
+                      )}
                     </button>
                   </div>
+                  {chatSending ? (
+                    <p className="inline-flex items-center text-xs font-medium text-slate-500">
+                      Thinking
+                      <ThinkingDots />
+                    </p>
+                  ) : null}
                 </form>
                 {chatError ? <p className="mt-2 text-sm text-rose-700">{chatError}</p> : null}
               </div>
             )}
           </section>
 
-          <aside className="rounded-2xl border border-sky-100 bg-gradient-to-b from-white to-sky-50 p-4 shadow-sm">
+          {!rightPanelCollapsed ? (
+            <aside className="rounded-2xl border border-sky-100 bg-gradient-to-b from-white to-sky-50 p-4 shadow-sm">
             <div className="flex items-center justify-between gap-2">
               <h2 className="text-lg font-semibold text-slate-900">Sources</h2>
-              {activeSupportLabel ? (
-                <span
-                  className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${supportChipClasses(activeSupportLabel)}`}
+              <div className="flex items-center gap-2">
+                {activeSupportLabel ? (
+                  <span
+                    className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${supportChipClasses(activeSupportLabel)}`}
+                  >
+                    {activeSupportLabel}
+                  </span>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => setRightPanelCollapsed(true)}
+                  className="rounded-md border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-white"
                 >
-                  {activeSupportLabel}
-                </span>
-              ) : null}
+                  Hide
+                </button>
+              </div>
             </div>
             <p className="mt-1 text-sm text-slate-600">
-              Select an assistant message in chat to inspect citations.
+              Open chat and select an assistant response to inspect citations.
             </p>
 
             {activeAssistantMessage?.contextSummary ? (
@@ -1575,7 +1684,6 @@ export default function DocumentsPage() {
               {activeCitations.length > 0 ? (
                 activeCitations.map((citation, index) => {
                   const citationKey = `${citation.docId}-${citation.chunkId ?? "none"}-${index}`;
-                  const expanded = Boolean(expandedCitationKeys[citationKey]);
                   return (
                     <article
                       key={citationKey}
@@ -1595,35 +1703,13 @@ export default function DocumentsPage() {
                       <p className="mt-0.5 text-xs text-slate-500">
                         {citation.headingPath || "Heading path unavailable"}
                       </p>
-                      <p className="mt-2 text-sm text-slate-700">
+                      <button
+                        type="button"
+                        onClick={() => openCitationInDocument(citation)}
+                        className="mt-2 cursor-pointer text-left text-sm text-slate-700 underline-offset-2 transition hover:text-slate-900 hover:underline"
+                      >
                         {citationSnippet(citation.snippet) || "(No snippet)"}
-                      </p>
-                      {expanded && citation.moreContext ? (
-                        <p className="mt-2 whitespace-pre-wrap rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-600">
-                          {citation.moreContext}
-                        </p>
-                      ) : null}
-                      <div className="mt-3 flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => openCitationInDocument(citation)}
-                          className="cursor-pointer rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
-                        >
-                          Open in document
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setExpandedCitationKeys((current) => ({
-                              ...current,
-                              [citationKey]: !current[citationKey],
-                            }))
-                          }
-                          className="cursor-pointer rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
-                        >
-                          {expanded ? "Hide context" : "Show more context"}
-                        </button>
-                      </div>
+                      </button>
                     </article>
                   );
                 })
@@ -1633,7 +1719,20 @@ export default function DocumentsPage() {
                 </p>
               )}
             </div>
-          </aside>
+            </aside>
+          ) : null}
+          {rightPanelCollapsed ? (
+            <div className="hidden min-h-[68vh] items-center justify-center rounded-2xl border border-slate-300 bg-slate-200/70 md:flex">
+              <button
+                type="button"
+                onClick={() => setRightPanelCollapsed(false)}
+                aria-label="Show sources panel"
+                className="h-10 w-5 rounded-md border border-slate-300 bg-white text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                &lt;
+              </button>
+            </div>
+          ) : null}
         </div>
       </div>
     </main>

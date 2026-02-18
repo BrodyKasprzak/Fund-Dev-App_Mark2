@@ -25,6 +25,7 @@ export default function OrgOnboardingPage() {
   const router = useRouter();
   const { user, loading, setActiveOrgId, refreshMe } = useAuth();
 
+  const [testerAccessCode, setTesterAccessCode] = useState("");
   const [orgName, setOrgName] = useState("");
   const [mission, setMission] = useState("");
   const [homeState, setHomeState] = useState("");
@@ -44,6 +45,7 @@ export default function OrgOnboardingPage() {
     if (!loading && !user) router.push("/login");
   }, [user, loading, router]);
 
+  const trimmedTesterAccessCode = useMemo(() => testerAccessCode.trim(), [testerAccessCode]);
   const trimmedOrg = useMemo(() => orgName.trim(), [orgName]);
   const trimmedUrl = useMemo(() => websiteUrl.trim(), [websiteUrl]);
   const hasWebsite = trimmedUrl.length > 0;
@@ -64,6 +66,11 @@ export default function OrgOnboardingPage() {
 
     if (!user) {
       setError("You must be logged in to create an organization.");
+      return;
+    }
+
+    if (!trimmedTesterAccessCode) {
+      setError("Tester access code is required to create a workplace.");
       return;
     }
 
@@ -108,6 +115,7 @@ export default function OrgOnboardingPage() {
           Authorization: `Bearer ${idToken}`,
         },
         body: JSON.stringify({
+          testerAccessCode: trimmedTesterAccessCode,
           orgName: trimmedOrg,
           mission: mission.trim() || null,
           homeState: homeState.trim() || null,
@@ -123,8 +131,12 @@ export default function OrgOnboardingPage() {
       });
 
       if (!res.ok) {
-        const body = await res.text();
-        throw new Error(body || "Failed to create organization");
+        const payload = (await res.json().catch(() => null)) as { error?: unknown } | null;
+        const message =
+          payload && typeof payload.error === "string" && payload.error.trim().length > 0
+            ? payload.error
+            : "Failed to create organization";
+        throw new Error(message);
       }
 
       const json = await res.json();
@@ -132,9 +144,9 @@ export default function OrgOnboardingPage() {
       // ✅ NEW: set active org via AuthContext (persists to localStorage inside context)
       setActiveOrgId(json.orgId);
       await refreshMe();
-      router.push("/dashboard");
-    } catch (err: any) {
-      setError(err?.message ?? "Failed to create organization.");
+      router.push("/dashboard", { scroll: true });
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to create organization.");
     } finally {
       setSaving(false);
     }
@@ -144,7 +156,7 @@ export default function OrgOnboardingPage() {
   if (!user) return null;
 
   return (
-    <main className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 via-white to-primary-50 p-6">
+    <main className="min-h-screen flex items-start justify-center bg-gradient-to-br from-primary-50 via-white to-primary-50 p-6">
       <div className="w-full max-w-2xl">
         {/* Header */}
         <div className="text-center mb-8">
@@ -158,6 +170,23 @@ export default function OrgOnboardingPage() {
         {/* Main Form Card */}
         <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-xl shadow-slate-200/50">
           <form onSubmit={handleCreateOrg} className="space-y-6">
+            <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-primary-50/30 to-primary-50/30 p-6">
+              <div className="flex items-center gap-2 mb-4">
+                <div className="h-2 w-2 rounded-full bg-gradient-to-r from-primary-500 to-accent-400"></div>
+                <div className="text-sm font-bold text-slate-900">Tester access</div>
+              </div>
+              <label className="block text-sm font-semibold text-slate-700 mb-2">
+                Type in tester access code to create workplace <span className="text-red-500">*</span>
+              </label>
+              <input
+                className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition"
+                value={testerAccessCode}
+                onChange={(e) => setTesterAccessCode(e.target.value)}
+                placeholder="Enter tester access code"
+                required
+              />
+            </div>
+
             {/* Core org info */}
             <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-primary-50/30 to-primary-50/30 p-6">
               <div className="flex items-center gap-2 mb-4">
@@ -334,7 +363,7 @@ export default function OrgOnboardingPage() {
                     >
                       I give permission to view{" "}
                       <span className="font-semibold">publicly available</span> information on my
-                      organization's website
+                      organization&apos;s website
                     </label>
                   </div>
                   {!hasWebsite && (
@@ -355,9 +384,9 @@ export default function OrgOnboardingPage() {
             <button
               className="w-full bg-gradient-to-r from-primary-500 to-accent-400 hover:from-primary-600 hover:to-primary-500 text-white font-semibold rounded-xl px-4 py-3 transition shadow-lg shadow-primary-500/30 hover:shadow-primary-500/50 disabled:opacity-60 disabled:cursor-not-allowed"
               type="submit"
-              disabled={saving || !trimmedOrg || (hasWebsite && !websiteConsent)}
+              disabled={saving || !trimmedTesterAccessCode || !trimmedOrg || (hasWebsite && !websiteConsent)}
             >
-              {saving ? "Creating workspace..." : "Create organization"}
+              {saving ? "Creating workspace..." : "Create workplace"}
             </button>
           </form>
         </div>

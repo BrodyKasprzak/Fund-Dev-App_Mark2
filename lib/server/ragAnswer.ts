@@ -1,4 +1,5 @@
 import { openai } from "@/lib/ai/openai";
+import { adminDb } from "@/lib/firebaseAdmin";
 import { retrieveChunks } from "@/lib/rag/retrieveChunks";
 import type { RagAnswerResponse, RagChunk } from "@/lib/rag/types";
 import { buildCitationsFromChunks } from "@/lib/server/citations";
@@ -14,6 +15,13 @@ const NO_SOURCE_ANSWER =
 export type ChatTurn = {
   role: "user" | "assistant";
   content: string;
+};
+
+type OrgOnboardingContext = {
+  organization_name: string | null;
+  mission_statement: string | null;
+  year_founded: number | null;
+  num_employees: number | null;
 };
 
 type GenerateGroundedAnswerArgs = {
@@ -60,6 +68,28 @@ function buildContextBlock(chunks: RagChunk[]) {
       return lines.join("\n");
     })
     .join("\n\n");
+}
+
+function asNonEmptyString(value: unknown) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function asFiniteNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+async function loadOrgOnboardingContext(orgId: string): Promise<OrgOnboardingContext | null> {
+  const orgSnap = await adminDb.collection("organizations").doc(orgId).get();
+  if (!orgSnap.exists) return null;
+  const org = (orgSnap.data() ?? {}) as Record<string, unknown>;
+  return {
+    organization_name: asNonEmptyString(org.name),
+    mission_statement: asNonEmptyString(org.mission),
+    year_founded: asFiniteNumber(org.foundedYear),
+    num_employees: asFiniteNumber(org.numEmployees),
+  };
 }
 
 function parseAnswerText(output: unknown) {
@@ -147,6 +177,7 @@ export async function generateGroundedAnswer(
   }
 
   const contextBlock = buildContextBlock(promptChunks);
+  const orgOnboarding = await loadOrgOnboardingContext(orgId);
   const history = compactHistory(args.history ?? []);
   const historyMessages = history.map((turn) => ({
     role: turn.role,
@@ -160,12 +191,21 @@ export async function generateGroundedAnswer(
       {
         role: "system",
         content:
-          "You are an assistant for a nonprofit organization. Use only the provided context chunks. If the answer is not in context, state that no supporting sources were found.",
+          "You are an assistant for a nonprofit organization. Use only the provided context chunks and the provided ORG_ONBOARDING object. If the answer is not in those inputs, state that no supporting sources were found.",
       },
       ...historyMessages,
       {
         role: "user",
-        content: `CONTEXT:\n${contextBlock}\n\nQUESTION:\n${normalizedQuery}`,
+        content: `ORG_ONBOARDING:\n${JSON.stringify(
+          orgOnboarding ?? {
+            organization_name: null,
+            mission_statement: null,
+            year_founded: null,
+            num_employees: null,
+          },
+          null,
+          2,
+        )}\n\nCONTEXT:\n${contextBlock}\n\nQUESTION:\n${normalizedQuery}`,
       },
     ],
   });

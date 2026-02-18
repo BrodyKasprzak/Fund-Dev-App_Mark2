@@ -17,36 +17,73 @@ type OrgSummary = {
   name: string | null;
 };
 
+type UserRecord = {
+  lastOrgId?: unknown;
+  name?: unknown;
+  position?: unknown;
+};
+
+type MembershipIndexRecord = {
+  orgId?: unknown;
+  role?: unknown;
+  status?: unknown;
+  orgName?: unknown;
+};
+
+type OrgMemberRecord = {
+  role?: unknown;
+  status?: unknown;
+};
+
 export async function GET(req: Request) {
   try {
     const { uid, email } = await requireAuth(req);
 
     const userRef = adminDb.collection("users").doc(uid);
     const userSnap = await userRef.get();
-    const user = (userSnap.data() as any) ?? {};
+    const user = (userSnap.data() as UserRecord | undefined) ?? {};
 
-    const lastOrgId = asNonEmptyString(user?.lastOrgId);
+    const lastOrgId = asNonEmptyString(user.lastOrgId);
 
-    // membership index (recommended)
+    // Membership index (fast path), re-validated against canonical org membership.
     const membershipsSnap = await userRef.collection("memberships").get();
-
-    let orgs: OrgSummary[] = membershipsSnap.docs
+    const indexedOrgs: OrgSummary[] = membershipsSnap.docs
       .map((d) => {
-        const m = d.data() as any;
+        const m = d.data() as MembershipIndexRecord;
         const orgId = asNonEmptyString(m.orgId) ?? d.id;
         if (!orgId) return null;
-
         return {
           orgId,
           role: asNonEmptyString(m.role) ?? "member",
           status: asNonEmptyString(m.status) ?? "active",
           name: asNonEmptyString(m.orgName),
-        } as OrgSummary;
+        } satisfies OrgSummary;
       })
-      .filter(Boolean) as OrgSummary[];
+      .filter((item): item is OrgSummary => Boolean(item));
 
-    // ✅ Fallback for existing users not yet backfilled into users/{uid}/memberships/*
-    // If lastOrgId exists, verify canonical membership and add it to orgs list.
+    const validated = await Promise.all(
+      indexedOrgs.map(async (indexed) => {
+        const memberSnap = await adminDb
+          .collection("organizations")
+          .doc(indexed.orgId)
+          .collection("members")
+          .doc(uid)
+          .get();
+
+        if (!memberSnap.exists) return null;
+        const canonical = memberSnap.data() as OrgMemberRecord | undefined;
+        return {
+          orgId: indexed.orgId,
+          role: asNonEmptyString(canonical?.role) ?? indexed.role,
+          status: asNonEmptyString(canonical?.status) ?? indexed.status,
+          name: indexed.name,
+        } satisfies OrgSummary;
+      }),
+    );
+
+    let orgs: OrgSummary[] = validated.filter((item): item is OrgSummary => Boolean(item));
+
+    // Fallback for users not yet backfilled into users/{uid}/memberships/*
     if (orgs.length === 0 && lastOrgId) {
       const memberSnap = await adminDb
         .collection("organizations")
@@ -67,23 +104,17 @@ export async function GET(req: Request) {
       }
     }
 
-    // Choose a default org:
-    // 1) lastOrgId if it’s in orgs
-    // 2) if only one org, use it
-    // 3) else null
     const defaultOrgId =
       (lastOrgId && orgs.some((o) => o.orgId === lastOrgId) ? lastOrgId : null) ??
       (orgs.length === 1 ? orgs[0].orgId : null);
 
-    // For backward compatibility with your AuthContext.Me shape:
     const primary = defaultOrgId ? orgs.find((o) => o.orgId === defaultOrgId) : null;
 
-    // Authoritative org name (primary org only)
     let org: { id: string; name: string | null } | null = null;
     if (defaultOrgId) {
       const orgSnap = await adminDb.collection("organizations").doc(defaultOrgId).get();
-      const o = orgSnap.exists ? ((orgSnap.data() as any) ?? {}) : {};
-      org = { id: defaultOrgId, name: asNonEmptyString(o?.name) };
+      const o = orgSnap.exists ? ((orgSnap.data() as { name?: unknown }) ?? {}) : {};
+      org = { id: defaultOrgId, name: asNonEmptyString(o.name) };
     }
 
     return NextResponse.json({
@@ -94,17 +125,14 @@ export async function GET(req: Request) {
         orgId: org?.id ?? null,
         role: primary?.role ?? null,
         org,
-        name: user?.name ?? null,
-        position: user?.position ?? null,
+        name: asNonEmptyString(user.name),
+        position: asNonEmptyString(user.position),
       },
       orgs,
       defaultOrgId,
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     const { status, message } = errorToResponse(err);
     return NextResponse.json({ error: message }, { status });
   }
 }
-
-
-

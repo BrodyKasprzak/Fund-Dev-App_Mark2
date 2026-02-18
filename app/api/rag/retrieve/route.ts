@@ -2,11 +2,14 @@ import { NextResponse } from "next/server";
 import { errorToResponse, requireOrgContext } from "@/lib/serverAuth";
 import { retrieveChunks } from "@/lib/rag/retrieveChunks";
 import type { RagRetrieveResponse } from "@/lib/rag/types";
+import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
 
 const DEFAULT_TOP_K = 8;
 const MAX_TOP_K = 20;
+const RAG_RETRIEVE_LIMIT_PER_10_MIN = 120;
+const RAG_RETRIEVE_IP_LIMIT_PER_10_MIN = 240;
 
 type RetrieveBody = {
   query?: unknown;
@@ -39,8 +42,21 @@ function isNoIndexedChunksError(err: unknown) {
 
 export async function POST(req: Request) {
   try {
-    const { orgId } = await requireOrgContext(req);
+    const { orgId, uid } = await requireOrgContext(req);
     const body = (await req.json().catch(() => ({}))) as RetrieveBody;
+
+    await enforceRateLimit({
+      scope: "rag_retrieve_user",
+      key: `${orgId}:${uid}`,
+      limit: RAG_RETRIEVE_LIMIT_PER_10_MIN,
+      windowMs: 10 * 60 * 1000,
+    });
+    await enforceRateLimit({
+      scope: "rag_retrieve_ip",
+      key: getRequestIp(req),
+      limit: RAG_RETRIEVE_IP_LIMIT_PER_10_MIN,
+      windowMs: 10 * 60 * 1000,
+    });
 
     const query = parseQuery(body.query);
     if (!query) {
@@ -56,6 +72,15 @@ export async function POST(req: Request) {
 
     return NextResponse.json(response);
   } catch (err: unknown) {
+    if (err instanceof RateLimitError) {
+      return NextResponse.json(
+        { error: err.message },
+        {
+          status: 429,
+          headers: { "Retry-After": String(err.retryAfterSeconds) },
+        },
+      );
+    }
     if (isMissingMatchChunksFunctionError(err)) {
       return NextResponse.json(
         {

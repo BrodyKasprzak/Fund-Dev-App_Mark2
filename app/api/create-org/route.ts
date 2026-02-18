@@ -2,8 +2,18 @@
 import { NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
 import { getAuth } from "firebase-admin/auth";
+import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
+import { errorToResponse } from "@/lib/serverAuth";
 
 export const runtime = "nodejs";
+const MAX_WORKPLACES = 100;
+const CREATE_ORG_LIMIT_PER_10_MIN = 25;
+const CREATE_ORG_IP_LIMIT_PER_10_MIN = 50;
+
+function activeTesterAccessCode() {
+  const fromEnv = String(process.env.TESTER_ACCESS_CODE ?? "").trim();
+  return fromEnv.length > 0 ? fromEnv : null;
+}
 
 function isValidHttpUrl(url: string) {
   try {
@@ -14,7 +24,7 @@ function isValidHttpUrl(url: string) {
   }
 }
 
-function parseOptionalString(v: any) {
+function parseOptionalString(v: unknown) {
   const s = String(v ?? "").trim();
   return s.length ? s : null;
 }
@@ -43,9 +53,23 @@ export async function POST(req: Request) {
     const uid = decoded.uid;
     const email = decoded.email ?? null;
 
+    await enforceRateLimit({
+      scope: "create_org_user",
+      key: uid,
+      limit: CREATE_ORG_LIMIT_PER_10_MIN,
+      windowMs: 10 * 60 * 1000,
+    });
+    await enforceRateLimit({
+      scope: "create_org_ip",
+      key: getRequestIp(req),
+      limit: CREATE_ORG_IP_LIMIT_PER_10_MIN,
+      windowMs: 10 * 60 * 1000,
+    });
+
     // 3) Parse body
-    const body = await req.json().catch(() => ({}));
+    const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
     const orgName = String(body?.orgName ?? "").trim();
+    const testerAccessCode = String(body?.testerAccessCode ?? "").trim();
     const mission = parseOptionalString(body?.mission);
     const homeState = parseOptionalString(body?.homeState);
     const taxStatus = parseOptionalString(body?.taxStatus);
@@ -72,13 +96,32 @@ export async function POST(req: Request) {
     const websiteConsent = Boolean(body?.websiteConsent);
 
     // 4) Validate required fields
+    if (!testerAccessCode) {
+      return NextResponse.json(
+        { error: "Tester access code is required to create a workplace." },
+        { status: 400 }
+      );
+    }
+    const configuredTesterAccessCode = activeTesterAccessCode();
+    if (!configuredTesterAccessCode) {
+      return NextResponse.json(
+        { error: "Tester access is not configured on this environment." },
+        { status: 503 }
+      );
+    }
+    if (testerAccessCode !== configuredTesterAccessCode) {
+      return NextResponse.json(
+        { error: "Invalid tester access code." },
+        { status: 403 }
+      );
+    }
     if (!orgName) {
       return NextResponse.json(
         { error: "Organization name is required" },
         { status: 400 }
       );
     }
-    if (Number.isNaN(numEmployees as any)) {
+    if (Number.isNaN(numEmployees)) {
       return NextResponse.json(
         { error: "numEmployees must be a non-negative number" },
         { status: 400 }
@@ -109,7 +152,20 @@ export async function POST(req: Request) {
       websiteUrl = websiteUrlRaw;
     }
 
-    // 6) Create org + memberships (atomic batch)
+    // 6) Temporary tester gate: global workspace cap
+    const workplacesCountSnap = await adminDb.collection("organizations").count().get();
+    const workplacesCount = workplacesCountSnap.data().count;
+    if (workplacesCount >= MAX_WORKPLACES) {
+      return NextResponse.json(
+        {
+          error:
+            "Tester workplace limit reached. This environment is capped at 100 workplaces.",
+        },
+        { status: 403 }
+      );
+    }
+
+    // 7) Create org + memberships (atomic batch)
     const now = new Date();
     const orgRef = adminDb.collection("organizations").doc();
     const orgId = orgRef.id;
@@ -182,12 +238,19 @@ export async function POST(req: Request) {
     await batch.commit();
 
     return NextResponse.json({ ok: true, orgId });
-  } catch (err: any) {
+  } catch (err: unknown) {
+    if (err instanceof RateLimitError) {
+      return NextResponse.json(
+        { error: err.message },
+        {
+          status: 429,
+          headers: { "Retry-After": String(err.retryAfterSeconds) },
+        }
+      );
+    }
     console.error("create-org error:", err);
-    return NextResponse.json(
-      { error: err?.message ?? "Server error" },
-      { status: 500 }
-    );
+    const { status, message } = errorToResponse(err);
+    return NextResponse.json({ error: message }, { status });
   }
 }
 

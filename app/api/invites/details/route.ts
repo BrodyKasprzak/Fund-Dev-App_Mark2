@@ -55,11 +55,8 @@ export async function GET(req: Request) {
     const invite = snap.data() as {
       status?: unknown;
       expiresAt?: unknown;
-      email?: unknown;
     } | undefined;
     let status = String(invite?.status ?? "");
-    const inviteEmail =
-      typeof invite?.email === "string" ? invite.email.trim().toLowerCase() : null;
 
     const expiresAt = toDate(invite?.expiresAt);
     const isExpired = Boolean(expiresAt && expiresAt.getTime() <= Date.now());
@@ -76,17 +73,12 @@ export async function GET(req: Request) {
       );
     }
 
-    const orgSnap = await adminDb.collection("organizations").doc(orgId).get();
-    const orgData = orgSnap.data() as { name?: unknown } | undefined;
-    const orgName =
-      orgSnap.exists && typeof orgData?.name === "string" ? orgData.name : null;
-
     return NextResponse.json({
       ok: true,
       orgId,
       inviteId,
-      orgName,
-      inviteEmail,
+      orgName: null,
+      inviteEmail: null,
       status: status || null,
     });
   } catch (err: unknown) {
