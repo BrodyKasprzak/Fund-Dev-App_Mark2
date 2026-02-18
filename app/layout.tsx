@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono, Sora } from "next/font/google";
+import { Suspense } from "react";
 import "./globals.css";
 import { AuthProvider } from "@/lib/AuthContext";
 import { WorkspaceShell } from "@/components/workspace/WorkspaceShell";
@@ -37,7 +38,9 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} ${sora.variable} antialiased`}
       >
         <AuthProvider>
-          <WorkspaceShell>{children}</WorkspaceShell>
+          <Suspense fallback={<main className="min-h-screen bg-white" />}>
+            <WorkspaceShell>{children}</WorkspaceShell>
+          </Suspense>
         </AuthProvider>
       </body>
     </html>

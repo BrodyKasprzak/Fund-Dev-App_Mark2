@@ -10,8 +10,6 @@ import {
   HeadingLevel,
   AlignmentType,
   PageBreak,
-  Footer,
-  PageNumber,
   VerticalAlign,
 } from "docx";
 
@@ -228,25 +226,6 @@ export async function POST(
     titlePageChildren.push(new Paragraph({ children: [new PageBreak()] }));
 
     // ------------------------------
-    // FOOTER (SAFE page number)
-    // ------------------------------
-    const footerWithPageNumbers = new Footer({
-      children: [
-        new Paragraph({
-          alignment: AlignmentType.CENTER,
-          children: [
-            new TextRun({
-              text: "Page ",
-              color: SECONDARY_TEXT_COLOR,
-              size: 20,
-            }),
-            PageNumber.CURRENT,
-          ],
-        }),
-      ],
-    });
-
-    // ------------------------------
     // CONTENTS + BODY
     // ------------------------------
     const bodyChildren: Paragraph[] = [];
@@ -395,12 +374,7 @@ export async function POST(
           children: titlePageChildren,
         },
         {
-          properties: {
-            page: {
-              pageNumbers: { start: 1, formatType: "decimal" },
-            },
-          },
-          footers: { default: footerWithPageNumbers },
+          properties: {},
           children: bodyChildren,
         },
       ],
