@@ -43,14 +43,6 @@ type DocumentDetail = DocumentListItem & {
   };
 };
 
-type SearchResultItem = DocumentListItem & {
-  match?: {
-    inTitle?: boolean;
-    inText?: boolean;
-    snippet?: string | null;
-  };
-};
-
 type ChatSummary = {
   id: string;
   title: string;
@@ -75,41 +67,8 @@ type ChatMessage = {
   contextSummary: string | null;
 };
 
-type FolderNode = {
-  id: string;
-  name: string;
-  note: string;
-  children?: FolderNode[];
-};
-
-const MOCK_FOLDERS: FolderNode[] = [
-  { id: "all", name: "All Documents", note: "Organization-wide" },
-  {
-    id: "status",
-    name: "By Status",
-    note: "System generated",
-    children: [
-      { id: "ready", name: "Text Ready", note: "Extracted text available" },
-      { id: "processing", name: "Processing", note: "Upload/index in progress" },
-      { id: "failed", name: "Needs Attention", note: "Failed upload or extraction" },
-    ],
-  },
-  {
-    id: "folders",
-    name: "Folders",
-    note: "Structured folders",
-    children: [
-      { id: "governance", name: "Governance", note: "Policies and compliance" },
-      { id: "operations", name: "Operations", note: "Internal process docs" },
-      { id: "fundraising", name: "Fundraising", note: "Campaign and grant files" },
-    ],
-  },
-];
-
 const FOLDER_FILTERS: Record<string, (doc: DocumentListItem) => boolean> = {
   all: () => true,
-  status: () => true,
-  folders: () => true,
   ready: (doc) => doc.textStatus === "ready",
   processing: (doc) => doc.status === "processing" || doc.textStatus !== "ready",
   failed: (doc) => doc.status === "failed" || doc.textStatus === "failed",
@@ -119,10 +78,21 @@ const FOLDER_FILTERS: Record<string, (doc: DocumentListItem) => boolean> = {
   fundraising: (doc) => /fund|grant|donor|campaign|appeal/i.test(doc.title),
 };
 
+const FILTER_LABELS: Record<string, string> = {
+  all: "Most recent",
+  ready: "Status: Text Ready",
+  processing: "Status: Processing",
+  failed: "Status: Needs Attention",
+  governance: "Folder: Governance",
+  operations: "Folder: Operations",
+  fundraising: "Folder: Fundraising",
+};
+
 const RAG_SNIPPET_MAX_LENGTH = 200;
 const CHAT_MESSAGE_MAX_LENGTH = 4_000;
 const DOC_WINDOW_LIMIT = 50_000;
 const CHUNK_VIEW_OFFSET_PADDING = 8_000;
+const RECENT_DOCS_DEFAULT_LIMIT = 10;
 
 function parseWorkspaceMode(raw: string | null): WorkspaceMode {
   if (raw === "chat-private") return "chat-private";
@@ -176,10 +146,16 @@ function escapeRegExp(input: string) {
   return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function citationSnippet(snippet: string) {
-  const trimmed = snippet.trim();
-  if (trimmed.length <= RAG_SNIPPET_MAX_LENGTH) return trimmed;
-  return `${trimmed.slice(0, RAG_SNIPPET_MAX_LENGTH)}...`;
+function citationPreviewText(snippet: string) {
+  const normalized = snippet.replace(/\r\n/g, "\n").trim();
+  if (!normalized) return "(No snippet)";
+  const lines = normalized
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const preview = (lines.slice(0, 2).join(" ") || normalized).trim();
+  if (preview.length <= RAG_SNIPPET_MAX_LENGTH) return preview;
+  return `${preview.slice(0, RAG_SNIPPET_MAX_LENGTH)}...`;
 }
 
 function normalizeRagCitations(value: unknown): RagCitation[] {
@@ -284,6 +260,17 @@ function normalizeChatMessage(value: unknown): ChatMessage | null {
   };
 }
 
+function dedupeChatMessages(messages: ChatMessage[]) {
+  const seen = new Set<string>();
+  const next: ChatMessage[] = [];
+  for (const message of messages) {
+    if (!message.id || seen.has(message.id)) continue;
+    seen.add(message.id);
+    next.push(message);
+  }
+  return next;
+}
+
 function supportChipClasses(label: string | null) {
   if (!label) return "bg-slate-100 text-slate-700 border-slate-200";
   if (label.startsWith("Supported by")) return "bg-emerald-50 text-emerald-700 border-emerald-200";
@@ -355,70 +342,6 @@ function ChatIcon() {
   );
 }
 
-type FolderTreeItemProps = {
-  node: FolderNode;
-  depth: number;
-  activeFolderId: string;
-  expandedFolders: Record<string, boolean>;
-  onToggle: (folderId: string) => void;
-  onSelect: (folderId: string) => void;
-};
-
-function FolderTreeItem(props: FolderTreeItemProps) {
-  const { node, depth, activeFolderId, expandedFolders, onToggle, onSelect } = props;
-  const isActive = activeFolderId === node.id;
-  const hasChildren = Array.isArray(node.children) && node.children.length > 0;
-  const expanded = hasChildren ? Boolean(expandedFolders[node.id]) : false;
-
-  return (
-    <li>
-      <div className="flex items-stretch gap-1">
-        {hasChildren ? (
-          <button
-            type="button"
-            onClick={() => onToggle(node.id)}
-            className="mt-1 h-6 w-6 rounded-md border border-slate-200 text-xs text-slate-600 transition hover:bg-slate-100"
-            aria-label={expanded ? `Collapse ${node.name}` : `Expand ${node.name}`}
-          >
-            {expanded ? "-" : "+"}
-          </button>
-        ) : (
-          <span className="mt-1 block h-6 w-6" />
-        )}
-        <button
-          type="button"
-          onClick={() => onSelect(node.id)}
-          className={`flex-1 cursor-pointer rounded-xl border px-3 py-2 text-left transition ${
-            isActive
-              ? "border-slate-900 bg-slate-900 text-white"
-              : "border-slate-200 bg-slate-50 text-slate-900 hover:border-slate-300 hover:bg-slate-100"
-          }`}
-          style={{ marginLeft: depth * 8 }}
-        >
-          <p className="text-sm font-medium">{node.name}</p>
-          <p className={`text-xs ${isActive ? "text-white/80" : "text-slate-500"}`}>{node.note}</p>
-        </button>
-      </div>
-
-      {hasChildren && expanded ? (
-        <ul className="mt-2 space-y-2">
-          {node.children?.map((child) => (
-            <FolderTreeItem
-              key={child.id}
-              node={child}
-              depth={depth + 1}
-              activeFolderId={activeFolderId}
-              expandedFolders={expandedFolders}
-              onToggle={onToggle}
-              onSelect={onSelect}
-            />
-          ))}
-        </ul>
-      ) : null}
-    </li>
-  );
-}
-
 export default function DocumentsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -447,13 +370,10 @@ export default function DocumentsPage() {
   const [selectedDoc, setSelectedDoc] = useState<DocumentDetail | null>(null);
   const [docLoading, setDocLoading] = useState(false);
   const [loadingMoreText, setLoadingMoreText] = useState(false);
-  const [reindexing, setReindexing] = useState(false);
   const [leftFilter, setLeftFilter] = useState("");
   const [activeFolderId, setActiveFolderId] = useState("all");
-  const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({
-    status: false,
-    folders: false,
-  });
+  const [docFiltersOpen, setDocFiltersOpen] = useState(false);
+  const [showAllDocs, setShowAllDocs] = useState(false);
   const [detailAnchorQuery, setDetailAnchorQuery] = useState<string | null>(null);
   const [detailOffset, setDetailOffset] = useState<number | null>(null);
   const [viewerHighlightQuery, setViewerHighlightQuery] = useState<string | null>(null);
@@ -463,10 +383,6 @@ export default function DocumentsPage() {
   const [uploadTitle, setUploadTitle] = useState("");
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
-
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searching, setSearching] = useState(false);
-  const [searchResults, setSearchResults] = useState<SearchResultItem[]>([]);
 
   const [chatList, setChatList] = useState<ChatSummary[]>([]);
   const [chatListLoading, setChatListLoading] = useState(false);
@@ -487,6 +403,7 @@ export default function DocumentsPage() {
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const handledDeepLinkRef = useRef<string | null>(null);
   const chatAutoScrollRef = useRef(true);
+  const chatSendInFlightRef = useRef(false);
 
   const displayName = useMemo(() => {
     const candidate = typeof me?.name === "string" ? me.name.trim() : "";
@@ -499,23 +416,25 @@ export default function DocumentsPage() {
   const activeChats = chatList;
   const chatsLoading = chatListLoading;
   const isChatMode = workspaceMode === "chat-private";
-  const activeChat = useMemo(
-    () => activeChats.find((chat) => chat.id === activeChatId) || null,
-    [activeChats, activeChatId],
-  );
 
-  const normalizedSearchQuery = searchQuery.trim();
-  const effectiveHighlightQuery = (normalizedSearchQuery || viewerHighlightQuery || "").trim();
+  const effectiveHighlightQuery = (viewerHighlightQuery || "").trim();
+  const normalizedLeftFilter = leftFilter.trim();
 
   const visibleDocs = useMemo(() => {
-    const q = leftFilter.trim().toLowerCase();
+    const q = normalizedLeftFilter.toLowerCase();
     const folderFilter = FOLDER_FILTERS[activeFolderId] || FOLDER_FILTERS.all;
     return docs.filter((doc) => {
       if (!folderFilter(doc)) return false;
       if (!q) return true;
       return doc.title.toLowerCase().includes(q);
     });
-  }, [docs, leftFilter, activeFolderId]);
+  }, [docs, normalizedLeftFilter, activeFolderId]);
+  const showingRecentOnly = activeFolderId === "all" && !normalizedLeftFilter && !showAllDocs;
+  const displayedDocs = useMemo(
+    () => (showingRecentOnly ? visibleDocs.slice(0, RECENT_DOCS_DEFAULT_LIMIT) : visibleDocs),
+    [showingRecentOnly, visibleDocs],
+  );
+  const activeFilterLabel = FILTER_LABELS[activeFolderId] || FILTER_LABELS.all;
 
   const selectedMeta = useMemo(
     () => docs.find((d) => d.id === selectedDocId) || null,
@@ -530,7 +449,9 @@ export default function DocumentsPage() {
       next.set("mode", mode);
       if (mode === "documents" || !chatId) next.delete("chatId");
       else next.set("chatId", chatId);
-      router.replace(`/documents?${next.toString()}`);
+      const nextQuery = next.toString();
+      if (nextQuery === searchParams.toString()) return;
+      router.replace(nextQuery ? `/documents?${nextQuery}` : "/documents");
     },
     [router, searchParams],
   );
@@ -581,7 +502,7 @@ export default function DocumentsPage() {
       setSelectedDocId((current) => {
         if (documents.length === 0) return null;
         if (current && documents.some((d) => d.id === current)) return current;
-        return documents[0].id;
+        return null;
       });
     } catch (err: unknown) {
       if (err instanceof Error) setError(err.message);
@@ -680,32 +601,6 @@ export default function DocumentsPage() {
     }
   }
 
-  async function handleReindexSelectedDoc() {
-    if (!selectedDocId || reindexing) return;
-    setReindexing(true);
-    setError(null);
-    setMessage(null);
-    try {
-      const res = await authedFetch(`/api/documents/${selectedDocId}/extract-text`, {
-        method: "POST",
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(
-          typeof data?.error === "string" ? data.error : "Failed to re-index document",
-        );
-      }
-
-      await loadDocuments();
-      setMessage("Document text/chunks re-indexed successfully.");
-    } catch (err: unknown) {
-      if (err instanceof Error) setError(err.message);
-      else setError("Failed to re-index document");
-    } finally {
-      setReindexing(false);
-    }
-  }
-
   const loadChats = useCallback(async () => {
     if (!user) return;
     setChatListLoading(true);
@@ -761,7 +656,7 @@ export default function DocumentsPage() {
               .filter((item: ChatMessage | null): item is ChatMessage => Boolean(item))
           : [];
         if (cancelled) return;
-        setChatMessages(messages);
+        setChatMessages(dedupeChatMessages(messages));
       } catch (err: unknown) {
         if (!cancelled) {
           setChatMessages([]);
@@ -817,36 +712,17 @@ export default function DocumentsPage() {
     return nextChat.id;
   }
 
-  async function handleResetContext() {
-    if (!activeChatId) return;
-    setChatError(null);
-    try {
-      const res = await authedFetch(`/api/chats/${activeChatId}/reset`, { method: "POST" });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || "Failed to reset context");
-      const nextChat = normalizeChatSummaries([data?.chat])[0];
-      if (!nextChat) throw new Error("Invalid reset response");
-      setChatList((current) => [nextChat, ...current.filter((chat) => chat.id !== nextChat.id)]);
-      setActiveChatId(nextChat.id);
-      setChatMessages([]);
-      switchToChatMode(nextChat.id);
-    } catch (err: unknown) {
-      if (err instanceof Error) setChatError(err.message);
-      else setChatError("Failed to reset context");
-    }
-  }
-
   async function handleSendChatMessage() {
     const content = chatInput.trim();
-    if (!content || chatSending) return;
+    if (!content || chatSending || chatSendInFlightRef.current) return;
     if (content.length > CHAT_MESSAGE_MAX_LENGTH) {
       setChatError(`Message too long (${CHAT_MESSAGE_MAX_LENGTH} char max).`);
       return;
     }
 
+    chatSendInFlightRef.current = true;
     setChatSending(true);
     setChatError(null);
-    switchToChatMode(activeChatId);
 
     try {
       const chatId = await ensureActiveChatId(content);
@@ -864,13 +740,14 @@ export default function DocumentsPage() {
         (item): item is ChatMessage => Boolean(item),
       );
 
-      setChatMessages((current) => [...current, ...nextMessages]);
+      setChatMessages((current) => dedupeChatMessages([...current, ...nextMessages]));
       setChatInput("");
       await loadChats();
     } catch (err: unknown) {
       if (err instanceof Error) setChatError(err.message);
       else setChatError("Failed to send message");
     } finally {
+      chatSendInFlightRef.current = false;
       setChatSending(false);
     }
   }
@@ -927,45 +804,6 @@ export default function DocumentsPage() {
   }, [deepLinkDocId, deepLinkHighlight, resolveHighlightToAnchor, switchToDocumentsMode]);
 
   useEffect(() => {
-    if (!user) return;
-    if (!normalizedSearchQuery) {
-      setSearchResults([]);
-      setSearching(false);
-      return;
-    }
-
-    let cancelled = false;
-    const timer = setTimeout(async () => {
-      setSearching(true);
-      setError(null);
-      try {
-        const res = await authedFetch(
-          `/api/documents/search?q=${encodeURIComponent(normalizedSearchQuery)}&limit=250`,
-        );
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data?.error || "Search failed");
-        const results = Array.isArray(data?.documents)
-          ? (data.documents as SearchResultItem[])
-          : [];
-        if (!cancelled) setSearchResults(results);
-      } catch (err: unknown) {
-        if (!cancelled) {
-          setSearchResults([]);
-          if (err instanceof Error) setError(err.message);
-          else setError("Search failed");
-        }
-      } finally {
-        if (!cancelled) setSearching(false);
-      }
-    }, 250);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [authedFetch, normalizedSearchQuery, user]);
-
-  useEffect(() => {
     setStatusInfoOpen(false);
   }, [selectedDocId]);
 
@@ -991,6 +829,12 @@ export default function DocumentsPage() {
     if (!chatAutoScrollRef.current) return;
     scrollChatToBottom(chatSending ? "smooth" : "auto");
   }, [chatLoading, chatMessages, chatSending, isChatMode, scrollChatToBottom]);
+
+  useEffect(() => {
+    if (!message) return;
+    const timer = window.setTimeout(() => setMessage(null), 2000);
+    return () => window.clearTimeout(timer);
+  }, [message]);
 
   async function handleUpload() {
     if (!user || !uploadFile || !uploadTitle.trim()) return;
@@ -1051,11 +895,10 @@ export default function DocumentsPage() {
       await authedFetch(`/api/documents/${docId}/extract-text`, { method: "POST" });
 
       await loadDocuments();
-      setSelectedDocId(docId);
       setUploadFile(null);
       setUploadTitle("");
       setUploadProgress(null);
-      setMessage("Upload complete. Document is now available in workspace search.");
+      setMessage("Upload complete. Select the document from the list to open it.");
       switchToDocumentsMode();
     } catch (err: unknown) {
       if (docId) {
@@ -1083,10 +926,25 @@ export default function DocumentsPage() {
     setSelectedDocId(docId);
   }
 
+  function closeDocument() {
+    const next = new URLSearchParams(searchParams.toString());
+    next.delete("docId");
+    next.delete("highlight");
+    next.set("mode", "documents");
+    next.delete("chatId");
+    const nextQuery = next.toString();
+    router.replace(nextQuery ? `/documents?${nextQuery}` : "/documents");
+    handledDeepLinkRef.current = null;
+    setSelectedDocId(null);
+    setSelectedDoc(null);
+    setDetailOffset(null);
+    setDetailAnchorQuery(null);
+    setViewerHighlightQuery(null);
+    setStatusInfoOpen(false);
+  }
+
   function openCitationInDocument(citation: RagCitation) {
     openDocument(citation.docId);
-    setSearchQuery("");
-    setSearchResults([]);
     setDetailOffset(null);
     setDetailAnchorQuery(null);
     setViewerHighlightQuery(null);
@@ -1199,7 +1057,7 @@ export default function DocumentsPage() {
               </p>
             ) : null}
             {message ? (
-              <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700 shadow-sm">
+              <p className="rounded-xl border border-emerald-300/70 bg-emerald-100/60 px-3 py-2 text-sm text-emerald-800 shadow-sm">
                 {message}
               </p>
             ) : null}
@@ -1234,7 +1092,7 @@ export default function DocumentsPage() {
             }
           >
             {leftSidebarCollapsed ? (
-              <div className="flex h-full min-h-0 flex-col justify-end gap-2 rounded-xl border border-slate-200 bg-slate-100 p-2">
+              <div className="flex h-full min-h-0 flex-col justify-start gap-2 rounded-xl border border-slate-200 bg-slate-100 p-2">
                 <button
                   type="button"
                   onClick={(event) => {
@@ -1313,201 +1171,227 @@ export default function DocumentsPage() {
               </button>
             </div>
 
-            <div className="mt-4 space-y-3">
-              <section className="rounded-xl border border-slate-200 bg-slate-100 p-3">
-                <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Upload New File
-                </h2>
-                <div className="mt-2 space-y-2">
-                  <input
-                    type="file"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0] ?? null;
-                      setUploadFile(file);
-                      setUploadTitle(file ? deriveTitle(file.name) : "");
-                    }}
-                    className="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs"
-                  />
-                  <input
-                    value={uploadTitle}
-                    onChange={(e) => setUploadTitle(e.target.value)}
-                    placeholder="Document title"
-                    className="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs"
-                  />
+            {sidebarPanel === "documents" ? (
+              <div className="mt-4 space-y-3">
+                <section className="rounded-xl border border-slate-200 bg-slate-100 p-3">
+                  <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Upload New File
+                  </h2>
+                  <div className="mt-2 space-y-2">
+                    <input
+                      type="file"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0] ?? null;
+                        setUploadFile(file);
+                        setUploadTitle(file ? deriveTitle(file.name) : "");
+                      }}
+                      className="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs"
+                    />
+                    <input
+                      value={uploadTitle}
+                      onChange={(e) => setUploadTitle(e.target.value)}
+                      placeholder="Document title"
+                      className="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs"
+                    />
+                    <button
+                      type="button"
+                      disabled={!uploadFile || !uploadTitle.trim() || uploading}
+                      onClick={() => void handleUpload()}
+                      className="w-full cursor-pointer rounded-lg bg-sky-700 px-3 py-2 text-xs font-semibold text-white transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {uploading ? "Uploading..." : "Upload"}
+                    </button>
+                    {uploadProgress !== null ? (
+                      <p className="text-[11px] text-slate-500">Upload progress: {uploadProgress}%</p>
+                    ) : null}
+                  </div>
+                </section>
+
+                <button
+                  type="button"
+                  onClick={() => void loadDocuments()}
+                  className="w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  Refresh Documents
+                </button>
+
+                <section className="rounded-xl border border-slate-200 bg-slate-100 p-3">
                   <button
                     type="button"
-                    disabled={!uploadFile || !uploadTitle.trim() || uploading}
-                    onClick={() => void handleUpload()}
-                    className="w-full cursor-pointer rounded-lg bg-sky-700 px-3 py-2 text-xs font-semibold text-white transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-60"
+                    onClick={() => setDocFiltersOpen((current) => !current)}
+                    className="flex w-full items-center justify-between text-left"
                   >
-                    {uploading ? "Uploading..." : "Upload"}
+                    <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Filter Docs
+                    </h2>
+                    <span className="text-xs font-semibold text-slate-600">
+                      {docFiltersOpen ? "Hide" : "Show"}
+                    </span>
                   </button>
-                  {uploadProgress !== null ? (
-                    <p className="text-[11px] text-slate-500">Upload progress: {uploadProgress}%</p>
-                  ) : null}
-                </div>
-              </section>
-
-              <section className="rounded-xl border border-slate-200 bg-slate-100 p-3">
-                <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Cross-Document Search
-                </h2>
-                <input
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search all documents..."
-                  className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs"
-                />
-                {normalizedSearchQuery ? (
-                  <div className="mt-2 space-y-2">
-                    <p className="text-[11px] text-slate-500">
-                      {searching
-                        ? "Searching..."
-                        : `Found ${searchResults.length} result(s) for "${normalizedSearchQuery}"`}
-                    </p>
-                    <div className="max-h-36 space-y-2 overflow-y-auto pr-1">
-                      {searchResults.map((result) => (
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Active: <span className="font-medium text-slate-700">{activeFilterLabel}</span>
+                  </p>
+                  {docFiltersOpen ? (
+                    <div className="mt-3 space-y-3">
+                      <input
+                        value={leftFilter}
+                        onChange={(e) => {
+                          const nextValue = e.target.value;
+                          setLeftFilter(nextValue);
+                          if (nextValue.trim()) setShowAllDocs(true);
+                          else if (activeFolderId === "all") setShowAllDocs(false);
+                        }}
+                        placeholder="Search document titles..."
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs"
+                      />
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                          Most recent
+                        </p>
                         <button
-                          key={result.id}
                           type="button"
                           onClick={() => {
-                            openDocument(result.id);
-                            setDetailOffset(null);
-                            setDetailAnchorQuery(normalizedSearchQuery);
-                            setViewerHighlightQuery(normalizedSearchQuery);
+                            setActiveFolderId("all");
+                            if (!normalizedLeftFilter) setShowAllDocs(false);
                           }}
-                          className="w-full cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-2 text-left transition hover:border-slate-300 hover:bg-slate-50"
-                        >
-                          <p className="truncate text-xs font-semibold text-slate-900">{result.title}</p>
-                          <p className="mt-1 text-[11px] text-slate-600">
-                            {result.match?.snippet || "Match found in this document."}
-                          </p>
-                        </button>
-                      ))}
-                      {!searching && searchResults.length === 0 ? (
-                        <p className="rounded-lg border border-dashed border-slate-300 bg-white px-3 py-2 text-xs text-slate-500">
-                          No matches found.
-                        </p>
-                      ) : null}
-                    </div>
-                  </div>
-                ) : null}
-              </section>
-            </div>
-
-            {sidebarPanel === "documents" ? (
-              <div className="mt-4">
-                <ul className="space-y-2">
-                  {MOCK_FOLDERS.map((folder) => (
-                    <FolderTreeItem
-                      key={folder.id}
-                      node={folder}
-                      depth={0}
-                      activeFolderId={activeFolderId}
-                      expandedFolders={expandedFolders}
-                      onToggle={(folderId) =>
-                        setExpandedFolders((current) => ({
-                          ...current,
-                          [folderId]: !current[folderId],
-                        }))
-                      }
-                      onSelect={(folderId) => setActiveFolderId(folderId)}
-                    />
-                  ))}
-                </ul>
-
-                <div className="mt-4 flex items-center justify-between">
-                  <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Documents
-                  </h2>
-                  <button
-                    type="button"
-                    onClick={() => void loadDocuments()}
-                    className="cursor-pointer rounded-md border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
-                  >
-                    Refresh
-                  </button>
-                </div>
-                <p className="mt-1 text-[11px] text-slate-500">
-                  Showing {visibleDocs.length} of {docs.length} in{" "}
-                  <span className="font-medium text-slate-700">{activeFolderId}</span>
-                </p>
-                <input
-                  value={leftFilter}
-                  onChange={(e) => setLeftFilter(e.target.value)}
-                  placeholder="Filter docs"
-                  className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs"
-                />
-                <div className="mt-3 max-h-[38vh] space-y-2 overflow-y-auto pr-1">
-                  {docsLoading ? (
-                    <ListSkeleton />
-                  ) : visibleDocs.length === 0 ? (
-                    <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-500">
-                      No documents found.
-                    </p>
-                  ) : (
-                    visibleDocs.map((doc) => {
-                      const selected = doc.id === selectedDocId;
-                      return (
-                        <button
-                          key={doc.id}
-                          type="button"
-                          onClick={() => openDocument(doc.id)}
-                          className={`w-full cursor-pointer rounded-xl border px-3 py-2 text-left transition ${
-                            selected
+                          className={`mt-1 w-full rounded-lg border px-2.5 py-1.5 text-left text-xs font-medium transition ${
+                            activeFolderId === "all"
                               ? "border-slate-900 bg-slate-900 text-white"
-                              : "border-slate-200 bg-white text-slate-800 hover:border-slate-300 hover:bg-slate-50"
+                              : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
                           }`}
                         >
-                          <p className="truncate text-sm font-medium">{doc.title}</p>
-                          <div className="mt-1 flex items-center justify-between gap-2">
-                            <span
-                              className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
-                                selected
-                                  ? "border-emerald-200/50 bg-emerald-400/20 text-emerald-100"
-                                  : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                          Recent uploads
+                        </button>
+                      </div>
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                          By status
+                        </p>
+                        <div className="mt-1 grid grid-cols-1 gap-1">
+                          {[
+                            { id: "ready", label: "Text Ready" },
+                            { id: "processing", label: "Processing" },
+                            { id: "failed", label: "Needs Attention" },
+                          ].map((option) => (
+                            <button
+                              key={option.id}
+                              type="button"
+                              onClick={() => {
+                                setActiveFolderId(option.id);
+                                setShowAllDocs(true);
+                              }}
+                              className={`rounded-lg border px-2.5 py-1.5 text-left text-xs font-medium transition ${
+                                activeFolderId === option.id
+                                  ? "border-slate-900 bg-slate-900 text-white"
+                                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
                               }`}
                             >
-                              {doc.textStatus}
-                            </span>
-                            <span className={`text-[11px] ${selected ? "text-white/80" : "text-slate-500"}`}>
-                              {formatDate(doc.updatedAt || doc.createdAt)}
-                            </span>
-                          </div>
-                        </button>
-                      );
-                    })
-                  )}
+                              {option.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                          By folders
+                        </p>
+                        <div className="mt-1 grid grid-cols-1 gap-1">
+                          {[
+                            { id: "governance", label: "Governance" },
+                            { id: "operations", label: "Operations" },
+                            { id: "fundraising", label: "Fundraising" },
+                          ].map((option) => (
+                            <button
+                              key={option.id}
+                              type="button"
+                              onClick={() => {
+                                setActiveFolderId(option.id);
+                                setShowAllDocs(true);
+                              }}
+                              className={`rounded-lg border px-2.5 py-1.5 text-left text-xs font-medium transition ${
+                                activeFolderId === option.id
+                                  ? "border-slate-900 bg-slate-900 text-white"
+                                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                              }`}
+                            >
+                              {option.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                </section>
+
+                <div>
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Documents
+                    </h2>
+                    {activeFolderId === "all" &&
+                    !normalizedLeftFilter &&
+                    visibleDocs.length > RECENT_DOCS_DEFAULT_LIMIT ? (
+                      <button
+                        type="button"
+                        onClick={() => setShowAllDocs((current) => !current)}
+                        className="rounded-md border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
+                      >
+                        {showAllDocs ? "Top 10" : "Show all"}
+                      </button>
+                    ) : null}
+                  </div>
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    {showingRecentOnly
+                      ? `Showing top ${Math.min(RECENT_DOCS_DEFAULT_LIMIT, displayedDocs.length)} most recent uploads`
+                      : `Showing ${displayedDocs.length} matching document(s)`}
+                  </p>
+                  <div className="mt-3 max-h-[44vh] space-y-2 overflow-y-auto pr-1">
+                    {docsLoading ? (
+                      <ListSkeleton />
+                    ) : visibleDocs.length === 0 ? (
+                      <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                        No documents found.
+                      </p>
+                    ) : (
+                      displayedDocs.map((doc) => {
+                        const selected = doc.id === selectedDocId;
+                        return (
+                          <button
+                            key={doc.id}
+                            type="button"
+                            onClick={() => openDocument(doc.id)}
+                            className={`w-full cursor-pointer rounded-xl border px-3 py-2 text-left transition ${
+                              selected
+                                ? "border-slate-900 bg-slate-900 text-white"
+                                : "border-slate-200 bg-white text-slate-800 hover:border-slate-300 hover:bg-slate-50"
+                            }`}
+                          >
+                            <p className="truncate text-sm font-medium">{doc.title}</p>
+                            <div className="mt-1 flex items-center justify-between gap-2">
+                              <span
+                                className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+                                  selected
+                                    ? "border-emerald-200/50 bg-emerald-400/20 text-emerald-100"
+                                    : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                }`}
+                              >
+                                {doc.textStatus}
+                              </span>
+                              <span
+                                className={`text-[11px] ${selected ? "text-white/80" : "text-slate-500"}`}
+                              >
+                                {formatDate(doc.updatedAt || doc.createdAt)}
+                              </span>
+                            </div>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
                 </div>
               </div>
             ) : (
               <div className="mt-4 space-y-3">
-                <div className="rounded-xl border border-slate-200 bg-slate-100 p-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                    Private chat
-                  </p>
-                  <p className="mt-1 truncate text-sm font-semibold text-slate-900">
-                    {activeChat?.title || "Select or create a chat"}
-                  </p>
-                  <select
-                    value={activeChatId ?? ""}
-                    onChange={(event) => {
-                      const nextChatId = event.target.value || null;
-                      setActiveChatId(nextChatId);
-                      switchToChatMode(nextChatId);
-                    }}
-                    className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm"
-                  >
-                    <option value="" disabled>
-                      {chatsLoading ? "Loading chats..." : "Select chat"}
-                    </option>
-                    {activeChats.map((chat) => (
-                      <option key={chat.id} value={chat.id}>
-                        {chat.title}
-                      </option>
-                    ))}
-                  </select>
-                </div>
                 <div className="flex items-center justify-between gap-2">
                   <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                     Chat History
@@ -1520,24 +1404,14 @@ export default function DocumentsPage() {
                     Refresh
                   </button>
                 </div>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void handleNewChat()}
-                    className="flex-1 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
-                  >
-                    New chat
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleResetContext()}
-                    disabled={!activeChatId}
-                    className="flex-1 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    Reset
-                  </button>
-                </div>
-                <div className="max-h-[36vh] space-y-2 overflow-y-auto pr-1">
+                <button
+                  type="button"
+                  onClick={() => void handleNewChat()}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                >
+                  New chat
+                </button>
+                <div className="max-h-[64vh] space-y-2 overflow-y-auto pr-1">
                   {chatsLoading ? (
                     <ListSkeleton />
                   ) : activeChats.length === 0 ? (
@@ -1606,6 +1480,13 @@ export default function DocumentsPage() {
                       <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">
                         Updated {formatDate(selectedDoc?.updatedAt || selectedMeta?.updatedAt || null)}
                       </span>
+                      <button
+                        type="button"
+                        onClick={closeDocument}
+                        className="rounded-full border border-slate-300 bg-white px-2.5 py-1 font-semibold text-slate-700 transition hover:bg-slate-100"
+                      >
+                        Close document
+                      </button>
                     </div>
                     {statusInfoOpen ? (
                       <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-xs text-emerald-800">
@@ -1632,16 +1513,6 @@ export default function DocumentsPage() {
                           : ""}
                       </p>
                     ) : null}
-                    <div className="mt-3">
-                      <button
-                        type="button"
-                        onClick={() => void handleReindexSelectedDoc()}
-                        disabled={reindexing}
-                        className="cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {reindexing ? "Re-indexing..." : "Re-index Extraction + Chunks"}
-                      </button>
-                    </div>
                   </div>
 
                   <div className="min-h-[60vh] border border-slate-200 bg-white p-4">
@@ -1652,14 +1523,6 @@ export default function DocumentsPage() {
                           <p className="text-sm text-slate-500">
                             This file has not been extracted yet, or extraction returned no readable text.
                           </p>
-                          <button
-                            type="button"
-                            onClick={() => void handleReindexSelectedDoc()}
-                            disabled={reindexing}
-                            className="cursor-pointer rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
-                          >
-                            {reindexing ? "Re-indexing..." : "Re-run extraction"}
-                          </button>
                         </div>
                       </div>
                     ) : effectiveHighlightQuery ? (
@@ -1775,41 +1638,36 @@ export default function DocumentsPage() {
                                   ) : null}
                                 </div>
                               </div>
-                              <aside className="min-w-0 self-start rounded-md border border-slate-200 bg-slate-100 p-3">
-                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                              <aside className="min-w-0 self-start rounded-2xl border border-slate-200/80 bg-white p-2 shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
+                                <p className="px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                                   Sources
                                 </p>
                                 {chatMessage.citations.length > 0 ? (
-                                  <div className="mt-2 space-y-2">
+                                  <div className="mt-2 space-y-1.5">
                                     {chatMessage.citations.map((citation, index) => {
                                       const citationKey = `${citation.docId}-${citation.chunkId ?? "none"}-${index}`;
                                       return (
-                                        <article
+                                        <button
                                           key={citationKey}
-                                          className="rounded-md border border-slate-200 bg-white p-3"
+                                          type="button"
+                                          onClick={() => openCitationInDocument(citation)}
+                                          className="group w-full rounded-2xl border border-slate-200/80 bg-white px-3 py-2 text-left shadow-[0_8px_20px_rgba(15,23,42,0.05)] transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-[0_12px_24px_rgba(15,23,42,0.08)]"
                                         >
-                                          <div className="flex items-center justify-between gap-2">
-                                            <p className="truncate text-sm font-semibold text-slate-900">
-                                              {citation.docTitle}
-                                            </p>
-                                            <span className="text-[11px] text-slate-500">
-                                              {citation.similarity.toFixed(4)}
-                                            </span>
-                                          </div>
-                                          <p className="mt-0.5 text-xs text-slate-500">
-                                            {citation.headingPath || "Heading path unavailable"}
+                                          <p className="truncate text-sm font-semibold text-slate-900">
+                                            {citation.docTitle}
                                           </p>
-                                          <p className="mt-1 text-xs text-slate-700">
-                                            {citationSnippet(citation.snippet) || "(No snippet)"}
-                                          </p>
-                                          <button
-                                            type="button"
-                                            onClick={() => openCitationInDocument(citation)}
-                                            className="mt-2 rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                                          <p
+                                            className="mt-0.5 text-xs leading-5 text-slate-600"
+                                            style={{
+                                              display: "-webkit-box",
+                                              WebkitLineClamp: 2,
+                                              WebkitBoxOrient: "vertical",
+                                              overflow: "hidden",
+                                            }}
                                           >
-                                            Open in document
-                                          </button>
-                                        </article>
+                                            {citationPreviewText(citation.snippet)}
+                                          </p>
+                                        </button>
                                       );
                                     })}
                                   </div>

@@ -45,13 +45,15 @@ export async function GET(req: Request) {
     const { uid, email } = await requireAuth(req);
 
     const userRef = adminDb.collection("users").doc(uid);
-    const userSnap = await userRef.get();
+    const [userSnap, membershipsSnap] = await Promise.all([
+      userRef.get(),
+      userRef.collection("memberships").get(),
+    ]);
     const user = (userSnap.data() as UserRecord | undefined) ?? {};
 
     const lastOrgId = asNonEmptyString(user.lastOrgId);
 
     // Membership index (fast path), re-validated against canonical org membership.
-    const membershipsSnap = await userRef.collection("memberships").get();
     const indexedOrgs: OrgSummary[] = membershipsSnap.docs
       .map((d) => {
         const m = d.data() as MembershipIndexRecord;
@@ -115,12 +117,9 @@ export async function GET(req: Request) {
 
     const primary = defaultOrgId ? orgs.find((o) => o.orgId === defaultOrgId) : null;
 
-    let org: { id: string; name: string | null } | null = null;
-    if (defaultOrgId) {
-      const orgSnap = await adminDb.collection("organizations").doc(defaultOrgId).get();
-      const o = orgSnap.exists ? ((orgSnap.data() as { name?: unknown }) ?? {}) : {};
-      org = { id: defaultOrgId, name: asNonEmptyString(o.name) };
-    }
+    const org = defaultOrgId
+      ? { id: defaultOrgId, name: primary?.name ?? null }
+      : null;
 
     return NextResponse.json({
       ok: true,

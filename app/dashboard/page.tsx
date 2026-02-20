@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { collection, doc, getDoc, getDocs } from "firebase/firestore";
+import { collection, doc, getCountFromServer, getDoc } from "firebase/firestore";
 import { db } from "@/lib/firebaseClient";
 import { useAuth } from "@/lib/AuthContext";
 import { KnowledgeAssetPanel } from "@/components/workspace/KnowledgeAssetPanel";
@@ -84,7 +84,7 @@ export default function DashboardPage() {
   const searchParams = useSearchParams();
   const inviteQueryHandledRef = useRef(false);
 
-  const { user, loading, activeOrgId, clearActiveOrgId, authedFetch } = useAuth();
+  const { user, loading, activeOrgId, orgs, me, authedFetch } = useAuth();
 
   const [checkingOrg, setCheckingOrg] = useState(true);
   const [workspaceLoading, setWorkspaceLoading] = useState(true);
@@ -105,8 +105,17 @@ export default function DashboardPage() {
     return cleaned.length > 0 && !inviteSending;
   }, [inviteEmails, inviteSending]);
 
+  const fallbackOrgName =
+    !activeOrgId
+      ? "Your organization"
+      : orgs.find((orgRow) => orgRow.orgId === activeOrgId)?.name?.trim() ||
+        (me?.org?.id === activeOrgId ? me.org?.name?.trim() || "" : "") ||
+        "Your organization";
+
   useEffect(() => {
-    async function checkOrg() {
+    let cancelled = false;
+
+    async function loadOrgProfile() {
       if (loading) return;
 
       if (!user) {
@@ -114,24 +123,25 @@ export default function DashboardPage() {
         return;
       }
 
+      if (!activeOrgId) {
+        router.push("/org-picker");
+        return;
+      }
+
+      if (!cancelled) {
+        setOrg((prev) => {
+          if (prev?.id === activeOrgId) return prev;
+          return {
+            id: activeOrgId,
+            name: fallbackOrgName,
+            mission: null,
+          };
+        });
+        setCheckingOrg(false);
+      }
+
       try {
-        const orgId = activeOrgId;
-
-        if (!orgId) {
-          router.push("/org-picker");
-          return;
-        }
-
-        const memberRef = doc(db, "organizations", orgId, "members", user.uid);
-        const memberSnap = await getDoc(memberRef);
-
-        if (!memberSnap.exists()) {
-          clearActiveOrgId();
-          router.push("/org-picker");
-          return;
-        }
-
-        const orgRef = doc(db, "organizations", orgId);
+        const orgRef = doc(db, "organizations", activeOrgId);
         const orgSnap = await getDoc(orgRef);
         if (!orgSnap.exists()) {
           router.push("/org-picker");
@@ -139,26 +149,26 @@ export default function DashboardPage() {
         }
 
         const raw = orgSnap.data() as Record<string, unknown>;
+        if (cancelled) return;
         setOrg({
-          id: orgId,
-          name: String(raw?.name ?? "").trim() || "Your organization",
+          id: activeOrgId,
+          name: String(raw?.name ?? "").trim() || fallbackOrgName,
           mission: typeof raw?.mission === "string" ? raw.mission : null,
         });
       } catch (err) {
         console.error("Dashboard org check error:", err);
-        router.push("/org-picker");
-        return;
-      } finally {
-        setCheckingOrg(false);
       }
     }
 
-    void checkOrg();
-  }, [activeOrgId, clearActiveOrgId, loading, router, user]);
+    void loadOrgProfile();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeOrgId, fallbackOrgName, loading, router, user]);
 
   useEffect(() => {
     async function loadWorkspaceData() {
-      if (!user || !org?.id) {
+      if (!user || !activeOrgId) {
         setWorkspaceLoading(false);
         return;
       }
@@ -166,9 +176,9 @@ export default function DashboardPage() {
       setWorkspaceLoading(true);
 
       try {
-        const [documentsRes, membersSnap] = await Promise.all([
+        const [documentsRes, membersCountSnap] = await Promise.all([
           authedFetch("/api/documents"),
-          getDocs(collection(db, "organizations", org.id, "members")),
+          getCountFromServer(collection(db, "organizations", activeOrgId, "members")),
         ]);
 
         const documentPayload = await documentsRes.json().catch(() => ({}));
@@ -195,7 +205,7 @@ export default function DashboardPage() {
         }));
         setActivity(documentActivity);
 
-        setTeamMembersCount(membersSnap.size);
+        setTeamMembersCount(membersCountSnap.data().count);
       } catch {
         setDocumentsCount(null);
         setLastUpdatedAt(null);
@@ -207,7 +217,7 @@ export default function DashboardPage() {
     }
 
     void loadWorkspaceData();
-  }, [authedFetch, org?.id, user]);
+  }, [activeOrgId, authedFetch, user]);
 
   function openInviteModal() {
     setInviteMsg(null);
@@ -269,7 +279,7 @@ export default function DashboardPage() {
     }
   }
 
-  if (loading || checkingOrg || workspaceLoading) {
+  if (loading || checkingOrg) {
     return (
       <main className="min-h-screen flex items-center justify-center">
         <div className="text-center">
@@ -325,6 +335,11 @@ export default function DashboardPage() {
               </p>
             </article>
           </div>
+          {workspaceLoading ? (
+            <p className="mt-4 text-xs font-medium uppercase tracking-wide text-slate-500">
+              Updating workspace metrics...
+            </p>
+          ) : null}
         </section>
 
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
@@ -378,8 +393,9 @@ export default function DashboardPage() {
             ) : (
               <div className="mt-4 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center">
                 <p className="text-sm text-slate-600">
-                  Recent activity will appear here as your team uploads documents, saves answers, and
-                  creates grants.
+                  {workspaceLoading
+                    ? "Loading recent activity..."
+                    : "Recent activity will appear here as your team uploads documents, saves answers, and creates grants."}
                 </p>
               </div>
             )}

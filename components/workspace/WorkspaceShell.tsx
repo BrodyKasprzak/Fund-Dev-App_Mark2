@@ -3,10 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { doc, getDoc } from "firebase/firestore";
 import { WorkspaceSidebar } from "@/components/workspace/WorkspaceSidebar";
 import { useAuth } from "@/lib/AuthContext";
-import { db } from "@/lib/firebaseClient";
 
 const WORKSPACE_ROUTE_PREFIXES = [
   "/dashboard",
@@ -43,23 +41,24 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, loading, meLoading, orgs, activeOrgId, setActiveOrgId, authedFetch } = useAuth();
+  const { user, loading, meLoading, orgs, me, activeOrgId, setActiveOrgId, authedFetch } = useAuth();
   const workspaceRoute = Boolean(pathname && isWorkspaceRoute(pathname));
   const isDashboardRoute = Boolean(pathname && (pathname === "/dashboard" || pathname.startsWith("/dashboard/")));
   const isDocumentsRoute = Boolean(pathname && (pathname === "/documents" || pathname.startsWith("/documents/")));
   const pageTitle = useMemo(() => pageTitleFromPath(pathname ?? ""), [pathname]);
   const inviteQueryHandledRef = useRef(false);
 
-  const [headerOrgName, setHeaderOrgName] = useState("Your organization");
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmails, setInviteEmails] = useState<string[]>([""]);
   const [inviteSending, setInviteSending] = useState(false);
   const [inviteMsg, setInviteMsg] = useState<string | null>(null);
 
-  const fallbackOrgName = useMemo(() => {
-    if (!activeOrgId) return "Your organization";
-    return orgs.find((org) => org.orgId === activeOrgId)?.name?.trim() || "Your organization";
-  }, [activeOrgId, orgs]);
+  const headerOrgName =
+    !activeOrgId
+      ? "Your organization"
+      : orgs.find((org) => org.orgId === activeOrgId)?.name?.trim() ||
+        (me?.org?.id === activeOrgId ? me.org?.name?.trim() || "" : "") ||
+        "Your organization";
 
   useEffect(() => {
     if (!pathname || !workspaceRoute) return;
@@ -94,36 +93,6 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
       return;
     }
   }, [activeOrgId, loading, meLoading, orgs, pathname, router, searchParams, setActiveOrgId, user, workspaceRoute]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadHeaderOrgName() {
-      if (!activeOrgId) {
-        if (!cancelled) setHeaderOrgName("Your organization");
-        return;
-      }
-
-      if (!cancelled) setHeaderOrgName(fallbackOrgName);
-
-      try {
-        const orgRef = doc(db, "organizations", activeOrgId);
-        const orgSnap = await getDoc(orgRef);
-        if (!orgSnap.exists()) return;
-
-        const raw = orgSnap.data() as Record<string, unknown>;
-        const name = typeof raw?.name === "string" ? raw.name.trim() : "";
-        if (!cancelled && name) setHeaderOrgName(name);
-      } catch {
-        if (!cancelled) setHeaderOrgName(fallbackOrgName);
-      }
-    }
-
-    void loadHeaderOrgName();
-    return () => {
-      cancelled = true;
-    };
-  }, [activeOrgId, fallbackOrgName]);
 
   useEffect(() => {
     if (!pathname) return;

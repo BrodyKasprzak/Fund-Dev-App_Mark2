@@ -123,6 +123,12 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
   }, [compactNav, reducedMotion, mutedAccent]);
 
   useEffect(() => {
+    for (const item of NAV_ITEMS) {
+      router.prefetch(item.href);
+    }
+  }, [router]);
+
+  useEffect(() => {
     let cancelled = false;
 
     async function loadOrgForSidebar() {
@@ -132,13 +138,6 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
       }
 
       try {
-        const memberRef = doc(db, "organizations", activeOrgId, "members", user.uid);
-        const memberSnap = await getDoc(memberRef);
-        if (!memberSnap.exists()) {
-          if (!cancelled) setOrg(null);
-          return;
-        }
-
         const orgRef = doc(db, "organizations", activeOrgId);
         const orgSnap = await getDoc(orgRef);
         if (!orgSnap.exists()) {
@@ -174,8 +173,8 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
     };
   }, [activeOrgId, loading, user]);
 
-  const navPad = compactNav ? "px-4 py-2" : "px-4 py-2.5";
-  const navDesc = compactNav ? "mt-0.5 text-[11px] leading-snug" : "mt-1 text-xs leading-snug";
+  const navPad = compactNav ? "px-3.5 py-1.5" : "px-4 py-2";
+  const navDesc = compactNav ? "mt-0 text-[10px] leading-tight" : "mt-0.5 text-[11px] leading-tight";
 
   return (
     <aside
@@ -186,11 +185,11 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
       <button
         type="button"
         onClick={() => setCollapsed((v) => !v)}
-        className="absolute -right-3 top-6 z-10 flex h-7 w-7 items-center justify-center rounded-full bg-white shadow-lg transition hover:shadow-xl"
+        className="absolute -right-3 top-6 z-10 flex h-7 w-7 items-center justify-center rounded-full border border-indigo-300/40 bg-indigo-950/50 shadow-[0_8px_20px_rgba(49,46,129,0.35)] backdrop-blur-md transition hover:bg-indigo-900/65 hover:shadow-[0_10px_24px_rgba(49,46,129,0.45)]"
         aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
       >
         <svg
-          className={`h-4 w-4 text-primary-700 transition-transform ${collapsed ? "rotate-180" : ""}`}
+          className={`h-4 w-4 text-indigo-100/95 transition-transform ${collapsed ? "rotate-180" : ""}`}
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
@@ -275,7 +274,7 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
                   >
                     <div className="flex items-center gap-2">
                       <div className={`h-2 w-2 rounded-full ${item.indicatorClass}`} />
-                      <div className="text-sm font-semibold">{item.label}</div>
+                      <div className="text-[13px] font-semibold">{item.label}</div>
                     </div>
                     <div className={`${navDesc} text-white/80`}>{item.description}</div>
                   </button>
@@ -292,7 +291,7 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
               >
                 <div className="flex items-center gap-2">
                   <div className="h-2 w-2 rounded-full bg-amber-300" />
-                  <div className="text-sm font-semibold">Invite Member</div>
+                  <div className="text-[13px] font-semibold">Invite Member</div>
                 </div>
                 <div className={`${navDesc} text-white/80`}>Invite teammates to this organization</div>
               </button>
@@ -310,7 +309,7 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
               >
                 <div className="flex items-center gap-2">
                   <div className="h-2 w-2 rounded-full bg-sky-300" />
-                  <div className="text-sm font-semibold">Settings</div>
+                  <div className="text-[13px] font-semibold">Settings</div>
                 </div>
                 <div className={`${navDesc} text-white/80`}>
                   {settingsOpen ? "Close settings panel" : "Open quick workspace controls"}
@@ -392,7 +391,7 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
               >
                 <div className="flex items-center gap-2">
                   <div className="h-2 w-2 rounded-full bg-slate-200" />
-                  <div className="text-sm font-semibold">Sign out</div>
+                  <div className="text-[13px] font-semibold">Sign out</div>
                 </div>
                 <div className={`${navDesc} text-white/80`}>Log out of this account</div>
               </button>

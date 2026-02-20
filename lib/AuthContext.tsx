@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged, User } from "firebase/auth";
 import { auth } from "@/lib/firebaseClient";
 
@@ -97,7 +97,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Keep localStorage in sync
-  const setActiveOrgId = (orgId: string | null) => {
+  const setActiveOrgId = useCallback((orgId: string | null) => {
     const cleaned = (orgId ?? "").trim();
     const next = cleaned.length ? cleaned : null;
     _setActiveOrgId(next);
@@ -108,9 +108,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // ignore storage failures
     }
-  };
+  }, []);
 
-  const clearActiveOrgId = () => setActiveOrgId(null);
+  const clearActiveOrgId = useCallback(() => setActiveOrgId(null), [setActiveOrgId]);
 
   // Auth state listener
   useEffect(() => {
@@ -130,7 +130,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function refreshMe(): Promise<Me | null> {
+  const refreshMe = useCallback(async (): Promise<Me | null> => {
     if (!user) return null;
 
     setMeLoading(true);
@@ -197,14 +197,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setMeLoading(false);
     }
-  }
+  }, [activeOrgId, setActiveOrgId, user]);
 
   // Load “me” after sign-in (and keep activeOrgId valid)
   useEffect(() => {
     if (!user) return;
-    refreshMe();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
+    void refreshMe();
+  }, [refreshMe, user]);
 
   const authedFetch: AuthedFetch = useMemo(() => {
     return async (input, init = {}) => {
