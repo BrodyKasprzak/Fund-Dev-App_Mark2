@@ -46,7 +46,7 @@ const QUICK_ACTIONS: QuickAction[] = [
   {
     label: "Ask a Question",
     description: "Open grounded org chat over your documents",
-    href: "/documents?mode=chat",
+    href: "/documents?mode=chat-private",
     style:
       "border-sky-200 bg-white text-slate-900 hover:border-sky-300 hover:shadow-sky-100",
   },

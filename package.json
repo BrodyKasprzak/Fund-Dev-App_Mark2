@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "migrate:chats:private": "node scripts/migrate-group-chats-to-private.js",
+    "delete:chats:group": "node scripts/delete-group-chats.js"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",

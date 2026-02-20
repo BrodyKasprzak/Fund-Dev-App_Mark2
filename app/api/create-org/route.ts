@@ -174,6 +174,10 @@ export async function POST(req: Request) {
     const memberRef = orgRef.collection("members").doc(uid);
     const userRef = adminDb.collection("users").doc(uid);
     const userMembershipRef = userRef.collection("memberships").doc(orgId);
+    const existingUserSnap = await userRef.get();
+    const existingUser = existingUserSnap.data() as { name?: unknown; position?: unknown } | undefined;
+    const userName = parseOptionalString(existingUser?.name);
+    const userPosition = parseOptionalString(existingUser?.position);
 
     const batch = adminDb.batch();
 
@@ -202,6 +206,8 @@ export async function POST(req: Request) {
         uid,
         email,
         role: "admin",
+        name: userName,
+        position: userPosition,
         createdAt: now,
         createdBy: uid,
         updatedAt: now,
@@ -217,6 +223,8 @@ export async function POST(req: Request) {
         updatedAt: now,
         createdAt: now,
         lastOrgId: orgId,
+        ...(userName ? { name: userName } : {}),
+        ...(userPosition ? { position: userPosition } : {}),
       },
       { merge: true }
     );

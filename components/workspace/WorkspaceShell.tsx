@@ -46,6 +46,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   const { user, loading, meLoading, orgs, activeOrgId, setActiveOrgId, authedFetch } = useAuth();
   const workspaceRoute = Boolean(pathname && isWorkspaceRoute(pathname));
   const isDashboardRoute = Boolean(pathname && (pathname === "/dashboard" || pathname.startsWith("/dashboard/")));
+  const isDocumentsRoute = Boolean(pathname && (pathname === "/documents" || pathname.startsWith("/documents/")));
   const pageTitle = useMemo(() => pageTitleFromPath(pathname ?? ""), [pathname]);
   const inviteQueryHandledRef = useRef(false);
 
@@ -213,7 +214,11 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
     <div className="workspace-shell min-h-screen">
       <div className="flex min-h-screen">
         <WorkspaceSidebar onInviteClick={openInviteModal} />
-        <section className="workspace-main min-w-0 flex-1 overflow-y-auto">
+        <section
+          className={`workspace-main min-w-0 flex-1 ${
+            isDocumentsRoute ? "overflow-visible" : "overflow-y-auto"
+          }`}
+        >
           <div
             className={`workspace-brand-strip border-b border-slate-300/80 bg-white/75 px-5 backdrop-blur md:px-7 ${
               isDashboardRoute ? "py-3" : "py-1.5"

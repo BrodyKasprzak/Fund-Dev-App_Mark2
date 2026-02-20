@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { signOut } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
@@ -87,7 +87,7 @@ function initialsFromName(name?: string) {
 export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void }) {
   const router = useRouter();
   const pathname = usePathname();
-  const { user, loading, activeOrgId } = useAuth();
+  const { user, loading, activeOrgId, me } = useAuth();
 
   const [org, setOrg] = useState<OrgProfile | null>(null);
   const [orgInfoOpen, setOrgInfoOpen] = useState(false);
@@ -102,7 +102,12 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
   const orgName = org?.name ?? "Your organization";
   const mission = org?.mission?.trim() ? org.mission : null;
   const avatarText = initialsFromName(orgName);
-  const signedInEmail = useMemo(() => user?.email ?? "Unknown", [user?.email]);
+  const signedInEmail = user?.email ?? "Unknown";
+  const signedInName = typeof me?.name === "string" ? me.name.trim() : "";
+  const signedInIdentity =
+    signedInName && signedInName.toLowerCase() !== signedInEmail.toLowerCase()
+      ? `${signedInName} (${signedInEmail})`
+      : signedInName || signedInEmail;
 
   useEffect(() => {
     const root = document.documentElement;
@@ -174,7 +179,7 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
 
   return (
     <aside
-      className={`relative border-r border-white/20 bg-gradient-to-br from-primary-800 via-primary-700 to-accent-600 text-white shadow-xl transition-all duration-300 ${
+      className={`relative sticky top-0 self-start h-screen flex-shrink-0 border-r border-white/20 bg-gradient-to-br from-primary-800 via-primary-700 to-accent-600 text-white shadow-xl transition-all duration-300 ${
         collapsed ? "w-16" : "w-[312px]"
       }`}
     >
@@ -204,7 +209,7 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-base font-semibold text-white">{orgName}</p>
-                  <p className="truncate text-xs text-white/85">{signedInEmail}</p>
+                  <p className="truncate text-xs text-white/85">{signedInIdentity}</p>
                 </div>
               </div>
 

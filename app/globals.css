@@ -74,6 +74,10 @@ body {
   background-color: transparent !important;
 }
 
+.workspace-page > .workspace-page-fill {
+  background-color: #ffffff !important;
+}
+
 .workspace-page > * h1 {
   font-family: var(--font-sora), var(--font-geist-sans), sans-serif;
 }

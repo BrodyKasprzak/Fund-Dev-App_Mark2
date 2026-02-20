@@ -28,6 +28,15 @@ function formatDateTime(value: string | null) {
   });
 }
 
+function formatMemberIdentity(name: string | null, email: string | null, uid: string) {
+  const cleanedName = typeof name === "string" ? name.trim() : "";
+  const cleanedEmail = typeof email === "string" ? email.trim() : "";
+  if (cleanedName && cleanedEmail) return `${cleanedName} (${cleanedEmail})`;
+  if (cleanedName) return cleanedName;
+  if (cleanedEmail) return cleanedEmail;
+  return uid;
+}
+
 export default function MembersPage() {
   const router = useRouter();
   const { user, loading, activeOrgId, authedFetch } = useAuth();
@@ -145,8 +154,9 @@ export default function MembersPage() {
                   {members.map((m) => (
                     <tr key={m.uid} className="border-b border-slate-100 text-sm last:border-b-0">
                       <td className="px-4 py-3">
-                        <p className="font-semibold text-slate-900">{m.name || m.email || m.uid}</p>
-                        <p className="text-xs text-slate-500">{m.email || "--"}</p>
+                        <p className="font-semibold text-slate-900">
+                          {formatMemberIdentity(m.name, m.email, m.uid)}
+                        </p>
                         {m.position ? <p className="text-xs text-slate-500">{m.position}</p> : null}
                       </td>
                       <td className="px-4 py-3 text-slate-700">{m.role || "member"}</td>

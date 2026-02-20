@@ -1,10 +1,64 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { KnowledgeAssetPanel } from "@/components/workspace/KnowledgeAssetPanel";
 
 type Tab = "purpose" | "products" | "contact";
+
+type FloatingFileConfig = {
+  id: string;
+  top: string;
+  left: string;
+  width: number;
+  rotate: number;
+  duration: number;
+  delay: number;
+  opacity: number;
+};
+
+const FLOATING_FILES: FloatingFileConfig[] = [
+  { id: "file-1", top: "12%", left: "7%", width: 234, rotate: -8, duration: 16, delay: 0, opacity: 0.88 },
+  { id: "file-2", top: "62%", left: "8%", width: 230, rotate: -6, duration: 19, delay: 3, opacity: 0.86 },
+];
+
+function FloatingFilesBackground() {
+  return (
+    <div className="pointer-events-none absolute inset-0" aria-hidden="true">
+      <div className="absolute left-[4%] top-[8%] h-72 w-72 rounded-full bg-primary-200/35 blur-[80px]" />
+
+      {FLOATING_FILES.map((file) => (
+        <div
+          key={file.id}
+          className="pf-file absolute rounded-2xl border border-primary-200/55 bg-white/72 shadow-[0_20px_44px_rgba(15,23,42,0.08)] backdrop-blur-sm"
+          style={
+            {
+              top: file.top,
+              left: file.left,
+              width: `${file.width}px`,
+              height: `${Math.round(file.width * 1.3)}px`,
+              "--pf-rotate": `${file.rotate}deg`,
+              opacity: file.opacity,
+              animationDuration: `${file.duration}s`,
+              animationDelay: `-${file.delay}s`,
+            } as CSSProperties & Record<"--pf-rotate", string>
+          }
+        >
+          <div className="bg-[linear-gradient(90deg,rgba(85,81,168,0.10)_0%,rgba(194,118,163,0.08)_55%,rgba(95,138,114,0.08)_100%)] border-b border-primary-200/45 px-4 py-3">
+            <div className="h-2.5 w-16 rounded-full bg-primary-300/70" />
+          </div>
+          <div className="space-y-2 px-4 py-3">
+            <div className="h-2 w-full rounded-full bg-primary-100/85" />
+            <div className="h-2 w-10/12 rounded-full bg-slate-200/90" />
+            <div className="h-2 w-8/12 rounded-full bg-accent-100/80" />
+            <div className="h-2 w-9/12 rounded-full bg-slate-200/90" />
+            <div className="h-2 w-7/12 rounded-full bg-success-100/80" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function TabButton({
   active,
@@ -21,7 +75,7 @@ function TabButton({
       className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
         active
           ? "border border-slate-300 bg-white text-slate-900 shadow-sm"
-          : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+          : "text-slate-600 hover:bg-white hover:text-slate-900"
       }`}
     >
       {label}
@@ -34,8 +88,10 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>("purpose");
 
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top_right,_#f8fafc_0%,_#f8fafc_55%,_#f1f5f9_100%)] text-slate-900">
-      <header className="sticky top-0 z-50 border-b border-slate-200/80 bg-white/95 backdrop-blur">
+    <main className="relative min-h-screen overflow-x-hidden bg-[linear-gradient(165deg,#f8fafc_0%,#f3f6fb_45%,#eef3f9_100%)] text-slate-900">
+      <FloatingFilesBackground />
+
+      <header className="sticky top-0 z-50 border-b border-slate-200/80 bg-white/90 backdrop-blur">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
           <div className="flex items-center gap-3">
             <div className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white">
@@ -47,7 +103,7 @@ export default function Home() {
             </div>
           </div>
 
-          <nav className="hidden items-center gap-1 rounded-full border border-slate-200 bg-slate-50 p-1 md:flex">
+          <nav className="hidden items-center gap-1 rounded-full border border-slate-200 bg-white/90 p-1 md:flex">
             <TabButton
               active={activeTab === "purpose"}
               label="PurposeFramework"
@@ -82,23 +138,36 @@ export default function Home() {
         </div>
       </header>
 
-      <section className="mx-auto max-w-7xl px-5 py-10 sm:px-8">
+      <section className="relative z-10 mx-auto max-w-7xl px-5 py-10 sm:px-8">
         {activeTab === "purpose" ? (
           <div className="space-y-8">
             <div className="grid gap-6 lg:grid-cols-[1.25fr_0.75fr]">
-              <div className="rounded-3xl border border-slate-200 bg-white p-7 shadow-sm sm:p-10">
-                <p className="inline-flex items-center gap-2 rounded-full border border-primary-200 bg-primary-50 px-3 py-1 text-xs font-semibold text-primary-700">
-                  <span className="h-1.5 w-1.5 rounded-full bg-primary-500" />
-                  Modern nonprofit DMS + planning workspace
+              <div className="rounded-3xl border border-slate-200 bg-white/95 p-7 shadow-sm sm:p-10">
+                <p className="text-sm font-semibold uppercase tracking-[0.2em] text-primary-700">
+                  PurposeFramework
                 </p>
                 <h1 className="mt-4 text-4xl font-bold leading-tight tracking-tight text-slate-900 sm:text-5xl">
-                  Purpose-built document operations for fundraising teams.
+                  Purpose-built document operations for fundraisers.
                 </h1>
+                <p className="mt-4 text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  Manager + Knowledge Base + Creator
+                </p>
                 <p className="mt-4 max-w-3xl text-base leading-relaxed text-slate-600 sm:text-lg">
                   PurposeFramework gives nonprofit leaders one place to store, structure, and produce
                   high-value development documentation. It combines disciplined document management with
                   guided strategy workflows so teams can move faster without losing governance quality.
                 </p>
+                <div className="mt-5 flex flex-wrap gap-2">
+                  <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">
+                    Document manager
+                  </span>
+                  <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">
+                    Grounded knowledge base
+                  </span>
+                  <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">
+                    Strategic creator
+                  </span>
+                </div>
                 <div className="mt-7 flex flex-wrap items-center gap-3">
                   <button
                     onClick={() => router.push("/register")}
@@ -115,7 +184,7 @@ export default function Home() {
                 </div>
               </div>
 
-              <div className="rounded-3xl border border-slate-200 bg-white p-7 shadow-sm sm:p-8">
+              <div className="rounded-3xl border border-slate-200 bg-white/95 p-7 shadow-sm sm:p-8">
                 <h2 className="text-xl font-bold text-slate-900">Who this is for</h2>
                 <div className="mt-4 space-y-3 text-sm text-slate-600">
                   <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
@@ -139,21 +208,21 @@ export default function Home() {
             </div>
 
             <div className="grid gap-4 md:grid-cols-3">
-              <article className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <article className="rounded-2xl border border-slate-200 bg-white/95 p-6 shadow-sm">
                 <div className="mb-3 h-1.5 w-16 rounded-full bg-primary-400" />
                 <h3 className="text-lg font-semibold text-slate-900">Standardized Documents</h3>
                 <p className="mt-2 text-sm leading-relaxed text-slate-600">
                   Centralize critical files with structure, ownership, and clean retrieval across teams.
                 </p>
               </article>
-              <article className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <article className="rounded-2xl border border-slate-200 bg-white/95 p-6 shadow-sm">
                 <div className="mb-3 h-1.5 w-16 rounded-full bg-accent-400" />
                 <h3 className="text-lg font-semibold text-slate-900">Strategic Builders</h3>
                 <p className="mt-2 text-sm leading-relaxed text-slate-600">
                   Build handbooks and plans through guided workflows tailored to your organizational context.
                 </p>
               </article>
-              <article className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <article className="rounded-2xl border border-slate-200 bg-white/95 p-6 shadow-sm">
                 <div className="mb-3 h-1.5 w-16 rounded-full bg-success-400" />
                 <h3 className="text-lg font-semibold text-slate-900">Operational Confidence</h3>
                 <p className="mt-2 text-sm leading-relaxed text-slate-600">
@@ -168,7 +237,7 @@ export default function Home() {
 
         {activeTab === "products" ? (
           <div className="space-y-6">
-            <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm sm:p-10">
+            <div className="rounded-3xl border border-slate-200 bg-white/95 p-8 shadow-sm sm:p-10">
               <h1 className="text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl">Products</h1>
               <p className="mt-3 max-w-3xl text-base text-slate-600 sm:text-lg">
                 Professional tools designed for nonprofit development operations, with the reliability and
@@ -177,7 +246,7 @@ export default function Home() {
             </div>
 
             <div className="grid gap-5 lg:grid-cols-2">
-              <article className="rounded-3xl border border-slate-200 bg-white p-7 shadow-sm sm:p-8">
+              <article className="rounded-3xl border border-slate-200 bg-white/95 p-7 shadow-sm sm:p-8">
                 <p className="text-xs font-semibold uppercase tracking-wide text-primary-700">
                   Product 01
                 </p>
@@ -193,7 +262,7 @@ export default function Home() {
                 </ul>
               </article>
 
-              <article className="rounded-3xl border border-slate-200 bg-white p-7 shadow-sm sm:p-8">
+              <article className="rounded-3xl border border-slate-200 bg-white/95 p-7 shadow-sm sm:p-8">
                 <p className="text-xs font-semibold uppercase tracking-wide text-accent-700">
                   Product 02
                 </p>
@@ -210,7 +279,7 @@ export default function Home() {
               </article>
             </div>
 
-            <div className="rounded-3xl border border-slate-200 bg-white p-7 shadow-sm sm:p-8">
+            <div className="rounded-3xl border border-slate-200 bg-white/95 p-7 shadow-sm sm:p-8">
               <div className="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
                 <p className="max-w-2xl text-sm text-slate-600">
                   Start with secure document operations, then layer in your strategic planning workflows as your
@@ -229,7 +298,7 @@ export default function Home() {
 
         {activeTab === "contact" ? (
           <div className="space-y-6">
-            <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm sm:p-10">
+            <div className="rounded-3xl border border-slate-200 bg-white/95 p-8 shadow-sm sm:p-10">
               <h1 className="text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl">Contact</h1>
               <p className="mt-3 max-w-3xl text-base text-slate-600 sm:text-lg">
                 If you are evaluating PurposeFramework for your nonprofit or consulting team, we can help map
@@ -238,14 +307,14 @@ export default function Home() {
             </div>
 
             <div className="grid gap-5 md:grid-cols-2">
-              <article className="rounded-3xl border border-slate-200 bg-white p-7 shadow-sm">
+              <article className="rounded-3xl border border-slate-200 bg-white/95 p-7 shadow-sm">
                 <h2 className="text-xl font-bold text-slate-900">Best fit organizations</h2>
                 <p className="mt-3 text-sm leading-relaxed text-slate-600">
                   Teams with growing fundraising complexity, shared ownership across staff/board, and a need for
                   consistent documentation standards.
                 </p>
               </article>
-              <article className="rounded-3xl border border-slate-200 bg-white p-7 shadow-sm">
+              <article className="rounded-3xl border border-slate-200 bg-white/95 p-7 shadow-sm">
                 <h2 className="text-xl font-bold text-slate-900">Current status</h2>
                 <p className="mt-3 text-sm leading-relaxed text-slate-600">
                   Contact intake is being finalized. For now, create an organization to view the full product flow.
@@ -253,7 +322,7 @@ export default function Home() {
               </article>
             </div>
 
-            <div className="rounded-3xl border border-slate-200 bg-white p-7 shadow-sm">
+            <div className="rounded-3xl border border-slate-200 bg-white/95 p-7 shadow-sm">
               <button
                 onClick={() => router.push("/register")}
                 className="rounded-full bg-slate-900 px-6 py-3 text-sm font-semibold text-white transition hover:bg-slate-700"
@@ -265,12 +334,37 @@ export default function Home() {
         ) : null}
       </section>
 
-      <footer className="border-t border-slate-200 bg-white">
+      <footer className="relative z-10 border-t border-slate-200 bg-white/95 backdrop-blur">
         <div className="mx-auto flex max-w-7xl flex-col gap-2 px-5 py-6 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:px-8">
           <p>(c) 2026 PurposeFramework</p>
           <p>Secure document operations for nonprofit fundraising teams</p>
         </div>
       </footer>
+
+      <style jsx>{`
+        .pf-file {
+          animation-name: pf-file-float;
+          animation-timing-function: ease-in-out;
+          animation-iteration-count: infinite;
+          will-change: transform;
+        }
+
+        @keyframes pf-file-float {
+          0%,
+          100% {
+            transform: translate3d(0, 0, 0) rotate(var(--pf-rotate, 0deg));
+          }
+          50% {
+            transform: translate3d(0, -14px, 0) rotate(var(--pf-rotate, 0deg));
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .pf-file {
+            animation: none;
+          }
+        }
+      `}</style>
     </main>
   );
 }

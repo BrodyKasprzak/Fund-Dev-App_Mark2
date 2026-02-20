@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -9,7 +9,9 @@ import type { RagCitation } from "@/lib/rag/types";
 
 type DocStatus = "ready" | "processing" | "failed";
 type TextStatus = "pending" | "processing" | "ready" | "failed";
-type ViewMode = "document" | "chat";
+type ChatVisibility = "private";
+type WorkspaceMode = "documents" | "chat-private";
+type SidebarPanel = "documents" | "history";
 
 type DocumentListItem = {
   id: string;
@@ -52,6 +54,9 @@ type SearchResultItem = DocumentListItem & {
 type ChatSummary = {
   id: string;
   title: string;
+  visibility: ChatVisibility;
+  ownerUid: string | null;
+  ownerName: string | null;
   createdAt: string | null;
   updatedAt: string | null;
   lastMessageAt: string | null;
@@ -63,6 +68,8 @@ type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   createdAt: string | null;
+  createdBy: string | null;
+  createdByName: string | null;
   citations: RagCitation[];
   supportLabel: string | null;
   contextSummary: string | null;
@@ -112,6 +119,23 @@ const FOLDER_FILTERS: Record<string, (doc: DocumentListItem) => boolean> = {
   fundraising: (doc) => /fund|grant|donor|campaign|appeal/i.test(doc.title),
 };
 
+const RAG_SNIPPET_MAX_LENGTH = 200;
+const CHAT_MESSAGE_MAX_LENGTH = 4_000;
+const DOC_WINDOW_LIMIT = 50_000;
+const CHUNK_VIEW_OFFSET_PADDING = 8_000;
+
+function parseWorkspaceMode(raw: string | null): WorkspaceMode {
+  if (raw === "chat-private") return "chat-private";
+  if (raw === "chat-group" || raw === "chat") return "chat-private";
+  return "documents";
+}
+
+function asOptionalString(value: unknown) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : null;
+}
+
 function formatDate(iso: string | null) {
   if (!iso) return "N/A";
   const d = new Date(iso);
@@ -120,6 +144,18 @@ function formatDate(iso: string | null) {
     month: "short",
     day: "numeric",
     year: "numeric",
+  });
+}
+
+function formatDateTime(iso: string | null) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
   });
 }
 
@@ -140,10 +176,11 @@ function escapeRegExp(input: string) {
   return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-const RAG_SNIPPET_MAX_LENGTH = 200;
-const CHAT_MESSAGE_MAX_LENGTH = 4_000;
-const DOC_WINDOW_LIMIT = 50_000;
-const CHUNK_VIEW_OFFSET_PADDING = 8_000;
+function citationSnippet(snippet: string) {
+  const trimmed = snippet.trim();
+  if (trimmed.length <= RAG_SNIPPET_MAX_LENGTH) return trimmed;
+  return `${trimmed.slice(0, RAG_SNIPPET_MAX_LENGTH)}...`;
+}
 
 function normalizeRagCitations(value: unknown): RagCitation[] {
   if (!Array.isArray(value)) return [];
@@ -181,25 +218,6 @@ function normalizeRagCitations(value: unknown): RagCitation[] {
     })
     .filter((citation): citation is RagCitation => Boolean(citation));
 }
-
-function citationSnippet(snippet: string) {
-  const trimmed = snippet.trim();
-  if (trimmed.length <= RAG_SNIPPET_MAX_LENGTH) return trimmed;
-  return `${trimmed.slice(0, RAG_SNIPPET_MAX_LENGTH)}...`;
-}
-
-function formatDateTime(iso: string | null) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
 function normalizeChatSummaries(value: unknown): ChatSummary[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -208,15 +226,23 @@ function normalizeChatSummaries(value: unknown): ChatSummary[] {
       const chat = item as {
         id?: unknown;
         title?: unknown;
+        visibility?: unknown;
+        ownerUid?: unknown;
+        ownerName?: unknown;
         createdAt?: unknown;
         updatedAt?: unknown;
         lastMessageAt?: unknown;
         summary?: unknown;
       };
       if (typeof chat.id !== "string") return null;
+      if (chat.visibility !== undefined && chat.visibility !== "private") return null;
+      const visibility: ChatVisibility = "private";
       return {
         id: chat.id,
         title: typeof chat.title === "string" ? chat.title : "New chat",
+        visibility,
+        ownerUid: asOptionalString(chat.ownerUid),
+        ownerName: asOptionalString(chat.ownerName),
         createdAt: typeof chat.createdAt === "string" ? chat.createdAt : null,
         updatedAt: typeof chat.updatedAt === "string" ? chat.updatedAt : null,
         lastMessageAt: typeof chat.lastMessageAt === "string" ? chat.lastMessageAt : null,
@@ -233,6 +259,8 @@ function normalizeChatMessage(value: unknown): ChatMessage | null {
     role?: unknown;
     content?: unknown;
     createdAt?: unknown;
+    createdBy?: unknown;
+    createdByName?: unknown;
     citations?: unknown;
     supportLabel?: unknown;
     contextSummary?: unknown;
@@ -244,8 +272,11 @@ function normalizeChatMessage(value: unknown): ChatMessage | null {
     role,
     content: typeof message.content === "string" ? message.content : "",
     createdAt: typeof message.createdAt === "string" ? message.createdAt : null,
+    createdBy: asOptionalString(message.createdBy),
+    createdByName: asOptionalString(message.createdByName),
     citations: role === "assistant" ? normalizeRagCitations(message.citations) : [],
-    supportLabel: role === "assistant" && typeof message.supportLabel === "string" ? message.supportLabel : null,
+    supportLabel:
+      role === "assistant" && typeof message.supportLabel === "string" ? message.supportLabel : null,
     contextSummary:
       role === "assistant" && typeof message.contextSummary === "string"
         ? message.contextSummary
@@ -294,6 +325,33 @@ function ThinkingDots() {
         />
       ))}
     </span>
+  );
+}
+
+function DocumentIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4">
+      <path
+        d="M6 3.5h5l3 3v10H6v-13Z"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+      <path d="M11 3.5v3h3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ChatIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4">
+      <path
+        d="M4 4.5h12v8H9l-3.5 3v-3H4v-8Z"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 
@@ -364,9 +422,25 @@ function FolderTreeItem(props: FolderTreeItemProps) {
 export default function DocumentsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, loading, authedFetch } = useAuth();
+  const { user, loading, authedFetch, me } = useAuth();
 
-  const [viewMode, setViewMode] = useState<ViewMode>("document");
+  const requestedMode = useMemo(
+    () => parseWorkspaceMode(searchParams.get("mode")),
+    [searchParams],
+  );
+  const requestedChatId = useMemo(
+    () => asOptionalString(searchParams.get("chatId")),
+    [searchParams],
+  );
+  const deepLinkDocId = searchParams.get("docId");
+  const deepLinkHighlight = searchParams.get("highlight");
+
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>(requestedMode);
+  const [sidebarPanel, setSidebarPanel] = useState<SidebarPanel>(
+    requestedMode === "documents" ? "documents" : "history",
+  );
+  const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false);
+
   const [docs, setDocs] = useState<DocumentListItem[]>([]);
   const [docsLoading, setDocsLoading] = useState(true);
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
@@ -383,6 +457,7 @@ export default function DocumentsPage() {
   const [detailAnchorQuery, setDetailAnchorQuery] = useState<string | null>(null);
   const [detailOffset, setDetailOffset] = useState<number | null>(null);
   const [viewerHighlightQuery, setViewerHighlightQuery] = useState<string | null>(null);
+  const [statusInfoOpen, setStatusInfoOpen] = useState(false);
 
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadTitle, setUploadTitle] = useState("");
@@ -393,18 +468,17 @@ export default function DocumentsPage() {
   const [searching, setSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResultItem[]>([]);
 
-  const [chats, setChats] = useState<ChatSummary[]>([]);
-  const [chatsLoading, setChatsLoading] = useState(false);
-  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [chatList, setChatList] = useState<ChatSummary[]>([]);
+  const [chatListLoading, setChatListLoading] = useState(false);
+  const [activeChatId, setActiveChatId] = useState<string | null>(
+    requestedMode === "chat-private" ? requestedChatId : null,
+  );
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
   const [chatSending, setChatSending] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [chatError, setChatError] = useState<string | null>(null);
-  const [activeAssistantMessageId, setActiveAssistantMessageId] = useState<string | null>(null);
-  const [statusInfoOpen, setStatusInfoOpen] = useState(false);
-  const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false);
-  const [rightPanelCollapsed, setRightPanelCollapsed] = useState(true);
+  const [copiedAssistantMessageId, setCopiedAssistantMessageId] = useState<string | null>(null);
 
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -412,10 +486,82 @@ export default function DocumentsPage() {
   const firstMatchRef = useRef<HTMLElement | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const handledDeepLinkRef = useRef<string | null>(null);
+  const chatAutoScrollRef = useRef(true);
+
+  const displayName = useMemo(() => {
+    const candidate = typeof me?.name === "string" ? me.name.trim() : "";
+    if (candidate) return candidate;
+    const email = user?.email?.trim() || "";
+    if (email) return email;
+    return "You";
+  }, [me?.name, user?.email]);
+
+  const activeChats = chatList;
+  const chatsLoading = chatListLoading;
+  const isChatMode = workspaceMode === "chat-private";
+  const activeChat = useMemo(
+    () => activeChats.find((chat) => chat.id === activeChatId) || null,
+    [activeChats, activeChatId],
+  );
+
+  const normalizedSearchQuery = searchQuery.trim();
+  const effectiveHighlightQuery = (normalizedSearchQuery || viewerHighlightQuery || "").trim();
+
+  const visibleDocs = useMemo(() => {
+    const q = leftFilter.trim().toLowerCase();
+    const folderFilter = FOLDER_FILTERS[activeFolderId] || FOLDER_FILTERS.all;
+    return docs.filter((doc) => {
+      if (!folderFilter(doc)) return false;
+      if (!q) return true;
+      return doc.title.toLowerCase().includes(q);
+    });
+  }, [docs, leftFilter, activeFolderId]);
+
+  const selectedMeta = useMemo(
+    () => docs.find((d) => d.id === selectedDocId) || null,
+    [docs, selectedDocId],
+  );
+  const extractedText = selectedDoc?.extractedText?.trim() || "";
+  const paragraphs = extractedText ? splitParagraphs(extractedText) : [];
+
+  const updateWorkspaceUrl = useCallback(
+    (mode: WorkspaceMode, chatId: string | null) => {
+      const next = new URLSearchParams(searchParams.toString());
+      next.set("mode", mode);
+      if (mode === "documents" || !chatId) next.delete("chatId");
+      else next.set("chatId", chatId);
+      router.replace(`/documents?${next.toString()}`);
+    },
+    [router, searchParams],
+  );
+
+  const switchToDocumentsMode = useCallback(() => {
+    setWorkspaceMode("documents");
+    setSidebarPanel("documents");
+    updateWorkspaceUrl("documents", null);
+  }, [updateWorkspaceUrl]);
+
+  const switchToChatMode = useCallback(
+    (chatId?: string | null) => {
+      const nextChatId = chatId ?? activeChatId ?? null;
+      setWorkspaceMode("chat-private");
+      setSidebarPanel("history");
+      updateWorkspaceUrl("chat-private", nextChatId);
+    },
+    [activeChatId, updateWorkspaceUrl],
+  );
 
   useEffect(() => {
     if (!loading && !user) router.push("/login");
   }, [loading, user, router]);
+
+  useEffect(() => {
+    setWorkspaceMode(requestedMode);
+    setSidebarPanel(requestedMode === "documents" ? "documents" : "history");
+    if (requestedMode === "chat-private" && requestedChatId) {
+      setActiveChatId(requestedChatId);
+    }
+  }, [requestedChatId, requestedMode]);
 
   async function loadDocuments() {
     if (!user) return;
@@ -505,7 +651,7 @@ export default function DocumentsPage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedDocId, user, fetchDocumentDetail, detailAnchorQuery, detailOffset]);
+  }, [detailAnchorQuery, detailOffset, fetchDocumentDetail, selectedDocId, user]);
 
   async function loadMoreExtractedText() {
     if (!selectedDocId || !selectedDoc?.textWindow?.hasMore || loadingMoreText) return;
@@ -562,34 +708,43 @@ export default function DocumentsPage() {
 
   const loadChats = useCallback(async () => {
     if (!user) return;
-    setChatsLoading(true);
+    setChatListLoading(true);
     setChatError(null);
     try {
-      const res = await authedFetch("/api/chats?limit=25");
+      const res = await authedFetch("/api/chats?limit=25&visibility=private");
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || "Failed to load chats");
-      const nextChats = normalizeChatSummaries(data?.chats);
-      setChats(nextChats);
+      const nextChats = normalizeChatSummaries(data?.chats).filter(
+        (chat) => chat.visibility === "private",
+      );
+      setChatList(nextChats);
       setActiveChatId((current) => {
         if (current && nextChats.some((chat) => chat.id === current)) return current;
-        return nextChats[0]?.id ?? null;
+        return nextChats[0]?.id || null;
       });
     } catch (err: unknown) {
       if (err instanceof Error) setChatError(err.message);
       else setChatError("Failed to load chats");
     } finally {
-      setChatsLoading(false);
+      setChatListLoading(false);
     }
   }, [authedFetch, user]);
 
   useEffect(() => {
-    if (!loading && user) void loadChats();
-  }, [loading, user, loadChats]);
+    if (loading || !user) return;
+    void loadChats();
+  }, [loadChats, loading, user]);
+
+  useEffect(() => {
+    if (requestedMode !== "chat-private") return;
+    if (!requestedChatId) return;
+    if (!chatList.some((chat) => chat.id === requestedChatId)) return;
+    setActiveChatId(requestedChatId);
+  }, [chatList, requestedChatId, requestedMode]);
 
   useEffect(() => {
     if (!activeChatId) {
       setChatMessages([]);
-      setActiveAssistantMessageId(null);
       return;
     }
     let cancelled = false;
@@ -607,12 +762,9 @@ export default function DocumentsPage() {
           : [];
         if (cancelled) return;
         setChatMessages(messages);
-        const latestAssistant = [...messages].reverse().find((item) => item.role === "assistant");
-        setActiveAssistantMessageId(latestAssistant?.id ?? null);
       } catch (err: unknown) {
         if (!cancelled) {
           setChatMessages([]);
-          setActiveAssistantMessageId(null);
           if (err instanceof Error) setChatError(err.message);
           else setChatError("Failed to load chat");
         }
@@ -620,6 +772,7 @@ export default function DocumentsPage() {
         if (!cancelled) setChatLoading(false);
       }
     };
+
     void loadChatDetail();
 
     return () => {
@@ -631,7 +784,7 @@ export default function DocumentsPage() {
     async (title?: string) => {
       const res = await authedFetch("/api/chats", {
         method: "POST",
-        body: JSON.stringify({ title: title?.trim() || "New chat" }),
+        body: JSON.stringify({ title: title?.trim() || "New chat", visibility: "private" }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || "Failed to create chat");
@@ -646,11 +799,10 @@ export default function DocumentsPage() {
     setChatError(null);
     try {
       const nextChat = await createChat("New chat");
-      setChats((current) => [nextChat, ...current.filter((chat) => chat.id !== nextChat.id)]);
+      setChatList((current) => [nextChat, ...current.filter((chat) => chat.id !== nextChat.id)]);
       setActiveChatId(nextChat.id);
       setChatMessages([]);
-      setActiveAssistantMessageId(null);
-      setViewMode("chat");
+      switchToChatMode(nextChat.id);
     } catch (err: unknown) {
       if (err instanceof Error) setChatError(err.message);
       else setChatError("Failed to create chat");
@@ -660,7 +812,7 @@ export default function DocumentsPage() {
   async function ensureActiveChatId(seedTitle: string) {
     if (activeChatId) return activeChatId;
     const nextChat = await createChat(seedTitle);
-    setChats((current) => [nextChat, ...current.filter((chat) => chat.id !== nextChat.id)]);
+    setChatList((current) => [nextChat, ...current.filter((chat) => chat.id !== nextChat.id)]);
     setActiveChatId(nextChat.id);
     return nextChat.id;
   }
@@ -674,11 +826,10 @@ export default function DocumentsPage() {
       if (!res.ok) throw new Error(data?.error || "Failed to reset context");
       const nextChat = normalizeChatSummaries([data?.chat])[0];
       if (!nextChat) throw new Error("Invalid reset response");
-      setChats((current) => [nextChat, ...current.filter((chat) => chat.id !== nextChat.id)]);
+      setChatList((current) => [nextChat, ...current.filter((chat) => chat.id !== nextChat.id)]);
       setActiveChatId(nextChat.id);
       setChatMessages([]);
-      setActiveAssistantMessageId(null);
-      setViewMode("chat");
+      switchToChatMode(nextChat.id);
     } catch (err: unknown) {
       if (err instanceof Error) setChatError(err.message);
       else setChatError("Failed to reset context");
@@ -695,10 +846,11 @@ export default function DocumentsPage() {
 
     setChatSending(true);
     setChatError(null);
-    setViewMode("chat");
+    switchToChatMode(activeChatId);
 
     try {
       const chatId = await ensureActiveChatId(content);
+      switchToChatMode(chatId);
       const res = await authedFetch(`/api/chats/${chatId}/messages`, {
         method: "POST",
         body: JSON.stringify({ content }),
@@ -713,9 +865,6 @@ export default function DocumentsPage() {
       );
 
       setChatMessages((current) => [...current, ...nextMessages]);
-      if (assistantMessage?.role === "assistant") {
-        setActiveAssistantMessageId(assistantMessage.id);
-      }
       setChatInput("");
       await loadChats();
     } catch (err: unknown) {
@@ -758,16 +907,6 @@ export default function DocumentsPage() {
     [authedFetch],
   );
 
-  const deepLinkDocId = searchParams.get("docId");
-  const deepLinkHighlight = searchParams.get("highlight");
-  const requestedMode = searchParams.get("mode");
-
-  useEffect(() => {
-    if (requestedMode === "chat" || requestedMode === "document") {
-      setViewMode(requestedMode);
-    }
-  }, [requestedMode]);
-
   useEffect(() => {
     if (!deepLinkDocId) {
       handledDeepLinkRef.current = null;
@@ -776,8 +915,8 @@ export default function DocumentsPage() {
     const key = `${deepLinkDocId}:${deepLinkHighlight ?? ""}`;
     if (handledDeepLinkRef.current === key) return;
     handledDeepLinkRef.current = key;
+    switchToDocumentsMode();
     setSelectedDocId(deepLinkDocId);
-    setViewMode("document");
     if (deepLinkHighlight) {
       void resolveHighlightToAnchor(deepLinkDocId, deepLinkHighlight);
       return;
@@ -785,10 +924,8 @@ export default function DocumentsPage() {
     setDetailOffset(null);
     setDetailAnchorQuery(null);
     setViewerHighlightQuery(null);
-  }, [deepLinkDocId, deepLinkHighlight, resolveHighlightToAnchor]);
+  }, [deepLinkDocId, deepLinkHighlight, resolveHighlightToAnchor, switchToDocumentsMode]);
 
-  const normalizedSearchQuery = searchQuery.trim();
-  const effectiveHighlightQuery = (normalizedSearchQuery || viewerHighlightQuery || "").trim();
   useEffect(() => {
     if (!user) return;
     if (!normalizedSearchQuery) {
@@ -826,58 +963,34 @@ export default function DocumentsPage() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [normalizedSearchQuery, user, authedFetch]);
-
-  const visibleDocs = useMemo(() => {
-    const q = leftFilter.trim().toLowerCase();
-    const folderFilter = FOLDER_FILTERS[activeFolderId] || FOLDER_FILTERS.all;
-    return docs.filter((doc) => {
-      if (!folderFilter(doc)) return false;
-      if (!q) return true;
-      return doc.title.toLowerCase().includes(q);
-    });
-  }, [docs, leftFilter, activeFolderId]);
-
-  const selectedMeta = useMemo(
-    () => docs.find((d) => d.id === selectedDocId) || null,
-    [docs, selectedDocId],
-  );
-
-  const activeChat = useMemo(
-    () => chats.find((chat) => chat.id === activeChatId) || null,
-    [chats, activeChatId],
-  );
-
-  const activeAssistantMessage = useMemo(() => {
-    if (chatMessages.length === 0) return null;
-    if (activeAssistantMessageId) {
-      const selected = chatMessages.find((msg) => msg.id === activeAssistantMessageId);
-      if (selected?.role === "assistant") return selected;
-    }
-    return [...chatMessages].reverse().find((msg) => msg.role === "assistant") || null;
-  }, [chatMessages, activeAssistantMessageId]);
-
-  const activeCitations = activeAssistantMessage?.citations ?? [];
-  const activeSupportLabel = activeAssistantMessage?.supportLabel ?? null;
-
-  const extractedText = selectedDoc?.extractedText?.trim() || "";
-  const paragraphs = extractedText ? splitParagraphs(extractedText) : [];
-  const layoutGridClass = useMemo(() => {
-    if (leftPanelCollapsed && rightPanelCollapsed) {
-      return "grid-cols-1 md:grid-cols-[24px_minmax(0,1fr)_24px]";
-    }
-    if (leftPanelCollapsed) {
-      return "grid-cols-1 md:grid-cols-[24px_minmax(0,1fr)_320px]";
-    }
-    if (rightPanelCollapsed) {
-      return "grid-cols-1 md:grid-cols-[280px_minmax(0,1fr)_24px]";
-    }
-    return "grid-cols-1 md:grid-cols-[280px_minmax(0,1fr)_320px]";
-  }, [leftPanelCollapsed, rightPanelCollapsed]);
+  }, [authedFetch, normalizedSearchQuery, user]);
 
   useEffect(() => {
     setStatusInfoOpen(false);
   }, [selectedDocId]);
+
+  useEffect(() => {
+    if (!docLoading && selectedDocId && effectiveHighlightQuery && firstMatchRef.current) {
+      firstMatchRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [docLoading, selectedDocId, extractedText, effectiveHighlightQuery]);
+
+  const scrollChatToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
+    if (!chatScrollRef.current) return;
+    chatScrollRef.current.scrollTo({ top: chatScrollRef.current.scrollHeight, behavior });
+  }, []);
+  useEffect(() => {
+    if (!isChatMode) return;
+    chatAutoScrollRef.current = true;
+    const id = requestAnimationFrame(() => scrollChatToBottom("auto"));
+    return () => cancelAnimationFrame(id);
+  }, [activeChatId, isChatMode, scrollChatToBottom]);
+
+  useEffect(() => {
+    if (!isChatMode) return;
+    if (!chatAutoScrollRef.current) return;
+    scrollChatToBottom(chatSending ? "smooth" : "auto");
+  }, [chatLoading, chatMessages, chatSending, isChatMode, scrollChatToBottom]);
 
   async function handleUpload() {
     if (!user || !uploadFile || !uploadTitle.trim()) return;
@@ -943,6 +1056,7 @@ export default function DocumentsPage() {
       setUploadTitle("");
       setUploadProgress(null);
       setMessage("Upload complete. Document is now available in workspace search.");
+      switchToDocumentsMode();
     } catch (err: unknown) {
       if (docId) {
         try {
@@ -961,12 +1075,18 @@ export default function DocumentsPage() {
     }
   }
 
+  function openDocument(docId: string) {
+    switchToDocumentsMode();
+    setDetailOffset(null);
+    setDetailAnchorQuery(null);
+    setViewerHighlightQuery(null);
+    setSelectedDocId(docId);
+  }
+
   function openCitationInDocument(citation: RagCitation) {
-    setViewMode("document");
-    setSelectedDocId(citation.docId);
+    openDocument(citation.docId);
     setSearchQuery("");
     setSearchResults([]);
-    router.replace("/documents");
     setDetailOffset(null);
     setDetailAnchorQuery(null);
     setViewerHighlightQuery(null);
@@ -988,100 +1108,46 @@ export default function DocumentsPage() {
     setViewerHighlightQuery(null);
   }
 
-  useEffect(() => {
-    if (!docLoading && selectedDocId && effectiveHighlightQuery && firstMatchRef.current) {
-      firstMatchRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+  async function copyAssistantMessage(messageId: string, content: string) {
+    if (!content.trim()) return;
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopiedAssistantMessageId(messageId);
+      setTimeout(() => {
+        setCopiedAssistantMessageId((current) => (current === messageId ? null : current));
+      }, 1200);
+    } catch {
+      setChatError("Unable to copy message.");
     }
-  }, [docLoading, selectedDocId, extractedText, effectiveHighlightQuery]);
-
-  useEffect(() => {
-    if (!chatScrollRef.current || viewMode !== "chat") return;
-    chatScrollRef.current.scrollTo({
-      top: chatScrollRef.current.scrollHeight,
-      behavior: "smooth",
-    });
-  }, [chatMessages, chatSending, viewMode]);
-
-  if (loading || docsLoading) {
-    return (
-      <main className="min-h-screen bg-gradient-to-b from-sky-50 via-white to-rose-50 px-4 pb-6 pt-2 sm:px-6 sm:pb-8 sm:pt-3 [font-family:var(--font-geist-sans)]">
-        <div className="mx-auto max-w-[1400px] space-y-4">
-          <div className="h-28 animate-pulse rounded-2xl border border-slate-200 bg-white" />
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-[280px_minmax(0,1fr)_320px]">
-            <section className="rounded-2xl border border-slate-200 bg-white p-4">
-              <ListSkeleton />
-            </section>
-            <section className="rounded-2xl border border-slate-200 bg-white p-6">
-              <ViewerSkeleton />
-            </section>
-            <section className="rounded-2xl border border-slate-200 bg-white p-6">
-              <div className="space-y-3">
-                {[...Array.from({ length: 4 })].map((_, i) => (
-                  <div key={i} className="h-10 animate-pulse rounded bg-slate-100" />
-                ))}
-              </div>
-            </section>
-          </div>
-        </div>
-      </main>
-    );
   }
 
-  if (!user) return null;
+  function messageSenderLabel(chatMessage: ChatMessage) {
+    if (chatMessage.role === "assistant") return "Assistant";
+    if (chatMessage.createdBy && user && chatMessage.createdBy === user.uid) return "You";
+    if (chatMessage.createdByName) return chatMessage.createdByName;
+    return displayName;
+  }
 
-  if (docs.length === 0) {
+  function onChatScroll() {
+    if (!chatScrollRef.current) return;
+    const el = chatScrollRef.current;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    chatAutoScrollRef.current = distanceFromBottom < 80;
+  }
+
+  if (loading || !user) {
     return (
-      <main className="min-h-screen bg-gradient-to-b from-sky-50 via-white to-rose-50 px-4 pb-6 pt-2 sm:px-6 sm:pb-8 sm:pt-3 [font-family:var(--font-geist-sans)]">
-        <div className="mx-auto max-w-4xl space-y-4">
-          <section className="rounded-2xl border border-sky-100 bg-white/95 p-5 shadow-sm">
-            <h2 className="text-lg font-semibold text-slate-900">Upload New Document</h2>
-            <p className="mt-1 text-sm text-slate-600">
-              Start by uploading your first file. It will be indexed for workspace search.
-            </p>
-            <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
-              <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">File</label>
-                <input
-                  type="file"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0] ?? null;
-                    setUploadFile(file);
-                    setUploadTitle(file ? deriveTitle(file.name) : "");
-                  }}
-                  className="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">Title</label>
-                <input
-                  value={uploadTitle}
-                  onChange={(e) => setUploadTitle(e.target.value)}
-                  placeholder="Document title"
-                  className="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
-                />
-              </div>
-              <button
-                type="button"
-                disabled={!uploadFile || !uploadTitle.trim() || uploading}
-                onClick={handleUpload}
-                className="cursor-pointer rounded-lg bg-sky-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {uploading ? "Uploading..." : "Upload"}
-              </button>
-            </div>
-            {uploadProgress !== null ? (
-              <p className="mt-2 text-xs text-slate-500">Upload progress: {uploadProgress}%</p>
-            ) : null}
-          </section>
-
-          <section className="rounded-2xl border border-sky-100 bg-gradient-to-r from-white to-sky-50 p-7 text-center shadow-sm">
-            <h1 className="text-2xl font-bold text-slate-900">Document Workspace</h1>
-            <p className="mt-2 text-sm text-slate-600">
-              Your organization does not have any documents yet.
-            </p>
-            {message ? <p className="mt-3 text-sm text-amber-700">{message}</p> : null}
-            {error ? <p className="mt-3 text-sm text-rose-700">{error}</p> : null}
-          </section>
+      <main className="workspace-page-fill min-h-screen bg-white [font-family:var(--font-geist-sans)]">
+        <div className="w-full min-h-screen bg-white p-3 sm:p-4">
+          <div className="h-12 animate-pulse rounded-2xl border border-slate-200 bg-white/90" />
+          <div className="grid grid-cols-1 gap-0 lg:grid-cols-[320px_minmax(0,1fr)]">
+            <aside className="rounded-2xl border border-slate-200 bg-white/90 p-4">
+              <ListSkeleton />
+            </aside>
+            <section className="rounded-2xl border border-slate-200 bg-white/90 p-6">
+              <ViewerSkeleton />
+            </section>
+          </div>
         </div>
       </main>
     );
@@ -1090,285 +1156,438 @@ export default function DocumentsPage() {
   let firstMatchAssigned = false;
 
   return (
-    <main className="min-h-screen bg-gradient-to-b from-sky-50 via-white to-rose-50 px-4 pb-6 pt-2 sm:px-6 sm:pb-8 sm:pt-3 [font-family:var(--font-geist-sans)]">
-      <div className="mx-auto max-w-[1400px] space-y-4">
-        <header className="rounded-2xl border border-slate-200 bg-white/95 p-5 shadow-sm">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl">Documents</h1>
-            <p className="mt-1 text-sm text-slate-600">
-              Upload, organize, search, and chat across your document library.
-            </p>
-          </div>
-          {error ? <p className="mt-3 text-sm text-rose-700">{error}</p> : null}
-          {message ? <p className="mt-3 text-sm text-amber-700">{message}</p> : null}
-        </header>
-
-        <section className="rounded-2xl border border-sky-100 bg-white/95 p-4 shadow-sm">
-          <div className="flex flex-wrap items-end gap-3">
-            <div className="min-w-[220px] flex-1">
-              <label className="mb-1 block text-sm font-medium text-slate-700">
-                Upload New File
-              </label>
-              <input
-                type="file"
-                onChange={(e) => {
-                  const file = e.target.files?.[0] ?? null;
-                  setUploadFile(file);
-                  setUploadTitle(file ? deriveTitle(file.name) : "");
-                }}
-                className="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
-              />
-            </div>
-            <div className="min-w-[220px] flex-1">
-              <label className="mb-1 block text-sm font-medium text-slate-700">Title</label>
-              <input
-                value={uploadTitle}
-                onChange={(e) => setUploadTitle(e.target.value)}
-                placeholder="Document title"
-                className="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
-              />
-            </div>
-            <button
-              type="button"
-              disabled={!uploadFile || !uploadTitle.trim() || uploading}
-              onClick={handleUpload}
-              className="cursor-pointer rounded-lg bg-sky-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {uploading ? "Uploading..." : "Upload"}
-            </button>
-          </div>
-          {uploadProgress !== null ? (
-            <p className="mt-2 text-xs text-slate-500">Upload progress: {uploadProgress}%</p>
-          ) : null}
-        </section>
-
-        <section className="rounded-2xl border border-sky-100 bg-white/95 p-4 shadow-sm">
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="text-base font-semibold text-slate-900">Cross-Document Search</h2>
-            <p className="text-xs text-slate-500">Searches title and extracted text across files</p>
-          </div>
-          <input
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search across all documents..."
-            className="mt-3 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
-          />
-          {normalizedSearchQuery ? (
-            <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
-              <p className="text-xs text-slate-500">
-                {searching
-                  ? "Searching..."
-                  : `Found ${searchResults.length} result(s) for "${normalizedSearchQuery}"`}
-              </p>
-              <div className="mt-2 max-h-48 space-y-2 overflow-y-auto">
-                {searchResults.map((result) => (
-                  <button
-                    key={result.id}
-                    type="button"
-                    onClick={() => {
-                      setViewMode("document");
-                      setSelectedDocId(result.id);
-                      setDetailOffset(null);
-                      setDetailAnchorQuery(normalizedSearchQuery);
-                      setViewerHighlightQuery(normalizedSearchQuery);
-                      router.replace("/documents");
-                    }}
-                    className="w-full cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-2 text-left transition hover:border-slate-300 hover:bg-slate-50"
-                  >
-                    <p className="text-sm font-semibold text-slate-900">{result.title}</p>
-                    <p className="mt-1 text-xs text-slate-600">
-                      {result.match?.snippet || "Match found in this document. Open to view context."}
-                    </p>
-                  </button>
-                ))}
-                {!searching && searchResults.length === 0 ? (
-                  <p className="rounded-lg border border-dashed border-slate-300 bg-white px-3 py-2 text-sm text-slate-500">
-                    No matches found.
-                  </p>
-                ) : null}
-              </div>
-            </div>
-          ) : null}
-        </section>
-
-        <div className={`relative grid gap-4 ${layoutGridClass}`}>
-          {leftPanelCollapsed ? (
-            <div className="hidden min-h-[68vh] items-center justify-center rounded-2xl border border-slate-300 bg-slate-200/70 md:flex">
-              <button
-                type="button"
-                onClick={() => setLeftPanelCollapsed(false)}
-                aria-label="Show documents panel"
-                className="h-10 w-5 rounded-md border border-slate-300 bg-white text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                &gt;
-              </button>
-            </div>
-          ) : null}
-
-          {!leftPanelCollapsed ? (
-            <aside className="rounded-2xl border border-sky-100 bg-white/95 p-4 shadow-sm">
-            <div className="mb-2 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setLeftPanelCollapsed(true)}
-                className="rounded-md border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                Hide
-              </button>
-            </div>
-            <ul className="mt-3 space-y-2">
-              {MOCK_FOLDERS.map((folder) => (
-                <FolderTreeItem
-                  key={folder.id}
-                  node={folder}
-                  depth={0}
-                  activeFolderId={activeFolderId}
-                  expandedFolders={expandedFolders}
-                  onToggle={(folderId) =>
-                    setExpandedFolders((current) => ({
-                      ...current,
-                      [folderId]: !current[folderId],
-                    }))
-                  }
-                  onSelect={(folderId) => setActiveFolderId(folderId)}
-                />
-              ))}
-            </ul>
-
-            <div className="mt-6 flex items-center justify-between">
-              <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Documents</h2>
-              <button
-                type="button"
-                onClick={() => void loadDocuments()}
-                className="cursor-pointer rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
-              >
-                Refresh
-              </button>
-            </div>
-            <p className="mt-1 text-xs text-slate-500">
-              Showing {visibleDocs.length} of {docs.length} in{" "}
-              <span className="font-medium text-slate-700">{activeFolderId}</span>
-            </p>
-
-            <input
-              value={leftFilter}
-              onChange={(e) => setLeftFilter(e.target.value)}
-              placeholder="Filter docs"
-              className="mt-3 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
-            />
-
-            <div className="mt-3 max-h-[45vh] space-y-2 overflow-y-auto pr-1 md:max-h-[65vh]">
-              {visibleDocs.map((doc) => {
-                const selected = doc.id === selectedDocId;
-                return (
-                  <button
-                    key={doc.id}
-                    type="button"
-                    onClick={() => {
-                      setViewMode("document");
-                      setDetailOffset(null);
-                      setDetailAnchorQuery(null);
-                      setViewerHighlightQuery(null);
-                      setSelectedDocId(doc.id);
-                      router.replace("/documents");
-                    }}
-                    className={`w-full cursor-pointer rounded-xl border px-3 py-2 text-left transition ${
-                      selected
-                        ? "border-slate-900 bg-slate-900 text-white"
-                        : "border-slate-200 bg-white text-slate-800 hover:border-slate-300 hover:bg-slate-50"
-                    }`}
-                  >
-                    <p className="truncate text-sm font-medium">{doc.title}</p>
-                    <div className="mt-1 flex items-center justify-between gap-2">
-                      <span
-                        className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
-                          selected
-                            ? "border-emerald-200/50 bg-emerald-400/20 text-emerald-100"
-                            : "border-emerald-200 bg-emerald-50 text-emerald-700"
-                        }`}
-                      >
-                        Status
-                      </span>
-                      <span className={`text-[11px] ${selected ? "text-white/80" : "text-slate-500"}`}>
-                        {formatDate(doc.updatedAt || doc.createdAt)}
-                      </span>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-            </aside>
-          ) : null}
-
-          <section
-            className={`w-full rounded-2xl border border-sky-100 bg-white/95 p-5 shadow-sm ${
-              leftPanelCollapsed && rightPanelCollapsed ? "md:mx-auto md:w-4/5" : ""
+    <main className="workspace-page-fill min-h-screen bg-white [font-family:var(--font-geist-sans)]">
+      <div className="fixed left-1/2 top-3 z-40 -translate-x-1/2">
+        <div className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white/95 p-1 shadow-lg backdrop-blur">
+          <button
+            type="button"
+            onClick={() => switchToDocumentsMode()}
+            className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+              workspaceMode === "documents"
+                ? "bg-sky-600 text-white"
+                : "bg-sky-50 text-sky-700 hover:bg-sky-100"
             }`}
           >
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <div className="inline-flex rounded-lg border border-sky-200 bg-sky-50/70 p-1">
-                <button
-                  type="button"
-                  onClick={() => setViewMode("document")}
-                  className={`cursor-pointer rounded-md px-2.5 py-1 text-xs font-medium transition ${
-                    viewMode === "document"
-                      ? "bg-white text-slate-900 shadow-sm"
-                      : "text-slate-600 hover:text-slate-900"
-                  }`}
-                >
-                  Documents
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setViewMode("chat")}
-                  className={`cursor-pointer rounded-md px-2.5 py-1 text-xs font-medium transition ${
-                    viewMode === "chat"
-                      ? "bg-white text-slate-900 shadow-sm"
-                      : "text-slate-600 hover:text-slate-900"
-                  }`}
-                >
-                  Chat
-                </button>
-                <button
-                  type="button"
-                  onClick={() => router.push("/products")}
-                  className="cursor-pointer rounded-md px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:bg-white hover:text-slate-900"
-                >
-                  Create New
-                </button>
-              </div>
+            Documents
+          </button>
+          <button
+            type="button"
+            onClick={() => switchToChatMode(activeChatId)}
+            className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+              workspaceMode === "chat-private"
+                ? "bg-emerald-600 text-white"
+                : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+            }`}
+          >
+            Chat (Private)
+          </button>
+          <button
+            type="button"
+            onClick={() => router.push("/products")}
+            className="rounded-full bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 transition hover:bg-amber-100"
+          >
+            Create
+          </button>
+        </div>
+      </div>
+      <div className="w-full min-h-screen bg-white pt-0">
+        {error || message ? (
+          <div className="space-y-2 px-3 pb-2 sm:px-4">
+            {error ? (
+              <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 shadow-sm">
+                {error}
+              </p>
+            ) : null}
+            {message ? (
+              <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700 shadow-sm">
+                {message}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
 
-              <div className="flex items-center gap-2">
+        <div
+          className={`grid min-h-[100dvh] grid-cols-1 gap-0 ${
+            leftSidebarCollapsed
+              ? "lg:grid-cols-[56px_minmax(0,1fr)]"
+              : "lg:grid-cols-[320px_minmax(0,1fr)]"
+          }`}
+        >
+          <aside
+            className={`sticky top-0 self-start border-r border-slate-200 bg-white ${
+              leftSidebarCollapsed
+                ? "h-[100dvh] p-2"
+                : "h-[100dvh] overflow-y-auto p-4"
+            }`}
+            onClick={leftSidebarCollapsed ? () => setLeftSidebarCollapsed(false) : undefined}
+            role={leftSidebarCollapsed ? "button" : undefined}
+            tabIndex={leftSidebarCollapsed ? 0 : undefined}
+            onKeyDown={
+              leftSidebarCollapsed
+                ? (event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setLeftSidebarCollapsed(false);
+                    }
+                  }
+                : undefined
+            }
+          >
+            {leftSidebarCollapsed ? (
+              <div className="flex h-full min-h-0 flex-col justify-end gap-2 rounded-xl border border-slate-200 bg-slate-100 p-2">
                 <button
                   type="button"
-                  onClick={() => setLeftPanelCollapsed((prev) => !prev)}
-                  className="rounded-md border border-slate-300 px-2.5 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setSidebarPanel("documents");
+                    setLeftSidebarCollapsed(false);
+                  }}
+                  className={`inline-flex h-10 items-center justify-center rounded-lg border transition ${
+                    sidebarPanel === "documents"
+                      ? "border-sky-200 bg-sky-100 text-sky-700"
+                      : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                  }`}
+                  aria-label="Open documents panel"
                 >
-                  {leftPanelCollapsed ? "Show left" : "Hide left"}
+                  <DocumentIcon />
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    setRightPanelCollapsed((prev) => !prev);
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setSidebarPanel("history");
+                    setLeftSidebarCollapsed(false);
                   }}
-                  className="rounded-md border border-slate-300 px-2.5 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
+                  className={`inline-flex h-10 items-center justify-center rounded-lg border transition ${
+                    sidebarPanel === "history"
+                      ? "border-emerald-200 bg-emerald-100 text-emerald-700"
+                      : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                  }`}
+                  aria-label="Open history panel"
                 >
-                  {rightPanelCollapsed ? "Show right" : "Hide right"}
+                  <ChatIcon />
                 </button>
               </div>
+            ) : (
+              <>
+            <div className="mb-2 flex items-center justify-end">
+              <button
+                type="button"
+                onClick={() => setLeftSidebarCollapsed(true)}
+                className="rounded border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
+                aria-label="Collapse sidebar"
+                title="Collapse sidebar"
+              >
+                {"<"}
+              </button>
+            </div>
+            <div className="flex w-full items-center border-b border-slate-200 pb-2">
+              <button
+                type="button"
+                onClick={() => setSidebarPanel("documents")}
+                className={`inline-flex flex-1 items-center justify-center gap-2 px-3 py-2 text-xs font-semibold transition ${
+                  sidebarPanel === "documents"
+                    ? "text-slate-900"
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+                title="Documents"
+                aria-label="Show documents panel"
+              >
+                <DocumentIcon />
+                Documents
+              </button>
+              <div className="h-5 w-px bg-slate-200" aria-hidden="true" />
+              <button
+                type="button"
+                onClick={() => setSidebarPanel("history")}
+                className={`inline-flex flex-1 items-center justify-center gap-2 px-3 py-2 text-xs font-semibold transition ${
+                  sidebarPanel === "history"
+                    ? "text-slate-900"
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+                title="Chat history"
+                aria-label="Show chat history panel"
+              >
+                <ChatIcon />
+                History
+              </button>
             </div>
 
-            {viewMode === "document" ? (
+            <div className="mt-4 space-y-3">
+              <section className="rounded-xl border border-slate-200 bg-slate-100 p-3">
+                <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Upload New File
+                </h2>
+                <div className="mt-2 space-y-2">
+                  <input
+                    type="file"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0] ?? null;
+                      setUploadFile(file);
+                      setUploadTitle(file ? deriveTitle(file.name) : "");
+                    }}
+                    className="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs"
+                  />
+                  <input
+                    value={uploadTitle}
+                    onChange={(e) => setUploadTitle(e.target.value)}
+                    placeholder="Document title"
+                    className="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs"
+                  />
+                  <button
+                    type="button"
+                    disabled={!uploadFile || !uploadTitle.trim() || uploading}
+                    onClick={() => void handleUpload()}
+                    className="w-full cursor-pointer rounded-lg bg-sky-700 px-3 py-2 text-xs font-semibold text-white transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {uploading ? "Uploading..." : "Upload"}
+                  </button>
+                  {uploadProgress !== null ? (
+                    <p className="text-[11px] text-slate-500">Upload progress: {uploadProgress}%</p>
+                  ) : null}
+                </div>
+              </section>
+
+              <section className="rounded-xl border border-slate-200 bg-slate-100 p-3">
+                <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Cross-Document Search
+                </h2>
+                <input
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search all documents..."
+                  className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs"
+                />
+                {normalizedSearchQuery ? (
+                  <div className="mt-2 space-y-2">
+                    <p className="text-[11px] text-slate-500">
+                      {searching
+                        ? "Searching..."
+                        : `Found ${searchResults.length} result(s) for "${normalizedSearchQuery}"`}
+                    </p>
+                    <div className="max-h-36 space-y-2 overflow-y-auto pr-1">
+                      {searchResults.map((result) => (
+                        <button
+                          key={result.id}
+                          type="button"
+                          onClick={() => {
+                            openDocument(result.id);
+                            setDetailOffset(null);
+                            setDetailAnchorQuery(normalizedSearchQuery);
+                            setViewerHighlightQuery(normalizedSearchQuery);
+                          }}
+                          className="w-full cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-2 text-left transition hover:border-slate-300 hover:bg-slate-50"
+                        >
+                          <p className="truncate text-xs font-semibold text-slate-900">{result.title}</p>
+                          <p className="mt-1 text-[11px] text-slate-600">
+                            {result.match?.snippet || "Match found in this document."}
+                          </p>
+                        </button>
+                      ))}
+                      {!searching && searchResults.length === 0 ? (
+                        <p className="rounded-lg border border-dashed border-slate-300 bg-white px-3 py-2 text-xs text-slate-500">
+                          No matches found.
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+              </section>
+            </div>
+
+            {sidebarPanel === "documents" ? (
+              <div className="mt-4">
+                <ul className="space-y-2">
+                  {MOCK_FOLDERS.map((folder) => (
+                    <FolderTreeItem
+                      key={folder.id}
+                      node={folder}
+                      depth={0}
+                      activeFolderId={activeFolderId}
+                      expandedFolders={expandedFolders}
+                      onToggle={(folderId) =>
+                        setExpandedFolders((current) => ({
+                          ...current,
+                          [folderId]: !current[folderId],
+                        }))
+                      }
+                      onSelect={(folderId) => setActiveFolderId(folderId)}
+                    />
+                  ))}
+                </ul>
+
+                <div className="mt-4 flex items-center justify-between">
+                  <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Documents
+                  </h2>
+                  <button
+                    type="button"
+                    onClick={() => void loadDocuments()}
+                    className="cursor-pointer rounded-md border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
+                  >
+                    Refresh
+                  </button>
+                </div>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Showing {visibleDocs.length} of {docs.length} in{" "}
+                  <span className="font-medium text-slate-700">{activeFolderId}</span>
+                </p>
+                <input
+                  value={leftFilter}
+                  onChange={(e) => setLeftFilter(e.target.value)}
+                  placeholder="Filter docs"
+                  className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs"
+                />
+                <div className="mt-3 max-h-[38vh] space-y-2 overflow-y-auto pr-1">
+                  {docsLoading ? (
+                    <ListSkeleton />
+                  ) : visibleDocs.length === 0 ? (
+                    <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                      No documents found.
+                    </p>
+                  ) : (
+                    visibleDocs.map((doc) => {
+                      const selected = doc.id === selectedDocId;
+                      return (
+                        <button
+                          key={doc.id}
+                          type="button"
+                          onClick={() => openDocument(doc.id)}
+                          className={`w-full cursor-pointer rounded-xl border px-3 py-2 text-left transition ${
+                            selected
+                              ? "border-slate-900 bg-slate-900 text-white"
+                              : "border-slate-200 bg-white text-slate-800 hover:border-slate-300 hover:bg-slate-50"
+                          }`}
+                        >
+                          <p className="truncate text-sm font-medium">{doc.title}</p>
+                          <div className="mt-1 flex items-center justify-between gap-2">
+                            <span
+                              className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+                                selected
+                                  ? "border-emerald-200/50 bg-emerald-400/20 text-emerald-100"
+                                  : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                              }`}
+                            >
+                              {doc.textStatus}
+                            </span>
+                            <span className={`text-[11px] ${selected ? "text-white/80" : "text-slate-500"}`}>
+                              {formatDate(doc.updatedAt || doc.createdAt)}
+                            </span>
+                          </div>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="mt-4 space-y-3">
+                <div className="rounded-xl border border-slate-200 bg-slate-100 p-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    Private chat
+                  </p>
+                  <p className="mt-1 truncate text-sm font-semibold text-slate-900">
+                    {activeChat?.title || "Select or create a chat"}
+                  </p>
+                  <select
+                    value={activeChatId ?? ""}
+                    onChange={(event) => {
+                      const nextChatId = event.target.value || null;
+                      setActiveChatId(nextChatId);
+                      switchToChatMode(nextChatId);
+                    }}
+                    className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm"
+                  >
+                    <option value="" disabled>
+                      {chatsLoading ? "Loading chats..." : "Select chat"}
+                    </option>
+                    {activeChats.map((chat) => (
+                      <option key={chat.id} value={chat.id}>
+                        {chat.title}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Chat History
+                  </h2>
+                  <button
+                    type="button"
+                    onClick={() => void loadChats()}
+                    className="rounded-md border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
+                  >
+                    Refresh
+                  </button>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleNewChat()}
+                    className="flex-1 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                  >
+                    New chat
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleResetContext()}
+                    disabled={!activeChatId}
+                    className="flex-1 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Reset
+                  </button>
+                </div>
+                <div className="max-h-[36vh] space-y-2 overflow-y-auto pr-1">
+                  {chatsLoading ? (
+                    <ListSkeleton />
+                  ) : activeChats.length === 0 ? (
+                    <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                      No chats yet. Start a new chat.
+                    </p>
+                  ) : (
+                    activeChats.map((chat) => {
+                      const selected = activeChatId === chat.id;
+                      return (
+                        <button
+                          key={chat.id}
+                          type="button"
+                          onClick={() => {
+                            setActiveChatId(chat.id);
+                            switchToChatMode(chat.id);
+                          }}
+                          className={`w-full rounded-lg border px-3 py-2 text-left transition ${
+                            selected
+                              ? "border-slate-900 bg-slate-900 text-white"
+                              : "border-slate-200 bg-white text-slate-800 hover:border-slate-300 hover:bg-slate-50"
+                          }`}
+                        >
+                          <p className="truncate text-sm font-semibold">{chat.title}</p>
+                          <p className={`mt-1 text-[11px] ${selected ? "text-white/80" : "text-slate-500"}`}>
+                            Updated {formatDate(chat.updatedAt || chat.lastMessageAt || chat.createdAt)}
+                          </p>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            )}
+              </>
+            )}
+          </aside>
+
+          <section className="min-w-0 bg-white p-5 lg:min-h-[100dvh] lg:border-l lg:border-slate-200">
+            {workspaceMode === "documents" ? (
               !selectedDocId ? (
-                <div className="flex min-h-[60vh] items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
-                  <div>
-                    <p className="text-base font-medium text-slate-800">Select a document to view it</p>
-                    <p className="mt-1 text-sm text-slate-500">
-                      Choose a file from the left panel or search results.
+                <div className="flex min-h-[68vh] items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
+                  <div className="space-y-2">
+                    <p className="text-base font-semibold text-slate-900">Select a document to view it</p>
+                    <p className="text-sm text-slate-500">
+                      Choose a file from the left sidebar. Upload a file if your library is empty.
                     </p>
                   </div>
                 </div>
-              ) : docLoading ? (
+              ) : docLoading || docsLoading ? (
                 <ViewerSkeleton />
               ) : (
                 <div className="space-y-4">
@@ -1425,7 +1644,7 @@ export default function DocumentsPage() {
                     </div>
                   </div>
 
-                <div className="min-h-[60vh] rounded-xl border border-sky-100 bg-gradient-to-b from-sky-50/60 to-white p-4">
+                  <div className="min-h-[60vh] border border-slate-200 bg-white p-4">
                     {paragraphs.length === 0 ? (
                       <div className="flex h-full min-h-[48vh] items-center justify-center text-center">
                         <div className="space-y-3">
@@ -1451,8 +1670,7 @@ export default function DocumentsPage() {
                           return (
                             <p key={`${selectedDocId}-${idx}`} className="whitespace-pre-wrap">
                               {parts.map((part, partIdx) => {
-                                const isMatch =
-                                  part.toLowerCase() === effectiveHighlightQuery.toLowerCase();
+                                const isMatch = part.toLowerCase() === effectiveHighlightQuery.toLowerCase();
                                 if (!isMatch) return <span key={`${idx}-${partIdx}`}>{part}</span>;
                                 const attachFirstRef = !firstMatchAssigned;
                                 if (attachFirstRef) firstMatchAssigned = true;
@@ -1496,49 +1714,11 @@ export default function DocumentsPage() {
                 </div>
               )
             ) : (
-              <div className="flex min-h-[68vh] flex-col">
-                <div className="rounded-xl border border-sky-100 bg-gradient-to-r from-sky-50/70 to-white p-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <select
-                      value={activeChatId ?? ""}
-                      onChange={(event) => setActiveChatId(event.target.value || null)}
-                      className="min-w-[220px] rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm"
-                    >
-                      <option value="" disabled>
-                        {chatsLoading ? "Loading chats..." : "Select chat"}
-                      </option>
-                      {chats.map((chat) => (
-                        <option key={chat.id} value={chat.id}>
-                          {chat.title}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      onClick={() => void handleNewChat()}
-                      className="cursor-pointer rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
-                    >
-                      New chat
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void handleResetContext()}
-                      disabled={!activeChatId}
-                      className="cursor-pointer rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      Reset context
-                    </button>
-                    {activeChat ? (
-                      <p className="text-xs text-slate-500">
-                        Updated {formatDate(activeChat.updatedAt || activeChat.lastMessageAt)}
-                      </p>
-                    ) : null}
-                  </div>
-                </div>
-
+              <div className="flex min-h-[72vh] flex-col">
                 <div
                   ref={chatScrollRef}
-                  className="mt-3 flex-1 space-y-3 overflow-y-auto rounded-xl border border-sky-100 bg-gradient-to-b from-sky-50/60 to-white p-4"
+                  onScroll={onChatScroll}
+                  className="flex-1 space-y-4 overflow-y-auto border border-slate-200 bg-slate-50 p-4"
                 >
                   {chatLoading ? (
                     <ViewerSkeleton />
@@ -1547,57 +1727,136 @@ export default function DocumentsPage() {
                       <div>
                         <p className="text-base font-semibold text-slate-800">Start a grounded chat</p>
                         <p className="mt-1 text-sm text-slate-500">
-                          Ask a question to run retrieval and save conversation memory in this org.
+                          Ask a question to retrieve org-scoped context from your document library.
                         </p>
                       </div>
                     </div>
                   ) : (
                     chatMessages.map((chatMessage) => {
-                      const isAssistant = chatMessage.role === "assistant";
-                      const isActiveAssistant = isAssistant && activeAssistantMessageId === chatMessage.id;
-                      if (isAssistant) {
+                      if (chatMessage.role === "assistant") {
+                        const supportText =
+                          chatMessage.supportLabel ||
+                          (chatMessage.citations.length > 0
+                            ? `Supported by ${chatMessage.citations.length} sources`
+                            : "No supporting sources found");
                         return (
-                          <button
+                          <article
                             key={chatMessage.id}
-                            type="button"
-                            onClick={() => setActiveAssistantMessageId(chatMessage.id)}
-                            className={`block w-full cursor-pointer border-l-2 py-1 pl-3 pr-1 text-left transition ${
-                              isActiveAssistant
-                                ? "border-slate-900 bg-slate-100/50"
-                                : "border-transparent hover:border-slate-300"
-                            }`}
+                            className="rounded-md border border-slate-200 bg-white p-3 shadow-sm"
                           >
-                            <div className="flex items-center justify-between gap-2">
-                              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                                Assistant
-                              </p>
-                              <p className="text-xs text-slate-500">{formatDateTime(chatMessage.createdAt)}</p>
+                            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_300px]">
+                              <div className="min-w-0">
+                                <div className="flex items-center justify-between gap-3">
+                                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                    Assistant
+                                  </p>
+                                  <div className="flex items-center gap-2">
+                                    <p className="text-xs text-slate-500">{formatDateTime(chatMessage.createdAt)}</p>
+                                    <button
+                                      type="button"
+                                      onClick={() => void copyAssistantMessage(chatMessage.id, chatMessage.content)}
+                                      className="rounded-md border border-slate-300 px-2 py-0.5 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
+                                    >
+                                      {copiedAssistantMessageId === chatMessage.id ? "Copied" : "Copy"}
+                                    </button>
+                                  </div>
+                                </div>
+                                <p className="mt-2 whitespace-pre-wrap text-[15px] leading-7 text-slate-700">
+                                  {chatMessage.content}
+                                </p>
+                                <div className="mt-3 flex flex-wrap items-center gap-2">
+                                  <span
+                                    className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${supportChipClasses(chatMessage.supportLabel)}`}
+                                  >
+                                    {supportText}
+                                  </span>
+                                  {chatMessage.contextSummary ? (
+                                    <span className="text-xs text-slate-500">{chatMessage.contextSummary}</span>
+                                  ) : null}
+                                </div>
+                              </div>
+                              <aside className="min-w-0 self-start rounded-md border border-slate-200 bg-slate-100 p-3">
+                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                  Sources
+                                </p>
+                                {chatMessage.citations.length > 0 ? (
+                                  <div className="mt-2 space-y-2">
+                                    {chatMessage.citations.map((citation, index) => {
+                                      const citationKey = `${citation.docId}-${citation.chunkId ?? "none"}-${index}`;
+                                      return (
+                                        <article
+                                          key={citationKey}
+                                          className="rounded-md border border-slate-200 bg-white p-3"
+                                        >
+                                          <div className="flex items-center justify-between gap-2">
+                                            <p className="truncate text-sm font-semibold text-slate-900">
+                                              {citation.docTitle}
+                                            </p>
+                                            <span className="text-[11px] text-slate-500">
+                                              {citation.similarity.toFixed(4)}
+                                            </span>
+                                          </div>
+                                          <p className="mt-0.5 text-xs text-slate-500">
+                                            {citation.headingPath || "Heading path unavailable"}
+                                          </p>
+                                          <p className="mt-1 text-xs text-slate-700">
+                                            {citationSnippet(citation.snippet) || "(No snippet)"}
+                                          </p>
+                                          <button
+                                            type="button"
+                                            onClick={() => openCitationInDocument(citation)}
+                                            className="mt-2 rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                                          >
+                                            Open in document
+                                          </button>
+                                        </article>
+                                      );
+                                    })}
+                                  </div>
+                                ) : (
+                                  <p className="mt-2 text-xs text-slate-500">No sources for this response.</p>
+                                )}
+                              </aside>
                             </div>
-                            <p className="mt-1 whitespace-pre-wrap text-[15px] leading-7 text-slate-700">
-                              {chatMessage.content}
-                            </p>
-                            {chatMessage.supportLabel ? (
-                              <span
-                                className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${supportChipClasses(chatMessage.supportLabel)}`}
-                              >
-                                {chatMessage.supportLabel}
-                              </span>
-                            ) : null}
-                          </button>
+                          </article>
                         );
                       }
 
+                      const isOwnMessage = chatMessage.createdBy ? chatMessage.createdBy === user.uid : true;
+                      const senderLabel = messageSenderLabel(chatMessage);
+
                       return (
-                        <div key={chatMessage.id} className="flex justify-end">
-                          <div className="w-full max-w-[86%] rounded-2xl bg-slate-900 px-4 py-2.5 text-white shadow-sm">
+                        <div
+                          key={chatMessage.id}
+                          className={`flex ${isOwnMessage ? "justify-end" : "justify-start"}`}
+                        >
+                          <article
+                            className={`w-full max-w-[88%] rounded-md border px-4 py-2.5 ${
+                              isOwnMessage
+                                ? "border-slate-900 bg-slate-900 text-white"
+                                : "border-slate-200 bg-white text-slate-900"
+                            }`}
+                          >
                             <div className="flex items-center justify-between gap-2">
-                              <p className="text-[11px] font-semibold uppercase tracking-wide text-white/80">You</p>
-                              <p className="text-xs text-white/70">{formatDateTime(chatMessage.createdAt)}</p>
+                              <p
+                                className={`text-[11px] font-semibold uppercase tracking-wide ${
+                                  isOwnMessage ? "text-white/80" : "text-slate-500"
+                                }`}
+                              >
+                                {senderLabel}
+                              </p>
+                              <p className={`text-xs ${isOwnMessage ? "text-white/70" : "text-slate-500"}`}>
+                                {formatDateTime(chatMessage.createdAt)}
+                              </p>
                             </div>
-                            <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-white">
+                            <p
+                              className={`mt-1 whitespace-pre-wrap text-sm leading-6 ${
+                                isOwnMessage ? "text-white" : "text-slate-800"
+                              }`}
+                            >
                               {chatMessage.content}
                             </p>
-                          </div>
+                          </article>
                         </div>
                       );
                     })
@@ -1605,7 +1864,7 @@ export default function DocumentsPage() {
                 </div>
 
                 <form
-                  className="mt-3 space-y-2"
+                  className="mt-3 space-y-2 border border-slate-200 bg-slate-100 p-3"
                   onSubmit={(event) => {
                     event.preventDefault();
                     void handleSendChatMessage();
@@ -1648,91 +1907,6 @@ export default function DocumentsPage() {
               </div>
             )}
           </section>
-
-          {!rightPanelCollapsed ? (
-            <aside className="rounded-2xl border border-sky-100 bg-gradient-to-b from-white to-sky-50 p-4 shadow-sm">
-            <div className="flex items-center justify-between gap-2">
-              <h2 className="text-lg font-semibold text-slate-900">Sources</h2>
-              <div className="flex items-center gap-2">
-                {activeSupportLabel ? (
-                  <span
-                    className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${supportChipClasses(activeSupportLabel)}`}
-                  >
-                    {activeSupportLabel}
-                  </span>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={() => setRightPanelCollapsed(true)}
-                  className="rounded-md border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-white"
-                >
-                  Hide
-                </button>
-              </div>
-            </div>
-            <p className="mt-1 text-sm text-slate-600">
-              Open chat and select an assistant response to inspect citations.
-            </p>
-
-            {activeAssistantMessage?.contextSummary ? (
-              <p className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                {activeAssistantMessage.contextSummary}
-              </p>
-            ) : null}
-
-            <div className="mt-4 space-y-3">
-              {activeCitations.length > 0 ? (
-                activeCitations.map((citation, index) => {
-                  const citationKey = `${citation.docId}-${citation.chunkId ?? "none"}-${index}`;
-                  return (
-                    <article
-                      key={citationKey}
-                      className="rounded-xl border border-sky-100 bg-white p-3"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span
-                          className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${supportChipClasses(activeSupportLabel)}`}
-                        >
-                          {activeSupportLabel || "No supporting sources found"}
-                        </span>
-                        <span className="text-[11px] text-slate-500">
-                          {citation.similarity.toFixed(4)}
-                        </span>
-                      </div>
-                      <p className="mt-2 text-sm font-semibold text-slate-900">{citation.docTitle}</p>
-                      <p className="mt-0.5 text-xs text-slate-500">
-                        {citation.headingPath || "Heading path unavailable"}
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => openCitationInDocument(citation)}
-                        className="mt-2 cursor-pointer text-left text-sm text-slate-700 underline-offset-2 transition hover:text-slate-900 hover:underline"
-                      >
-                        {citationSnippet(citation.snippet) || "(No snippet)"}
-                      </button>
-                    </article>
-                  );
-                })
-              ) : (
-                <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-500">
-                  No citations yet. Ask a question in Chat and click an assistant response.
-                </p>
-              )}
-            </div>
-            </aside>
-          ) : null}
-          {rightPanelCollapsed ? (
-            <div className="hidden min-h-[68vh] items-center justify-center rounded-2xl border border-slate-300 bg-slate-200/70 md:flex">
-              <button
-                type="button"
-                onClick={() => setRightPanelCollapsed(false)}
-                aria-label="Show sources panel"
-                className="h-10 w-5 rounded-md border border-slate-300 bg-white text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                &lt;
-              </button>
-            </div>
-          ) : null}
         </div>
       </div>
     </main>

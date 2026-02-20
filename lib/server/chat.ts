@@ -7,6 +7,9 @@ export const CHAT_LIST_DEFAULT_LIMIT = 25;
 export const CHAT_LIST_MAX_LIMIT = 50;
 export const CHAT_MESSAGE_DEFAULT_LIMIT = 30;
 export const CHAT_MESSAGE_MAX_LIMIT = 80;
+export const CHAT_VISIBILITY_DEFAULT = "private";
+
+export type ChatVisibility = "private";
 
 type FirestoreDateLike =
   | Date
@@ -20,6 +23,9 @@ type ChatRecord = {
   title?: unknown;
   createdAt?: FirestoreDateLike;
   createdBy?: unknown;
+  visibility?: unknown;
+  ownerUid?: unknown;
+  ownerName?: unknown;
   updatedAt?: FirestoreDateLike;
   updatedBy?: unknown;
   lastMessageAt?: FirestoreDateLike;
@@ -32,6 +38,7 @@ type ChatMessageRecord = {
   content?: unknown;
   createdAt?: FirestoreDateLike;
   createdBy?: unknown;
+  createdByName?: unknown;
   citations?: unknown;
   supportLabel?: unknown;
   contextSummary?: unknown;
@@ -56,6 +63,15 @@ export function normalizeChatTitle(value: unknown, fallback = "New chat") {
   return cleaned ? cleaned.slice(0, CHAT_TITLE_MAX_LENGTH) : fallback;
 }
 
+export function normalizeChatVisibility(
+  value: unknown,
+  fallback: ChatVisibility = CHAT_VISIBILITY_DEFAULT,
+): ChatVisibility {
+  const normalized = normalizeText(value).toLowerCase();
+  if (normalized === "private") return "private";
+  return fallback;
+}
+
 export function chatRef(orgId: string, chatId: string) {
   return adminDb.collection("organizations").doc(orgId).collection("chats").doc(chatId);
 }
@@ -74,6 +90,20 @@ export function assertSafeChatId(chatId: string) {
   if (trimmed.includes("/") || trimmed.includes("\\")) return false;
   if (trimmed.length > 128) return false;
   return true;
+}
+
+export function resolveChatOwnerUid(data: ChatRecord | undefined) {
+  const explicitOwner = normalizeText(data?.ownerUid);
+  if (explicitOwner) return explicitOwner;
+  const createdBy = normalizeText(data?.createdBy);
+  return createdBy || null;
+}
+
+export function getChatAccess(data: ChatRecord | undefined, uid: string) {
+  const visibility = normalizeChatVisibility(data?.visibility, CHAT_VISIBILITY_DEFAULT);
+  const ownerUid = resolveChatOwnerUid(data);
+  const allowed = Boolean(ownerUid) && ownerUid === uid;
+  return { visibility, ownerUid, allowed };
 }
 
 function normalizeCitationList(value: unknown) {
@@ -116,9 +146,14 @@ export function serializeChatSnapshot(
   snap: FirebaseFirestore.DocumentSnapshot<FirebaseFirestore.DocumentData>,
 ) {
   const data = snap.data() as ChatRecord | undefined;
+  const visibility = normalizeChatVisibility(data?.visibility, CHAT_VISIBILITY_DEFAULT);
+  const ownerUid = visibility === "private" ? resolveChatOwnerUid(data) : null;
   return {
     id: snap.id,
     title: normalizeChatTitle(data?.title, "New chat"),
+    visibility,
+    ownerUid,
+    ownerName: visibility === "private" ? normalizeText(data?.ownerName) || null : null,
     createdAt: toIso(data?.createdAt),
     createdBy: normalizeText(data?.createdBy) || null,
     updatedAt: toIso(data?.updatedAt),
@@ -131,6 +166,9 @@ export function serializeChatSnapshot(
 
 export function serializeMessageSnapshot(
   snap: FirebaseFirestore.DocumentSnapshot<FirebaseFirestore.DocumentData>,
+  options?: {
+    createdByNameByUid?: Record<string, string | null>;
+  },
 ) {
   if (!snap.exists) {
     throw new Error("Message snapshot not found");
@@ -138,12 +176,19 @@ export function serializeMessageSnapshot(
   const data = snap.data() as ChatMessageRecord | undefined;
   const role = data?.role === "assistant" ? "assistant" : "user";
   const content = normalizeText(data?.content);
+  const createdBy = normalizeText(data?.createdBy) || null;
+  const inlineName = normalizeText(data?.createdByName) || null;
+  const lookupName =
+    createdBy && options?.createdByNameByUid
+      ? normalizeText(options.createdByNameByUid[createdBy]) || null
+      : null;
   return {
     id: snap.id,
     role,
     content,
     createdAt: toIso(data?.createdAt),
-    createdBy: normalizeText(data?.createdBy) || null,
+    createdBy,
+    createdByName: inlineName || lookupName,
     citations: role === "assistant" ? normalizeCitationList(data?.citations) : [],
     supportLabel: role === "assistant" ? normalizeText(data?.supportLabel) || null : null,
     contextSummary: role === "assistant" ? normalizeText(data?.contextSummary) || null : null,

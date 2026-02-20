@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
 import { errorToResponse, requireOrgContext } from "@/lib/serverAuth";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
-import { assertSafeChatId, chatRef, chatsCollection, serializeChatSnapshot } from "@/lib/server/chat";
+import {
+  assertSafeChatId,
+  chatRef,
+  chatsCollection,
+  getChatAccess,
+  serializeChatSnapshot,
+} from "@/lib/server/chat";
 
 export const runtime = "nodejs";
 
@@ -37,6 +43,11 @@ export async function POST(
     if (!existingSnap.exists) {
       return NextResponse.json({ error: "Chat not found" }, { status: 404 });
     }
+    const existingData = existingSnap.data() as Record<string, unknown> | undefined;
+    const chatAccess = getChatAccess(existingData, uid);
+    if (!chatAccess.allowed) {
+      return NextResponse.json({ error: "Chat not found" }, { status: 404 });
+    }
 
     const now = new Date();
     await existingRef.set(
@@ -50,8 +61,15 @@ export async function POST(
     );
 
     const nextChatRef = chatsCollection(orgId).doc();
+    const ownerName =
+      typeof existingData?.ownerName === "string" && existingData.ownerName.trim()
+        ? existingData.ownerName.trim()
+        : null;
     await nextChatRef.set({
       title: "New chat",
+      visibility: "private",
+      ownerUid: uid,
+      ownerName,
       createdAt: now,
       createdBy: uid,
       updatedAt: now,

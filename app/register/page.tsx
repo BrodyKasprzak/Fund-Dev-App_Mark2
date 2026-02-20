@@ -14,25 +14,51 @@ function getAuthErrorCode(err: unknown) {
 
 export default function RegisterPage() {
   const router = useRouter();
+  const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  async function persistProfileName(idToken: string, name: string) {
+    const res = await fetch("/api/me", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${idToken}`,
+      },
+      body: JSON.stringify({ name }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(typeof data?.error === "string" ? data.error : "Failed to save profile name");
+    }
+  }
+
   async function handleRegister(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setLoading(true);
+    const trimmedName = fullName.trim();
+    if (!trimmedName) {
+      setError("Full name is required.");
+      setLoading(false);
+      return;
+    }
 
     try {
-      await createUserWithEmailAndPassword(auth, email, password);
+      const cred = await createUserWithEmailAndPassword(auth, email, password);
+      const token = await cred.user.getIdToken();
+      await persistProfileName(token, trimmedName);
       router.push("/onboarding/org");
     } catch (err: unknown) {
       const code = getAuthErrorCode(err);
 
       if (code === "auth/email-already-in-use") {
         try {
-          await signInWithEmailAndPassword(auth, email, password);
+          const cred = await signInWithEmailAndPassword(auth, email, password);
+          const token = await cred.user.getIdToken();
+          await persistProfileName(token, trimmedName);
           router.push("/org-picker?force=1");
           return;
         } catch (signInErr: unknown) {
@@ -73,6 +99,21 @@ export default function RegisterPage() {
         {/* Register Card */}
         <div className="bg-white border border-slate-200 rounded-2xl p-8 shadow-xl shadow-slate-200/50">
           <form onSubmit={handleRegister} className="space-y-5">
+            <div>
+              <label htmlFor="full-name" className="block text-sm font-semibold text-slate-700 mb-2">
+                Full name
+              </label>
+              <input
+                id="full-name"
+                className="w-full border border-slate-300 rounded-xl px-4 py-3 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition"
+                placeholder="First and last name"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                type="text"
+                required
+              />
+            </div>
+
             <div>
               <label htmlFor="email" className="block text-sm font-semibold text-slate-700 mb-2">
                 Email address

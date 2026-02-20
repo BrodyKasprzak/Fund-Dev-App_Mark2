@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { adminDb } from "@/lib/firebaseAdmin";
 import { errorToResponse, requireOrgContext } from "@/lib/serverAuth";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
 import {
@@ -6,6 +7,7 @@ import {
   assertSafeChatId,
   chatMessagesCollection,
   chatRef,
+  getChatAccess,
   normalizeChatTitle,
   serializeMessageSnapshot,
 } from "@/lib/server/chat";
@@ -20,6 +22,31 @@ const RAG_TOP_K = 8;
 type AppendMessageBody = {
   content?: unknown;
 };
+
+function asNonEmptyString(value: unknown) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : null;
+}
+
+async function resolveSenderName(orgId: string, uid: string, email: string | null) {
+  const memberSnap = await adminDb
+    .collection("organizations")
+    .doc(orgId)
+    .collection("members")
+    .doc(uid)
+    .get();
+  const member = memberSnap.data() as { name?: unknown; email?: unknown } | undefined;
+  const memberName = asNonEmptyString(member?.name);
+  if (memberName) return memberName;
+
+  const userSnap = await adminDb.collection("users").doc(uid).get();
+  const user = userSnap.data() as { name?: unknown } | undefined;
+  const userName = asNonEmptyString(user?.name);
+  if (userName) return userName;
+
+  return asNonEmptyString(member?.email) || asNonEmptyString(email) || null;
+}
 
 function parseMessage(value: unknown) {
   if (typeof value !== "string") return null;
@@ -36,7 +63,7 @@ export async function POST(
   context: { params: Promise<{ chatId: string }> },
 ) {
   try {
-    const { orgId, uid } = await requireOrgContext(req);
+    const { orgId, uid, email } = await requireOrgContext(req);
     const { chatId } = await context.params;
 
     if (!assertSafeChatId(chatId)) {
@@ -59,6 +86,13 @@ export async function POST(
     const chatDocRef = chatRef(orgId, chatId);
     const chatSnap = await chatDocRef.get();
     if (!chatSnap.exists) {
+      return NextResponse.json({ error: "Chat not found" }, { status: 404 });
+    }
+    const chatAccess = getChatAccess(
+      chatSnap.data() as Record<string, unknown> | undefined,
+      uid,
+    );
+    if (!chatAccess.allowed) {
       return NextResponse.json({ error: "Chat not found" }, { status: 404 });
     }
 
@@ -90,12 +124,14 @@ export async function POST(
       .filter((item): item is { role: "user" | "assistant"; content: string } => Boolean(item));
 
     const now = new Date();
+    const senderName = await resolveSenderName(orgId, uid, email);
     const userMessageRef = chatMessagesCollection(orgId, chatId).doc();
     await userMessageRef.set({
       role: "user",
       content: userMessageContent,
       createdAt: now,
       createdBy: uid,
+      createdByName: senderName,
     });
 
     const rag = await generateGroundedAnswer({
@@ -112,6 +148,7 @@ export async function POST(
       content: rag.answer,
       createdAt: assistantCreatedAt,
       createdBy: uid,
+      createdByName: "Assistant",
       citations: rag.citations,
       supportLabel: rag.supportLabel,
       contextSummary: rag.contextSummary,

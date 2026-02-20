@@ -3,6 +3,7 @@ import { adminDb } from "@/lib/firebaseAdmin";
 import { requireAuth, errorToResponse } from "@/lib/serverAuth";
 
 export const runtime = "nodejs";
+const MAX_PROFILE_NAME_LENGTH = 120;
 
 function asNonEmptyString(v: unknown): string | null {
   if (typeof v !== "string") return null;
@@ -33,6 +34,10 @@ type MembershipIndexRecord = {
 type OrgMemberRecord = {
   role?: unknown;
   status?: unknown;
+};
+
+type UpdateMeBody = {
+  name?: unknown;
 };
 
 export async function GET(req: Request) {
@@ -131,6 +136,41 @@ export async function GET(req: Request) {
       orgs,
       defaultOrgId,
     });
+  } catch (err: unknown) {
+    const { status, message } = errorToResponse(err);
+    return NextResponse.json({ error: message }, { status });
+  }
+}
+
+export async function PATCH(req: Request) {
+  try {
+    const { uid, email } = await requireAuth(req);
+    const body = (await req.json().catch(() => ({}))) as UpdateMeBody;
+    const rawName = typeof body?.name === "string" ? body.name.trim() : "";
+    if (!rawName) {
+      return NextResponse.json({ error: "name is required" }, { status: 400 });
+    }
+    if (rawName.length > MAX_PROFILE_NAME_LENGTH) {
+      return NextResponse.json(
+        { error: `name must be ${MAX_PROFILE_NAME_LENGTH} characters or fewer` },
+        { status: 400 },
+      );
+    }
+
+    const now = new Date();
+    await adminDb
+      .collection("users")
+      .doc(uid)
+      .set(
+        {
+          email,
+          name: rawName,
+          updatedAt: now,
+        },
+        { merge: true },
+      );
+
+    return NextResponse.json({ ok: true, me: { uid, email, name: rawName } });
   } catch (err: unknown) {
     const { status, message } = errorToResponse(err);
     return NextResponse.json({ error: message }, { status });
