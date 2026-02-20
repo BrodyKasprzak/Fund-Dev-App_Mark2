@@ -144,7 +144,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!res.ok || !json?.ok) {
         setMe(null);
         setOrgs([]);
-        if (activeOrgId !== null) setActiveOrgId(null);
+        setActiveOrgId(null);
         return null;
       }
 
@@ -183,21 +183,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // - exactly 1 org -> auto-select
       // - 0 orgs or >1 orgs -> require explicit state (null)
       if (nextOrgs.length === 1) {
-        if (activeOrgId !== nextOrgs[0].orgId) setActiveOrgId(nextOrgs[0].orgId);
+        setActiveOrgId(nextOrgs[0].orgId);
       } else {
-        if (activeOrgId !== null) setActiveOrgId(null);
+        setActiveOrgId(null);
       }
 
       return next;
     } catch {
       setMe(null);
       setOrgs([]);
-      if (activeOrgId !== null) setActiveOrgId(null);
+      setActiveOrgId(null);
       return null;
     } finally {
       setMeLoading(false);
     }
-  }, [activeOrgId, setActiveOrgId, user]);
+  }, [setActiveOrgId, user]);
 
   // Load “me” after sign-in (and keep activeOrgId valid)
   useEffect(() => {
