@@ -16,33 +16,15 @@ type Template = {
 const TEMPLATES: Template[] = [
   {
     key: "fund_dev_handbook",
-    title: "Fund Development Handbook",
+    title: "Fund Developement Handbook",
     description:
       "Build your organization's fundraising framework, standards, and playbooks to support sustainable growth and continuity.",
   },
   {
-    key: "annual_fund_dev_plan",
-    title: "Annual Fund Development Plan",
+    key: "grants",
+    title: "Grants",
     description:
-      "Set annual revenue goals, define campaign strategy, assign ownership, and manage a month-by-month execution calendar.",
-  },
-  {
-    key: "case_for_support",
-    title: "Case for Support",
-    description:
-      "Develop a donor-facing narrative that communicates community need, program impact, and urgency with clarity and credibility.",
-  },
-  {
-    key: "campaign_plan",
-    title: "Campaign Plan",
-    description:
-      "Structure a major fundraising initiative with phases, milestones, prospect strategy, and readiness checkpoints.",
-  },
-  {
-    key: "grant_strategy",
-    title: "Grant Strategy",
-    description:
-      "Prioritize funders, align programs to opportunities, and maintain a grants pipeline, calendar, and submission responsibilities.",
+      "Launch a structured grant creation workspace to define fit, capture requirements, assign owners, and draft a complete submission plan.",
   },
 ];
 
@@ -248,8 +230,8 @@ export default function ProductsPage() {
         const orgRef = doc(db, "organizations", candidate);
         const orgSnap = await getDoc(orgRef);
         if (orgSnap.exists()) {
-          const o = orgSnap.data() as any;
-          setOrgName(String(o?.name ?? "").trim());
+          const o = orgSnap.data() as { name?: unknown };
+          setOrgName(typeof o?.name === "string" ? o.name.trim() : "");
         } else {
           setOrgName("");
         }
@@ -331,8 +313,8 @@ export default function ProductsPage() {
       if (!res.ok) throw new Error(data?.error || "Failed to create plan");
 
       return data.planId as string;
-    } catch (e: any) {
-      setError(e?.message ?? "Something went wrong");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Something went wrong");
       return null;
     } finally {
       setCreating(false);
@@ -343,6 +325,10 @@ export default function ProductsPage() {
     if (t.key === "fund_dev_handbook") {
       setError("");
       setHandbookModalOpen(true);
+      return;
+    }
+    if (t.key === "grants") {
+      router.push("/grants/create");
       return;
     }
 
@@ -447,7 +433,7 @@ export default function ProductsPage() {
       <div className="mx-auto max-w-5xl px-6 py-10">
         <h1 className="text-3xl font-semibold text-slate-900">Products</h1>
         <p className="mt-2 text-slate-600">
-          Start creating plans and strategic documents for your organization.
+          Start creating your core fund development deliverables.
         </p>
 
         {error ? (
@@ -515,7 +501,7 @@ export default function ProductsPage() {
             <div className="mt-6">
               <FlowGraphic />
               <p className="mt-4 text-xs text-slate-500">
-                Your content remains inside your organization's workspace. Drafts are not finalized
+                Your content remains inside your organization workspace. Drafts are not finalized
                 without review and approval.
               </p>
             </div>

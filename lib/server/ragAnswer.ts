@@ -9,8 +9,12 @@ const PROMPT_CHUNK_LIMIT = 6;
 const PROMPT_CHAR_BUDGET = 10_000;
 const MAX_CITATIONS = 6;
 
-const NO_SOURCE_ANSWER =
-  "I couldn't find supporting sources in your indexed organization documents. Upload documents or wait for extraction/indexing, then try again.";
+const NO_SOURCE_DISCLOSURE =
+  "No supporting sources were found in your organization documents. The guidance below is general and not organization-specific.";
+const LOW_SOURCE_DISCLOSURE =
+  "Only limited supporting sources were found in your organization documents. I used available sources and supplemented with general guidance where needed.";
+const GENERIC_FALLBACK =
+  "I can share general nonprofit best-practice guidance, but this response is not based on your organization documents.";
 
 export type ChatTurn = {
   role: "user" | "assistant";
@@ -33,7 +37,9 @@ type GenerateGroundedAnswerArgs = {
 
 export function supportLabelForCitationCount(citationCount: number) {
   if (citationCount >= 3) return `Supported by ${citationCount} sources`;
-  if (citationCount >= 1) return "Partial support";
+  if (citationCount >= 1) {
+    return `Low source support (${citationCount} source${citationCount === 1 ? "" : "s"})`;
+  }
   return "No supporting sources found";
 }
 
@@ -111,6 +117,22 @@ function parseAnswerText(output: unknown) {
   return "";
 }
 
+function sourceStatusForCitationCount(citationCount: number) {
+  if (citationCount >= 3) return "strong";
+  if (citationCount >= 1) return "low";
+  return "none";
+}
+
+function fallbackAnswerForSourceStatus(sourceStatus: "strong" | "low" | "none") {
+  if (sourceStatus === "none") {
+    return `${NO_SOURCE_DISCLOSURE}\n\n${GENERIC_FALLBACK}`;
+  }
+  if (sourceStatus === "low") {
+    return `${LOW_SOURCE_DISCLOSURE}\n\n${GENERIC_FALLBACK}`;
+  }
+  return GENERIC_FALLBACK;
+}
+
 function compactHistory(history: ChatTurn[]) {
   const cleaned = history
     .map((turn) => ({
@@ -123,7 +145,7 @@ function compactHistory(history: ChatTurn[]) {
 
 function noSourceResponse(contextSummary: string | null = null): RagAnswerResponse {
   return {
-    answer: NO_SOURCE_ANSWER,
+    answer: `${NO_SOURCE_DISCLOSURE}\n\n${GENERIC_FALLBACK}`,
     citations: [],
     supportLabel: supportLabelForCitationCount(0),
     contextSummary,
@@ -152,46 +174,59 @@ export async function generateGroundedAnswer(
   }
 
   let retrievedChunks: RagChunk[] = [];
+  let retrievalIssue: string | null = null;
   try {
     retrievedChunks = await retrieveChunks(orgId, normalizedQuery, topK);
   } catch (err: unknown) {
     if (isNoIndexedChunksError(err)) {
-      return noSourceResponse("No indexed chunks available for this organization.");
+      retrievalIssue = "No indexed chunks available for this organization.";
+      retrievedChunks = [];
+    } else {
+      throw err;
     }
-    throw err;
   }
 
   const promptChunks = sanitizePromptContext(retrievedChunks);
-  if (promptChunks.length === 0) {
-    return noSourceResponse("No relevant chunk context found.");
+  let citations = [] as RagAnswerResponse["citations"];
+  if (promptChunks.length > 0) {
+    citations = await buildCitationsFromChunks({
+      orgId,
+      chunks: promptChunks,
+      maxCitations: MAX_CITATIONS,
+    });
   }
 
-  const citations = await buildCitationsFromChunks({
-    orgId,
-    chunks: promptChunks,
-    maxCitations: MAX_CITATIONS,
-  });
-
-  if (citations.length === 0) {
-    return noSourceResponse("Chunk retrieval succeeded without citation material.");
-  }
-
-  const contextBlock = buildContextBlock(promptChunks);
+  const contextBlock =
+    promptChunks.length > 0 ? buildContextBlock(promptChunks) : "(none)";
   const orgOnboarding = await loadOrgOnboardingContext(orgId);
   const history = compactHistory(args.history ?? []);
   const historyMessages = history.map((turn) => ({
     role: turn.role,
     content: turn.content,
   }));
+  const sourceCount = citations.length;
+  const sourceStatus = sourceStatusForCitationCount(sourceCount);
 
   const completion = await openai.chat.completions.create({
     model: "gpt-4o-mini",
-    temperature: 0.1,
+    temperature: 0.2,
     messages: [
       {
         role: "system",
         content:
-          "You are an assistant for a nonprofit organization. Use only the provided context chunks and the provided ORG_ONBOARDING object. If the answer is not in those inputs, state that no supporting sources were found.",
+          [
+            "You are an assistant for a nonprofit organization.",
+            "Prioritize organization-specific context from CONTEXT chunks and ORG_ONBOARDING when available.",
+            "If support is limited or absent, still answer helpfully using general nonprofit/fundraising best practices.",
+            "Never invent organization-specific facts.",
+            "Disclosure rule:",
+            "- If SOURCE_STATUS is 'none', start with: " +
+              `"${NO_SOURCE_DISCLOSURE}"`,
+            "- If SOURCE_STATUS is 'low', start with: " +
+              `"${LOW_SOURCE_DISCLOSURE}"`,
+            "- If SOURCE_STATUS is 'strong', do not add a source disclaimer.",
+            "Keep the answer concise, practical, and directly responsive.",
+          ].join("\n"),
       },
       ...historyMessages,
       {
@@ -205,19 +240,31 @@ export async function generateGroundedAnswer(
           },
           null,
           2,
-        )}\n\nCONTEXT:\n${contextBlock}\n\nQUESTION:\n${normalizedQuery}`,
+        )}\n\nSOURCE_STATUS: ${sourceStatus}\nSOURCE_CITATION_COUNT: ${sourceCount}\n\nCONTEXT:\n${contextBlock}\n\nQUESTION:\n${normalizedQuery}`,
       },
     ],
   });
 
-  const answer = parseAnswerText(completion.choices[0]?.message?.content) || NO_SOURCE_ANSWER;
-  const sourceCount = citations.length;
+  const answer =
+    parseAnswerText(completion.choices[0]?.message?.content) ||
+    fallbackAnswerForSourceStatus(sourceStatus);
   const uniqueDocCount = new Set(citations.map((citation) => citation.docId)).size;
+  const contextSummaryParts = [
+    `Retrieved ${promptChunks.length} chunk(s) and ${sourceCount} citation(s) from ${uniqueDocCount} document(s).`,
+  ];
+  if (sourceStatus === "low") {
+    contextSummaryParts.push("Limited source support, so response includes general guidance.");
+  } else if (sourceStatus === "none") {
+    contextSummaryParts.push("No supporting sources found, so response is general guidance.");
+  }
+  if (retrievalIssue) {
+    contextSummaryParts.push(retrievalIssue);
+  }
 
   return {
     answer,
     citations,
     supportLabel: supportLabelForCitationCount(sourceCount),
-    contextSummary: `Retrieved ${sourceCount} citation chunk(s) from ${uniqueDocCount} document(s).`,
+    contextSummary: contextSummaryParts.join(" "),
   };
 }

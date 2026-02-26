@@ -385,7 +385,7 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
                 type="button"
                 onClick={async () => {
                   await signOut(auth);
-                  router.push("/login");
+                  router.push("/page.tsx");
                 }}
                 className={`w-full rounded-xl border border-white/20 bg-white/12 ${navPad} text-left backdrop-blur-sm transition hover:bg-white/18`}
               >
