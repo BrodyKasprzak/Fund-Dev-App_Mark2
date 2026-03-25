@@ -2182,7 +2182,7 @@ export default function FundDevHandbookTemplatePage() {
                             );
                           }
 
-                          const isOwnMessage = chatMessage.createdBy ? chatMessage.createdBy === user.uid : true;
+                          const isOwnMessage = chatMessage.createdBy ? chatMessage.createdBy === user?.uid : true;
                           const senderLabel = messageSenderLabel(chatMessage);
 
                           return (

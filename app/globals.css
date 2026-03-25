@@ -40,6 +40,9 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  --font-geist-sans: "Segoe UI";
+  --font-geist-mono: "Consolas";
+  --font-sora: "Segoe UI";
 }
 
 @media (prefers-color-scheme: dark) {
