@@ -91,7 +91,7 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
 
   const [org, setOrg] = useState<OrgProfile | null>(null);
   const [orgInfoOpen, setOrgInfoOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [sidebarView, setSidebarView] = useState<"menu" | "settings">("menu");
   const [collapsed, setCollapsed] = useState(false);
 
   const [compactNav, setCompactNav] = useState(true);
@@ -176,6 +176,28 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
   const navPad = compactNav ? "px-3.5 py-1.5" : "px-4 py-2";
   const navDesc = compactNav ? "mt-0 text-[10px] leading-tight" : "mt-0.5 text-[11px] leading-tight";
 
+  function openSettingsPanel() {
+    setCollapsed(false);
+    setShowActiveOrg(false);
+    setSidebarView("settings");
+  }
+
+  function backToMainMenu() {
+    setShowActiveOrg(false);
+    setSidebarView("menu");
+  }
+
+  function toggleCollapsed() {
+    setCollapsed((prev) => {
+      const next = !prev;
+      if (next) {
+        setShowActiveOrg(false);
+        setSidebarView("menu");
+      }
+      return next;
+    });
+  }
+
   return (
     <aside
       className={`relative sticky top-0 self-start h-screen flex-shrink-0 border-r border-white/20 bg-gradient-to-br from-primary-800 via-primary-700 to-accent-600 text-white shadow-xl transition-all duration-300 ${
@@ -184,7 +206,7 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
     >
       <button
         type="button"
-        onClick={() => setCollapsed((v) => !v)}
+        onClick={toggleCollapsed}
         className="absolute -right-3 top-6 z-10 flex h-7 w-7 items-center justify-center rounded-full border border-indigo-300/40 bg-indigo-950/50 shadow-[0_8px_20px_rgba(49,46,129,0.35)] backdrop-blur-md transition hover:bg-indigo-900/65 hover:shadow-[0_10px_24px_rgba(49,46,129,0.45)]"
         aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
       >
@@ -200,203 +222,222 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
 
       <div className={`h-full overflow-hidden ${collapsed ? "p-3" : "p-5"}`}>
         {!collapsed ? (
-          <>
-            <div className="border-b border-white/20 pb-5">
-              <div className="flex items-center gap-3 rounded-2xl border border-white/20 bg-white/12 px-4 py-3 backdrop-blur-sm">
-                <div className="flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-white/15 text-sm font-bold backdrop-blur-sm">
-                  {avatarText}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-base font-semibold text-white">{orgName}</p>
-                  <p className="truncate text-xs text-white/85">{signedInIdentity}</p>
+          sidebarView === "settings" ? (
+            <div className="flex h-full flex-col rounded-2xl border border-white/20 bg-white/95 p-4 text-slate-900 shadow-2xl">
+              <div className="border-b border-slate-200 pb-4">
+                <button
+                  type="button"
+                  onClick={backToMainMenu}
+                  className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                  aria-label="Back to main menu"
+                >
+                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                  </svg>
+                  Back
+                </button>
+
+                <div className="mt-3">
+                  <div className="mb-1 flex items-center gap-2">
+                    <div className="h-2.5 w-2.5 rounded-full bg-gradient-to-r from-sky-300 to-primary-500" />
+                    <h2 className="text-base font-semibold text-slate-900">Workspace settings</h2>
+                  </div>
+                  <p className="text-xs text-slate-600">Customize your workspace display and controls.</p>
                 </div>
               </div>
 
-              <div className="mt-3 rounded-2xl border border-white/20 bg-white/12 p-4 backdrop-blur-sm">
-                <div className="mb-2 flex items-center gap-2">
-                  <div className="h-2 w-2 rounded-full bg-success-300" />
-                  <div className="text-xs font-semibold text-white/90">Mission</div>
-                </div>
-                <p className="text-sm leading-relaxed text-white/95">{mission ?? "Not provided yet."}</p>
-              </div>
+              <div className="space-y-3 overflow-y-auto pb-1 pt-4 pr-1">
+                <label className="flex cursor-pointer items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-800">
+                  Compact nav density
+                  <input
+                    type="checkbox"
+                    checked={compactNav}
+                    onChange={(e) => setCompactNav(e.target.checked)}
+                  />
+                </label>
 
-              <button
-                type="button"
-                className="mt-3 w-full rounded-xl border border-white/20 bg-white/12 px-4 py-2 text-left backdrop-blur-sm transition hover:bg-white/18"
-                onClick={() => setOrgInfoOpen((v) => !v)}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <div className="h-2 w-2 rounded-full bg-accent-300" />
-                    <div className="text-sm font-semibold">Organization info</div>
-                  </div>
-                  <div className="text-sm font-semibold">{orgInfoOpen ? "-" : "+"}</div>
-                </div>
-              </button>
+                <label className="flex cursor-pointer items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-800">
+                  Reduce motion
+                  <input
+                    type="checkbox"
+                    checked={reducedMotion}
+                    onChange={(e) => setReducedMotion(e.target.checked)}
+                  />
+                </label>
 
-              {orgInfoOpen ? (
-                <div className="mt-3 space-y-2 text-sm">
-                  <div className="rounded-xl border border-white/15 bg-white/8 p-3 backdrop-blur-sm">
-                    <div className="text-xs font-semibold text-white/80">Home state</div>
-                    <div className="mt-1 font-medium">{org?.homeState?.trim() ? org.homeState : "--"}</div>
-                  </div>
-                  <div className="rounded-xl border border-white/15 bg-white/8 p-3 backdrop-blur-sm">
-                    <div className="text-xs font-semibold text-white/80">Tax status</div>
-                    <div className="mt-1 font-medium">{org?.taxStatus?.trim() ? org.taxStatus : "--"}</div>
-                  </div>
-                  <div className="rounded-xl border border-white/15 bg-white/8 p-3 backdrop-blur-sm">
-                    <div className="text-xs font-semibold text-white/80">Fiscal year</div>
-                    <div className="mt-1 font-medium">{org?.fiscalYear?.trim() ? org.fiscalYear : "--"}</div>
-                  </div>
-                  <div className="rounded-xl border border-white/15 bg-white/8 p-3 backdrop-blur-sm">
-                    <div className="text-xs font-semibold text-white/80">CRM</div>
-                    <div className="mt-1 font-medium">{org?.crm?.trim() ? org.crm : "--"}</div>
-                  </div>
-                </div>
-              ) : null}
-            </div>
+                <label className="flex cursor-pointer items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-800">
+                  Muted accent style
+                  <input
+                    type="checkbox"
+                    checked={mutedAccent}
+                    onChange={(e) => setMutedAccent(e.target.checked)}
+                  />
+                </label>
 
-            <div className="space-y-2 pt-5">
-              {NAV_ITEMS.map((item) => {
-                const isActive =
-                  pathname === item.matchPathPrefix || pathname.startsWith(`${item.matchPathPrefix}/`);
+                <button
+                  type="button"
+                  onClick={() => setShowActiveOrg((v) => !v)}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-left text-sm font-semibold text-slate-800 transition hover:bg-slate-100"
+                >
+                  {showActiveOrg ? "Hide active org" : "View active org"}
+                </button>
 
-                return (
+                {showActiveOrg ? (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                    <p className="font-semibold text-slate-900">Active org name</p>
+                    <p className="mt-1 truncate">{orgName}</p>
+                    <p className="mt-3 font-semibold text-slate-900">Active org ID</p>
+                    <p className="mt-1 truncate">{activeOrgId ?? "--"}</p>
+                  </div>
+                ) : null}
+
+                <div className="grid gap-2 pt-1 sm:grid-cols-2">
                   <button
-                    key={item.label}
                     type="button"
-                    onClick={() => router.push(item.href)}
-                    className={`w-full rounded-xl border ${navPad} text-left backdrop-blur-sm transition ${
-                      isActive
-                        ? "border-white/35 bg-white/20"
-                        : "border-white/20 bg-white/12 hover:bg-white/18"
-                    }`}
+                    onClick={() => setOrgInfoOpen((v) => !v)}
+                    className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-left text-sm font-semibold text-slate-800 transition hover:bg-slate-50"
                   >
+                    Toggle org details
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCollapsed(true);
+                      backToMainMenu();
+                    }}
+                    className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-left text-sm font-semibold text-slate-800 transition hover:bg-slate-50"
+                  >
+                    Collapse sidebar
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="border-b border-white/20 pb-5">
+                <div className="flex items-center gap-3 rounded-2xl border border-white/20 bg-white/12 px-4 py-3 backdrop-blur-sm">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-white/15 text-sm font-bold backdrop-blur-sm">
+                    {avatarText}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-base font-semibold text-white">{orgName}</p>
+                    <p className="truncate text-xs text-white/85">{signedInIdentity}</p>
+                  </div>
+                </div>
+
+                <div className="mt-3 rounded-2xl border border-white/20 bg-white/12 p-4 backdrop-blur-sm">
+                  <div className="mb-2 flex items-center gap-2">
+                    <div className="h-2 w-2 rounded-full bg-success-300" />
+                    <div className="text-xs font-semibold text-white/90">Mission</div>
+                  </div>
+                  <p className="text-sm leading-relaxed text-white/95">{mission ?? "Not provided yet."}</p>
+                </div>
+
+                <button
+                  type="button"
+                  className="mt-3 w-full rounded-xl border border-white/20 bg-white/12 px-4 py-2 text-left backdrop-blur-sm transition hover:bg-white/18"
+                  onClick={() => setOrgInfoOpen((v) => !v)}
+                >
+                  <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <div className={`h-2 w-2 rounded-full ${item.indicatorClass}`} />
-                      <div className="text-[13px] font-semibold">{item.label}</div>
+                      <div className="h-2 w-2 rounded-full bg-accent-300" />
+                      <div className="text-sm font-semibold">Organization info</div>
                     </div>
-                    <div className={`${navDesc} text-white/80`}>{item.description}</div>
-                  </button>
-                );
-              })}
-
-              <button
-                type="button"
-                onClick={() => {
-                  if (onInviteClick) onInviteClick();
-                  else router.push("/dashboard?invite=1");
-                }}
-                className={`w-full rounded-xl border border-white/20 bg-white/12 ${navPad} text-left backdrop-blur-sm transition hover:bg-white/18`}
-              >
-                <div className="flex items-center gap-2">
-                  <div className="h-2 w-2 rounded-full bg-amber-300" />
-                  <div className="text-[13px] font-semibold">Invite Member</div>
-                </div>
-                <div className={`${navDesc} text-white/80`}>Invite teammates to this organization</div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() =>
-                  setSettingsOpen((v) => {
-                    const next = !v;
-                    if (!next) setShowActiveOrg(false);
-                    return next;
-                  })
-                }
-                className={`w-full rounded-xl border border-white/20 bg-white/12 ${navPad} text-left backdrop-blur-sm transition hover:bg-white/18`}
-              >
-                <div className="flex items-center gap-2">
-                  <div className="h-2 w-2 rounded-full bg-sky-300" />
-                  <div className="text-[13px] font-semibold">Settings</div>
-                </div>
-                <div className={`${navDesc} text-white/80`}>
-                  {settingsOpen ? "Close settings panel" : "Open quick workspace controls"}
-                </div>
-              </button>
-
-              {settingsOpen ? (
-                <div className="space-y-2 rounded-xl border border-white/20 bg-white/12 p-3 backdrop-blur-sm">
-                  <label className="flex cursor-pointer items-center justify-between rounded-lg border border-white/15 bg-white/10 px-3 py-2 text-xs font-medium text-white/90">
-                    Compact nav density
-                    <input
-                      type="checkbox"
-                      checked={compactNav}
-                      onChange={(e) => setCompactNav(e.target.checked)}
-                    />
-                  </label>
-
-                  <label className="flex cursor-pointer items-center justify-between rounded-lg border border-white/15 bg-white/10 px-3 py-2 text-xs font-medium text-white/90">
-                    Reduce motion
-                    <input
-                      type="checkbox"
-                      checked={reducedMotion}
-                      onChange={(e) => setReducedMotion(e.target.checked)}
-                    />
-                  </label>
-
-                  <label className="flex cursor-pointer items-center justify-between rounded-lg border border-white/15 bg-white/10 px-3 py-2 text-xs font-medium text-white/90">
-                    Muted accent style
-                    <input
-                      type="checkbox"
-                      checked={mutedAccent}
-                      onChange={(e) => setMutedAccent(e.target.checked)}
-                    />
-                  </label>
-
-                  <button
-                    type="button"
-                    onClick={() => setShowActiveOrg((v) => !v)}
-                    className="w-full rounded-lg border border-white/15 bg-white/10 px-3 py-2 text-left text-xs font-semibold text-white/90 transition hover:bg-white/18"
-                  >
-                    View active org
-                  </button>
-
-                  {showActiveOrg ? (
-                    <div className="rounded-lg border border-white/15 bg-white/8 px-3 py-2 text-xs text-white/85">
-                      <p className="font-semibold text-white">Active org name</p>
-                      <p className="mt-1 truncate">{orgName}</p>
-                      <p className="mt-2 font-semibold text-white">Active org ID</p>
-                      <p className="mt-1 truncate">{activeOrgId ?? "--"}</p>
-                    </div>
-                  ) : null}
-
-                  <div className="grid gap-2 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => setOrgInfoOpen((v) => !v)}
-                      className="rounded-lg border border-white/15 bg-white/10 px-3 py-1.5 text-left text-xs font-semibold text-white/90 transition hover:bg-white/18"
-                    >
-                      Toggle organization details
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setCollapsed(true)}
-                      className="rounded-lg border border-white/15 bg-white/10 px-3 py-1.5 text-left text-xs font-semibold text-white/90 transition hover:bg-white/18"
-                    >
-                      Collapse sidebar
-                    </button>
+                    <div className="text-sm font-semibold">{orgInfoOpen ? "-" : "+"}</div>
                   </div>
-                </div>
-              ) : null}
+                </button>
 
-              <button
-                type="button"
-                onClick={async () => {
-                  await signOut(auth);
-                  router.push("/page.tsx");
-                }}
-                className={`w-full rounded-xl border border-white/20 bg-white/12 ${navPad} text-left backdrop-blur-sm transition hover:bg-white/18`}
-              >
-                <div className="flex items-center gap-2">
-                  <div className="h-2 w-2 rounded-full bg-slate-200" />
-                  <div className="text-[13px] font-semibold">Sign out</div>
-                </div>
-                <div className={`${navDesc} text-white/80`}>Log out of this account</div>
-              </button>
-            </div>
-          </>
+                {orgInfoOpen ? (
+                  <div className="mt-3 space-y-2 text-sm">
+                    <div className="rounded-xl border border-white/15 bg-white/8 p-3 backdrop-blur-sm">
+                      <div className="text-xs font-semibold text-white/80">Home state</div>
+                      <div className="mt-1 font-medium">{org?.homeState?.trim() ? org.homeState : "--"}</div>
+                    </div>
+                    <div className="rounded-xl border border-white/15 bg-white/8 p-3 backdrop-blur-sm">
+                      <div className="text-xs font-semibold text-white/80">Tax status</div>
+                      <div className="mt-1 font-medium">{org?.taxStatus?.trim() ? org.taxStatus : "--"}</div>
+                    </div>
+                    <div className="rounded-xl border border-white/15 bg-white/8 p-3 backdrop-blur-sm">
+                      <div className="text-xs font-semibold text-white/80">Fiscal year</div>
+                      <div className="mt-1 font-medium">{org?.fiscalYear?.trim() ? org.fiscalYear : "--"}</div>
+                    </div>
+                    <div className="rounded-xl border border-white/15 bg-white/8 p-3 backdrop-blur-sm">
+                      <div className="text-xs font-semibold text-white/80">CRM</div>
+                      <div className="mt-1 font-medium">{org?.crm?.trim() ? org.crm : "--"}</div>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="space-y-2 pt-5">
+                {NAV_ITEMS.map((item) => {
+                  const isActive =
+                    pathname === item.matchPathPrefix || pathname.startsWith(`${item.matchPathPrefix}/`);
+
+                  return (
+                    <button
+                      key={item.label}
+                      type="button"
+                      onClick={() => router.push(item.href)}
+                      className={`w-full rounded-xl border ${navPad} text-left backdrop-blur-sm transition ${
+                        isActive
+                          ? "border-white/35 bg-white/20"
+                          : "border-white/20 bg-white/12 hover:bg-white/18"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <div className={`h-2 w-2 rounded-full ${item.indicatorClass}`} />
+                        <div className="text-[13px] font-semibold">{item.label}</div>
+                      </div>
+                      <div className={`${navDesc} text-white/80`}>{item.description}</div>
+                    </button>
+                  );
+                })}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onInviteClick) onInviteClick();
+                    else router.push("/dashboard?invite=1");
+                  }}
+                  className={`w-full rounded-xl border border-white/20 bg-white/12 ${navPad} text-left backdrop-blur-sm transition hover:bg-white/18`}
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="h-2 w-2 rounded-full bg-amber-300" />
+                    <div className="text-[13px] font-semibold">Invite Member</div>
+                  </div>
+                  <div className={`${navDesc} text-white/80`}>Invite teammates to this organization</div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={openSettingsPanel}
+                  className={`w-full rounded-xl border border-white/20 bg-white/12 ${navPad} text-left backdrop-blur-sm transition hover:bg-white/18`}
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="h-2 w-2 rounded-full bg-sky-300" />
+                    <div className="text-[13px] font-semibold">Settings</div>
+                  </div>
+                  <div className={`${navDesc} text-white/80`}>Open workspace controls</div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await signOut(auth);
+                    router.push("/page.tsx");
+                  }}
+                  className={`w-full rounded-xl border border-white/20 bg-white/12 ${navPad} text-left backdrop-blur-sm transition hover:bg-white/18`}
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="h-2 w-2 rounded-full bg-slate-200" />
+                    <div className="text-[13px] font-semibold">Sign out</div>
+                  </div>
+                  <div className={`${navDesc} text-white/80`}>Log out of this account</div>
+                </button>
+              </div>
+            </>
+          )
         ) : (
           <div className="flex flex-col items-center gap-4 pt-2">
             <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-white/15 text-sm font-bold backdrop-blur-sm">
@@ -431,10 +472,7 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
 
             <button
               type="button"
-              onClick={() => {
-                setCollapsed(false);
-                setSettingsOpen(true);
-              }}
+              onClick={openSettingsPanel}
               className="flex h-10 w-10 items-center justify-center rounded-2xl border border-white/20 bg-white/12 backdrop-blur-sm transition hover:bg-white/18"
               title="Settings"
             >

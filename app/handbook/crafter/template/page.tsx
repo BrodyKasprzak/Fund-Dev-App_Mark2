@@ -7,6 +7,7 @@ import { auth, db } from "@/lib/firebaseClient";
 import { useAuth } from "@/lib/AuthContext";
 import { doc, getDoc } from "firebase/firestore";
 import { BASE_TEMPLATES } from "@/lib/handbookTemplates";
+import type { RagCitation } from "@/lib/rag/types";
 
 type Section = {
   key: string;
@@ -61,6 +62,35 @@ type OrgProfile = {
   websiteUrl?: string | null;
   websiteConsent?: boolean | null;
 };
+
+type ChatVisibility = "private";
+
+type ChatSummary = {
+  id: string;
+  title: string;
+  visibility: ChatVisibility;
+  ownerUid: string | null;
+  ownerName: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  lastMessageAt: string | null;
+  summary: string | null;
+};
+
+type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string | null;
+  createdBy: string | null;
+  createdByName: string | null;
+  citations: RagCitation[];
+  supportLabel: string | null;
+  contextSummary: string | null;
+};
+
+const CHAT_MESSAGE_MAX_LENGTH = 4_000;
+const RAG_SNIPPET_MAX_LENGTH = 200;
 
 const PROFILE_SECTION: Section = {
   key: "s0_profile",
@@ -148,6 +178,170 @@ function initialsFromName(name?: string) {
   return (a + b).toUpperCase();
 }
 
+function asOptionalString(value: unknown) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : null;
+}
+
+function formatDate(iso: string | null) {
+  if (!iso) return "N/A";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "N/A";
+  return d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function formatDateTime(iso: string | null) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function citationPreviewText(snippet: string) {
+  const normalized = snippet.replace(/\r\n/g, "\n").trim();
+  if (!normalized) return "(No snippet)";
+  const lines = normalized
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const preview = (lines.slice(0, 2).join(" ") || normalized).trim();
+  if (preview.length <= RAG_SNIPPET_MAX_LENGTH) return preview;
+  return `${preview.slice(0, RAG_SNIPPET_MAX_LENGTH)}...`;
+}
+
+function normalizeRagCitations(value: unknown): RagCitation[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const citation = item as {
+        docId?: unknown;
+        docTitle?: unknown;
+        headingPath?: unknown;
+        chunkId?: unknown;
+        snippet?: unknown;
+        moreContext?: unknown;
+        deepLink?: unknown;
+        similarity?: unknown;
+      };
+      if (typeof citation.docId !== "string" || typeof citation.docTitle !== "string") {
+        return null;
+      }
+
+      return {
+        docId: citation.docId,
+        docTitle: citation.docTitle,
+        headingPath: typeof citation.headingPath === "string" ? citation.headingPath : null,
+        chunkId: typeof citation.chunkId === "string" ? citation.chunkId : null,
+        snippet: typeof citation.snippet === "string" ? citation.snippet : "",
+        moreContext: typeof citation.moreContext === "string" ? citation.moreContext : null,
+        deepLink: typeof citation.deepLink === "string" ? citation.deepLink : "/documents",
+        similarity:
+          typeof citation.similarity === "number" && Number.isFinite(citation.similarity)
+            ? citation.similarity
+            : 0,
+      };
+    })
+    .filter((citation): citation is RagCitation => Boolean(citation));
+}
+
+function normalizeChatSummaries(value: unknown): ChatSummary[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const chat = item as {
+        id?: unknown;
+        title?: unknown;
+        visibility?: unknown;
+        ownerUid?: unknown;
+        ownerName?: unknown;
+        createdAt?: unknown;
+        updatedAt?: unknown;
+        lastMessageAt?: unknown;
+        summary?: unknown;
+      };
+      if (typeof chat.id !== "string") return null;
+      if (chat.visibility !== undefined && chat.visibility !== "private") return null;
+      const visibility: ChatVisibility = "private";
+      return {
+        id: chat.id,
+        title: typeof chat.title === "string" ? chat.title : "New chat",
+        visibility,
+        ownerUid: asOptionalString(chat.ownerUid),
+        ownerName: asOptionalString(chat.ownerName),
+        createdAt: typeof chat.createdAt === "string" ? chat.createdAt : null,
+        updatedAt: typeof chat.updatedAt === "string" ? chat.updatedAt : null,
+        lastMessageAt: typeof chat.lastMessageAt === "string" ? chat.lastMessageAt : null,
+        summary: typeof chat.summary === "string" ? chat.summary : null,
+      } satisfies ChatSummary;
+    })
+    .filter((chat): chat is ChatSummary => Boolean(chat));
+}
+
+function normalizeChatMessage(value: unknown): ChatMessage | null {
+  if (!value || typeof value !== "object") return null;
+  const message = value as {
+    id?: unknown;
+    role?: unknown;
+    content?: unknown;
+    createdAt?: unknown;
+    createdBy?: unknown;
+    createdByName?: unknown;
+    citations?: unknown;
+    supportLabel?: unknown;
+    contextSummary?: unknown;
+  };
+  if (typeof message.id !== "string") return null;
+  const role = message.role === "assistant" ? "assistant" : "user";
+  return {
+    id: message.id,
+    role,
+    content: typeof message.content === "string" ? message.content : "",
+    createdAt: typeof message.createdAt === "string" ? message.createdAt : null,
+    createdBy: asOptionalString(message.createdBy),
+    createdByName: asOptionalString(message.createdByName),
+    citations: role === "assistant" ? normalizeRagCitations(message.citations) : [],
+    supportLabel:
+      role === "assistant" && typeof message.supportLabel === "string" ? message.supportLabel : null,
+    contextSummary:
+      role === "assistant" && typeof message.contextSummary === "string"
+        ? message.contextSummary
+        : null,
+  };
+}
+
+function dedupeChatMessages(messages: ChatMessage[]) {
+  const seen = new Set<string>();
+  const next: ChatMessage[] = [];
+  for (const message of messages) {
+    if (!message.id || seen.has(message.id)) continue;
+    seen.add(message.id);
+    next.push(message);
+  }
+  return next;
+}
+
+function supportChipClasses(label: string | null) {
+  if (!label) return "bg-slate-100 text-slate-700 border-slate-200";
+  if (label.startsWith("Supported by")) return "bg-emerald-50 text-emerald-700 border-emerald-200";
+  if (label.startsWith("Low source support") || label === "Partial support") {
+    return "bg-amber-50 text-amber-700 border-amber-200";
+  }
+  return "bg-rose-50 text-rose-700 border-rose-200";
+}
+
 type TypingState = {
   tokens: string[];
   idx: number;
@@ -192,6 +386,20 @@ export default function FundDevHandbookTemplatePage() {
   // Org profile state (display-only)
   const [org, setOrg] = useState<OrgProfile | null>(null);
   const [orgInfoOpen, setOrgInfoOpen] = useState(false);
+
+  // Grounded chat (same backend flow as Documents chat)
+  const [groundedChatOpen, setGroundedChatOpen] = useState(false);
+  const [chatList, setChatList] = useState<ChatSummary[]>([]);
+  const [chatListLoading, setChatListLoading] = useState(false);
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatSending, setChatSending] = useState(false);
+  const [chatInput, setChatInput] = useState("");
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [copiedAssistantMessageId, setCopiedAssistantMessageId] = useState<string | null>(null);
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  const chatSendInFlightRef = useRef(false);
 
   useEffect(() => {
     if (!loading && !user) router.push("/login");
@@ -257,6 +465,170 @@ export default function FundDevHandbookTemplatePage() {
       },
     });
   }
+
+  async function loadGroundedChats() {
+    if (!user || !orgId) return;
+    setChatListLoading(true);
+    setChatError(null);
+
+    try {
+      const res = await authedFetch("/api/chats?limit=25&visibility=private");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Failed to load chats");
+
+      const nextChats = normalizeChatSummaries(data?.chats).filter(
+        (chat) => chat.visibility === "private",
+      );
+      setChatList(nextChats);
+      setActiveChatId((current) => {
+        if (current && nextChats.some((chat) => chat.id === current)) return current;
+        return nextChats[0]?.id ?? null;
+      });
+      if (nextChats.length === 0) {
+        setChatMessages([]);
+      }
+    } catch (err: unknown) {
+      if (err instanceof Error) setChatError(err.message);
+      else setChatError("Failed to load chats");
+    } finally {
+      setChatListLoading(false);
+    }
+  }
+
+  async function loadGroundedChatMessages(chatId: string) {
+    if (!user || !orgId || !chatId) return;
+    setChatLoading(true);
+    setChatError(null);
+    try {
+      const res = await authedFetch(`/api/chats/${chatId}?limit=60`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Failed to load chat");
+      const messages = Array.isArray(data?.messages)
+        ? data.messages
+            .map((item: unknown) => normalizeChatMessage(item))
+            .filter((item: ChatMessage | null): item is ChatMessage => Boolean(item))
+        : [];
+      setChatMessages(dedupeChatMessages(messages));
+    } catch (err: unknown) {
+      setChatMessages([]);
+      if (err instanceof Error) setChatError(err.message);
+      else setChatError("Failed to load chat");
+    } finally {
+      setChatLoading(false);
+    }
+  }
+
+  async function createGroundedChat(title?: string) {
+    const res = await authedFetch("/api/chats", {
+      method: "POST",
+      body: JSON.stringify({ title: title?.trim() || "New chat", visibility: "private" }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || "Failed to create chat");
+    const next = normalizeChatSummaries([data?.chat])[0];
+    if (!next) throw new Error("Invalid chat response");
+    return next;
+  }
+
+  async function ensureActiveGroundedChatId(seedTitle: string) {
+    if (activeChatId) return activeChatId;
+    const nextChat = await createGroundedChat(seedTitle);
+    setChatList((current) => [nextChat, ...current.filter((chat) => chat.id !== nextChat.id)]);
+    setActiveChatId(nextChat.id);
+    return nextChat.id;
+  }
+
+  async function handleNewGroundedChat() {
+    setChatError(null);
+    try {
+      const nextChat = await createGroundedChat("New chat");
+      setChatList((current) => [nextChat, ...current.filter((chat) => chat.id !== nextChat.id)]);
+      setActiveChatId(nextChat.id);
+      setChatMessages([]);
+    } catch (err: unknown) {
+      if (err instanceof Error) setChatError(err.message);
+      else setChatError("Failed to create chat");
+    }
+  }
+
+  async function handleSendGroundedChatMessage() {
+    const content = chatInput.trim();
+    if (!content || chatSending || chatSendInFlightRef.current) return;
+    if (content.length > CHAT_MESSAGE_MAX_LENGTH) {
+      setChatError(`Message too long (${CHAT_MESSAGE_MAX_LENGTH} char max).`);
+      return;
+    }
+
+    chatSendInFlightRef.current = true;
+    setChatSending(true);
+    setChatError(null);
+
+    try {
+      const chatId = await ensureActiveGroundedChatId(content);
+      const res = await authedFetch(`/api/chats/${chatId}/messages`, {
+        method: "POST",
+        body: JSON.stringify({ content }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Failed to send message");
+
+      const userMessage = normalizeChatMessage(data?.userMessage);
+      const assistantMessage = normalizeChatMessage(data?.assistantMessage);
+      const nextMessages = [userMessage, assistantMessage].filter(
+        (item): item is ChatMessage => Boolean(item),
+      );
+      setChatMessages((current) => dedupeChatMessages([...current, ...nextMessages]));
+      setChatInput("");
+      await loadGroundedChats();
+    } catch (err: unknown) {
+      if (err instanceof Error) setChatError(err.message);
+      else setChatError("Failed to send message");
+    } finally {
+      chatSendInFlightRef.current = false;
+      setChatSending(false);
+    }
+  }
+
+  async function copyAssistantMessage(messageId: string, content: string) {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopiedAssistantMessageId(messageId);
+      window.setTimeout(() => {
+        setCopiedAssistantMessageId((current) => (current === messageId ? null : current));
+      }, 1200);
+    } catch {
+      setChatError("Unable to copy message.");
+    }
+  }
+
+  function openCitationInDocuments(citation: RagCitation) {
+    setGroundedChatOpen(false);
+    router.push(citation.deepLink || "/documents");
+  }
+
+  function messageSenderLabel(chatMessage: ChatMessage) {
+    if (chatMessage.role === "assistant") return "Assistant";
+    if (chatMessage.createdBy && user && chatMessage.createdBy === user.uid) return "You";
+    if (chatMessage.createdByName) return chatMessage.createdByName;
+    return "Teammate";
+  }
+
+  useEffect(() => {
+    if (!groundedChatOpen || !user || !orgId) return;
+    void loadGroundedChats();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groundedChatOpen, user, orgId]);
+
+  useEffect(() => {
+    if (!groundedChatOpen || !activeChatId) return;
+    void loadGroundedChatMessages(activeChatId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groundedChatOpen, activeChatId]);
+
+  useEffect(() => {
+    if (!groundedChatOpen || !chatScrollRef.current) return;
+    chatScrollRef.current.scrollTo({ top: chatScrollRef.current.scrollHeight, behavior: "auto" });
+  }, [chatMessages, chatLoading, chatSending, groundedChatOpen]);
 
   // Load org profile (display only) using orgId
   useEffect(() => {
@@ -1616,7 +1988,17 @@ export default function FundDevHandbookTemplatePage() {
             </div>
           </div>
 
-          {/* Floating download/save button */}
+          {/* Floating actions */}
+          <div className="fixed bottom-24 right-6 z-40">
+            <button
+              type="button"
+              onClick={() => setGroundedChatOpen(true)}
+              className="rounded-xl bg-gradient-to-r from-sky-600 to-primary-500 px-5 py-3 text-sm font-bold text-white hover:from-sky-700 hover:to-primary-600 shadow-2xl hover:shadow-primary-500/50 transition-all"
+            >
+              Open Grounded Chat
+            </button>
+          </div>
+
           <div className="fixed bottom-6 right-6 z-40">
             <button
               type="button"
@@ -1626,6 +2008,254 @@ export default function FundDevHandbookTemplatePage() {
               Download & Save Handbook
             </button>
           </div>
+
+          {/* Grounded Chat Modal */}
+          {groundedChatOpen ? (
+            <>
+              <div
+                className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm"
+                onClick={() => setGroundedChatOpen(false)}
+              />
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                <div className="relative flex h-[88vh] w-full max-w-6xl overflow-hidden rounded-2xl border-2 border-slate-200 bg-white shadow-2xl">
+                  <aside className="w-72 border-r border-slate-200 bg-slate-50 p-4">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-900">Grounded Chats</h3>
+                        <p className="mt-1 text-xs text-slate-600">Org-scoped RAG chat history</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleNewGroundedChat}
+                        className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-800 hover:bg-slate-100"
+                      >
+                        New
+                      </button>
+                    </div>
+
+                    <div className="mt-3 max-h-[74vh] space-y-2 overflow-y-auto pr-1">
+                      {chatListLoading ? (
+                        <p className="rounded-lg border border-dashed border-slate-300 bg-white px-3 py-2 text-xs text-slate-600">
+                          Loading chats...
+                        </p>
+                      ) : chatList.length === 0 ? (
+                        <p className="rounded-lg border border-dashed border-slate-300 bg-white px-3 py-2 text-xs text-slate-600">
+                          No chats yet. Start one below.
+                        </p>
+                      ) : (
+                        chatList.map((chat) => {
+                          const selected = activeChatId === chat.id;
+                          return (
+                            <button
+                              key={chat.id}
+                              type="button"
+                              onClick={() => setActiveChatId(chat.id)}
+                              className={classNames(
+                                "w-full rounded-lg border px-3 py-2 text-left transition",
+                                selected
+                                  ? "border-slate-900 bg-slate-900 text-white"
+                                  : "border-slate-200 bg-white text-slate-800 hover:border-slate-300 hover:bg-slate-50",
+                              )}
+                            >
+                              <p className="truncate text-sm font-semibold">{chat.title}</p>
+                              <p className={classNames("mt-1 text-[11px]", selected ? "text-white/80" : "text-slate-500")}>
+                                Updated {formatDate(chat.updatedAt || chat.lastMessageAt || chat.createdAt)}
+                              </p>
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  </aside>
+
+                  <section className="flex min-w-0 flex-1 flex-col bg-white p-4">
+                    <div className="mb-3 flex items-start justify-between gap-3 border-b border-slate-200 pb-3">
+                      <div>
+                        <h3 className="text-lg font-bold text-slate-900">Grounded handbook chat</h3>
+                        <p className="mt-1 text-sm text-slate-600">
+                          Ask a question to retrieve org-scoped context from your document library.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setGroundedChatOpen(false)}
+                        className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-100"
+                      >
+                        Close
+                      </button>
+                    </div>
+
+                    <div
+                      ref={chatScrollRef}
+                      className="flex-1 space-y-4 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-4"
+                    >
+                      {chatLoading ? (
+                        <p className="text-sm text-slate-600">Loading chat...</p>
+                      ) : chatMessages.length === 0 ? (
+                        <div className="flex h-full min-h-[40vh] items-center justify-center text-center">
+                          <div>
+                            <p className="text-base font-semibold text-slate-800">Start a grounded chat</p>
+                            <p className="mt-1 text-sm text-slate-500">
+                              Ask a question to retrieve org-scoped context from your document library.
+                            </p>
+                          </div>
+                        </div>
+                      ) : (
+                        chatMessages.map((chatMessage) => {
+                          if (chatMessage.role === "assistant") {
+                            const supportText =
+                              chatMessage.supportLabel ||
+                              (chatMessage.citations.length > 0
+                                ? `Supported by ${chatMessage.citations.length} sources`
+                                : "No supporting sources found");
+                            return (
+                              <article
+                                key={chatMessage.id}
+                                className="rounded-md border border-slate-200 bg-white p-3 shadow-sm"
+                              >
+                                <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_280px]">
+                                  <div className="min-w-0">
+                                    <div className="flex items-center justify-between gap-3">
+                                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                        Assistant
+                                      </p>
+                                      <div className="flex items-center gap-2">
+                                        <p className="text-xs text-slate-500">{formatDateTime(chatMessage.createdAt)}</p>
+                                        <button
+                                          type="button"
+                                          onClick={() => void copyAssistantMessage(chatMessage.id, chatMessage.content)}
+                                          className="rounded-md border border-slate-300 px-2 py-0.5 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
+                                        >
+                                          {copiedAssistantMessageId === chatMessage.id ? "Copied" : "Copy"}
+                                        </button>
+                                      </div>
+                                    </div>
+                                    <p className="mt-2 whitespace-pre-wrap text-[15px] leading-7 text-slate-700">
+                                      {chatMessage.content}
+                                    </p>
+                                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                                      <span
+                                        className={classNames(
+                                          "inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold",
+                                          supportChipClasses(chatMessage.supportLabel),
+                                        )}
+                                      >
+                                        {supportText}
+                                      </span>
+                                      {chatMessage.contextSummary ? (
+                                        <span className="text-xs text-slate-500">{chatMessage.contextSummary}</span>
+                                      ) : null}
+                                    </div>
+                                  </div>
+
+                                  <aside className="min-w-0 self-start rounded-2xl border border-slate-200 bg-white p-2">
+                                    <p className="px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                      Sources
+                                    </p>
+                                    {chatMessage.citations.length > 0 ? (
+                                      <div className="mt-2 space-y-1.5">
+                                        {chatMessage.citations.map((citation, index) => {
+                                          const citationKey = `${citation.docId}-${citation.chunkId ?? "none"}-${index}`;
+                                          return (
+                                            <button
+                                              key={citationKey}
+                                              type="button"
+                                              onClick={() => openCitationInDocuments(citation)}
+                                              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-left transition hover:border-slate-300 hover:bg-slate-50"
+                                            >
+                                              <p className="truncate text-sm font-semibold text-slate-900">
+                                                {citation.docTitle}
+                                              </p>
+                                              <p className="mt-0.5 text-xs leading-5 text-slate-600">
+                                                {citationPreviewText(citation.snippet)}
+                                              </p>
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
+                                    ) : (
+                                      <p className="mt-2 text-xs text-slate-500">No sources for this response.</p>
+                                    )}
+                                  </aside>
+                                </div>
+                              </article>
+                            );
+                          }
+
+                          const isOwnMessage = chatMessage.createdBy ? chatMessage.createdBy === user.uid : true;
+                          const senderLabel = messageSenderLabel(chatMessage);
+
+                          return (
+                            <div key={chatMessage.id} className={classNames("flex", isOwnMessage ? "justify-end" : "justify-start")}>
+                              <article
+                                className={classNames(
+                                  "w-full max-w-[88%] rounded-md border px-4 py-2.5",
+                                  isOwnMessage
+                                    ? "border-slate-900 bg-slate-900 text-white"
+                                    : "border-slate-200 bg-white text-slate-900",
+                                )}
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <p
+                                    className={classNames(
+                                      "text-[11px] font-semibold uppercase tracking-wide",
+                                      isOwnMessage ? "text-white/80" : "text-slate-500",
+                                    )}
+                                  >
+                                    {senderLabel}
+                                  </p>
+                                  <p className={classNames("text-xs", isOwnMessage ? "text-white/70" : "text-slate-500")}>
+                                    {formatDateTime(chatMessage.createdAt)}
+                                  </p>
+                                </div>
+                                <p
+                                  className={classNames(
+                                    "mt-1 whitespace-pre-wrap text-sm leading-6",
+                                    isOwnMessage ? "text-white" : "text-slate-800",
+                                  )}
+                                >
+                                  {chatMessage.content}
+                                </p>
+                              </article>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+
+                    <form
+                      className="mt-3 space-y-2 rounded-xl border border-slate-200 bg-slate-100 p-3"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void handleSendGroundedChatMessage();
+                      }}
+                    >
+                      <textarea
+                        value={chatInput}
+                        onChange={(event) => setChatInput(event.target.value)}
+                        rows={3}
+                        placeholder="Ask a question about your organization documents..."
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                      />
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-xs text-slate-500">
+                          {chatInput.trim().length}/{CHAT_MESSAGE_MAX_LENGTH}
+                        </p>
+                        <button
+                          type="submit"
+                          disabled={chatSending || !chatInput.trim()}
+                          className="inline-flex cursor-pointer items-center rounded-lg bg-sky-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {chatSending ? "Thinking..." : "Send"}
+                        </button>
+                      </div>
+                    </form>
+                    {chatError ? <p className="mt-2 text-sm text-rose-700">{chatError}</p> : null}
+                  </section>
+                </div>
+              </div>
+            </>
+          ) : null}
 
           {/* Download/Approve Modal */}
           {downloadModalOpen ? (
