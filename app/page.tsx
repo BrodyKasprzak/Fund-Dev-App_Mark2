@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { KnowledgeAssetPanel } from "@/components/workspace/KnowledgeAssetPanel";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -38,8 +39,16 @@ export default function Home() {
           
           {/* Logo Area */}
           <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded bg-slate-900">
-              <span className="text-xs font-bold text-white tracking-wider">PF</span>
+            <div className="h-8 w-8 overflow-hidden rounded bg-white">
+              <Image
+                src="/favicon.ico?v=20260325"
+                alt="PurposeFramework logo"
+                width={32}
+                height={32}
+                unoptimized
+                priority
+                className="h-full w-full object-cover"
+              />
             </div>
             <div>
               <p className="text-sm font-bold tracking-tight text-slate-900">PurposeFramework</p>
