@@ -7,6 +7,11 @@ import { WorkspaceShell } from "@/components/workspace/WorkspaceShell";
 export const metadata: Metadata = {
   title: "PurposeFramework",
   description: "Purpose-built document operations for fundraisers",
+  icons: {
+    icon: "/favicon.ico",
+    shortcut: "/favicon.ico",
+    apple: "/favicon.ico",
+  },
 };
 
 export default function RootLayout({
