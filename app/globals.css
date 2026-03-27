@@ -43,6 +43,8 @@
   --font-geist-sans: "Segoe UI";
   --font-geist-mono: "Consolas";
   --font-sora: "Segoe UI";
+  --focus-ring-color: #5551a8;
+  --focus-ring-soft: rgba(85, 81, 168, 0.18);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -56,6 +58,30 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-geist-sans), "Segoe UI", Helvetica, Arial, sans-serif;
+}
+
+:where(
+    button,
+    [role="button"],
+    a[href],
+    input,
+    textarea,
+    select
+  ):focus-visible {
+  outline: 2px solid var(--focus-ring-color);
+  outline-offset: 2px;
+}
+
+button:focus-visible,
+[role="button"]:focus-visible,
+a[href]:focus-visible {
+  box-shadow: 0 0 0 4px var(--focus-ring-soft);
+}
+
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  box-shadow: 0 0 0 3px var(--focus-ring-soft);
 }
 
 .public-shell {

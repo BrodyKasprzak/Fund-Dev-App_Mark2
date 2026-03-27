@@ -969,17 +969,30 @@ export default function DocumentsPage() {
 
   return (
     <main className="workspace-page-fill min-h-screen bg-white [font-family:var(--font-geist-sans)]">
+      <a
+        href="#chat-main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-white focus:px-3 focus:py-2 focus:text-sm focus:font-semibold focus:text-slate-900"
+      >
+        Skip to main content
+      </a>
       <WorkspaceTopNav active="chat" />
       <div className="w-full min-h-screen bg-white pt-0">
         {error || message ? (
           <div className="space-y-2 px-3 pb-2 sm:px-4">
             {error ? (
-              <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 shadow-sm">
+              <p
+                className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 shadow-sm"
+                role="alert"
+              >
                 {error}
               </p>
             ) : null}
             {message ? (
-              <p className="rounded-xl border border-emerald-300/70 bg-emerald-100/60 px-3 py-2 text-sm text-emerald-800 shadow-sm">
+              <p
+                className="rounded-xl border border-emerald-300/70 bg-emerald-100/60 px-3 py-2 text-sm text-emerald-800 shadow-sm"
+                role="status"
+                aria-live="polite"
+              >
                 {message}
               </p>
             ) : null}
@@ -1002,6 +1015,7 @@ export default function DocumentsPage() {
             onClick={leftSidebarCollapsed ? () => setLeftSidebarCollapsed(false) : undefined}
             role={leftSidebarCollapsed ? "button" : undefined}
             tabIndex={leftSidebarCollapsed ? 0 : undefined}
+            aria-label={leftSidebarCollapsed ? "Expand right sidebar" : "Right sidebar"}
             onKeyDown={
               leftSidebarCollapsed
                 ? (event) => {
@@ -1040,6 +1054,7 @@ export default function DocumentsPage() {
                 onClick={() => setLeftSidebarCollapsed(true)}
                 className="rounded border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
                 aria-label="Collapse sidebar"
+                aria-expanded={!leftSidebarCollapsed}
                 title="Collapse sidebar"
               >
                 {">"}
@@ -1101,6 +1116,8 @@ export default function DocumentsPage() {
                     type="button"
                     onClick={() => setDocFiltersOpen((current) => !current)}
                     className="flex w-full items-center justify-between text-left"
+                    aria-expanded={docFiltersOpen}
+                    aria-controls="chat-filter-panel"
                   >
                     <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                       Filter Docs
@@ -1113,7 +1130,7 @@ export default function DocumentsPage() {
                     Active: <span className="font-medium text-slate-700">{activeFilterLabel}</span>
                   </p>
                   {docFiltersOpen ? (
-                    <div className="mt-3 space-y-3">
+                    <div id="chat-filter-panel" className="mt-3 space-y-3">
                       <input
                         value={leftFilter}
                         onChange={(e) => {
@@ -1331,7 +1348,10 @@ export default function DocumentsPage() {
             )}
           </aside>
 
-          <section className="min-w-0 bg-white p-5 lg:order-1 lg:min-h-[100dvh] lg:border-r lg:border-slate-200">
+          <section
+            id="chat-main-content"
+            className="min-w-0 bg-white p-5 lg:order-1 lg:min-h-[100dvh] lg:border-r lg:border-slate-200"
+          >
             {workspaceMode === "documents" ? (
               !selectedDocId ? (
                 <div className="flex min-h-[68vh] items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">

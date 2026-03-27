@@ -115,6 +115,19 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
     }
   }, [pathname, router, searchParams]);
 
+  useEffect(() => {
+    if (!inviteOpen) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setInviteOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [inviteOpen]);
+
   function openInviteModal() {
     setInviteMsg(null);
     setInviteEmails([""]);
@@ -273,7 +286,11 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
                 </div>
               ))}
 
-              {inviteMsg ? <div className="status-box">{inviteMsg}</div> : null}
+              {inviteMsg ? (
+                <div className="status-box" role="status" aria-live="polite">
+                  {inviteMsg}
+                </div>
+              ) : null}
 
               <div className="flex items-center justify-between gap-3 pt-2">
                 <button

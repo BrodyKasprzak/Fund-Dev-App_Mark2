@@ -5,7 +5,6 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { collection, doc, getCountFromServer, getDoc } from "firebase/firestore";
 import { db } from "@/lib/firebaseClient";
 import { useAuth } from "@/lib/AuthContext";
-import { KnowledgeAssetPanel } from "@/components/workspace/KnowledgeAssetPanel";
 
 type OrgProfile = {
   id: string;
@@ -18,6 +17,7 @@ type DocumentSummary = {
   title: string;
   createdAt: string | null;
   updatedAt: string | null;
+  size: number | null;
 };
 
 type ActivityRow = {
@@ -41,28 +41,28 @@ const QUICK_ACTIONS: QuickAction[] = [
     description: "Add new files to your organization workspace",
     href: "/documents",
     style:
-      "border-primary-200 bg-primary-50/40 text-slate-900 hover:border-primary-300",
+      "border-slate-200 bg-white text-slate-900 hover:border-primary-300",
   },
   {
     label: "Ask a Question",
     description: "Open grounded org chat over your documents",
     href: "/chat",
     style:
-      "border-success-200 bg-success-50/35 text-slate-900 hover:border-success-300",
+      "border-slate-200 bg-white text-slate-900 hover:border-success-300",
   },
   {
     label: "Create Grant",
     description: "Start from the existing grant strategy flow",
     href: "/products",
     style:
-      "border-accent-200 bg-accent-50/40 text-slate-900 hover:border-accent-300",
+      "border-slate-200 bg-white text-slate-900 hover:border-accent-300",
   },
   {
     label: "Invite Member",
     description: "Invite teammates with secure access codes",
     href: "/dashboard?invite=1",
     style:
-      "border-slate-200 bg-slate-50 text-slate-900 hover:border-slate-300",
+      "border-slate-200 bg-white text-slate-900 hover:border-slate-300",
   },
 ];
 
@@ -77,6 +77,19 @@ function formatDateTime(value: string | null) {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+function formatStorage(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  const rounded = value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1) : value.toFixed(2);
+  return `${rounded} ${units[unitIndex]}`;
 }
 
 export default function DashboardPage() {
@@ -94,16 +107,60 @@ export default function DashboardPage() {
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
   const [teamMembersCount, setTeamMembersCount] = useState<number | null>(null);
   const [activity, setActivity] = useState<ActivityRow[]>([]);
+  const [usageDocs, setUsageDocs] = useState<DocumentSummary[]>([]);
 
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmails, setInviteEmails] = useState<string[]>([""]);
   const [inviteSending, setInviteSending] = useState(false);
   const [inviteMsg, setInviteMsg] = useState<string | null>(null);
+  const [usageOpen, setUsageOpen] = useState(false);
 
   const canSendInvites = useMemo(() => {
     const cleaned = inviteEmails.map((e) => e.trim()).filter(Boolean);
     return cleaned.length > 0 && !inviteSending;
   }, [inviteEmails, inviteSending]);
+
+  const usageTotals = useMemo(() => {
+    const docTotal = usageDocs.length;
+    const bytesTotal = usageDocs.reduce((sum, docRow) => {
+      const size = typeof docRow.size === "number" && Number.isFinite(docRow.size) ? docRow.size : 0;
+      return sum + Math.max(0, size);
+    }, 0);
+    return { docTotal, bytesTotal };
+  }, [usageDocs]);
+
+  const usageBuckets = useMemo(() => {
+    const now = new Date();
+    const months = Array.from({ length: 6 }).map((_, idx) => {
+      const d = new Date(now.getFullYear(), now.getMonth() - (5 - idx), 1);
+      const key = `${d.getFullYear()}-${d.getMonth()}`;
+      return {
+        key,
+        label: d.toLocaleDateString(undefined, { month: "short" }),
+        docs: 0,
+        bytes: 0,
+      };
+    });
+
+    const monthIndex = new Map(months.map((m, idx) => [m.key, idx] as const));
+    for (const docRow of usageDocs) {
+      const refDateRaw = docRow.createdAt || docRow.updatedAt || null;
+      if (!refDateRaw) continue;
+      const refDate = new Date(refDateRaw);
+      if (Number.isNaN(refDate.getTime())) continue;
+      const key = `${refDate.getFullYear()}-${refDate.getMonth()}`;
+      const idx = monthIndex.get(key);
+      if (idx === undefined) continue;
+      months[idx].docs += 1;
+      const size = typeof docRow.size === "number" && Number.isFinite(docRow.size) ? docRow.size : 0;
+      months[idx].bytes += Math.max(0, size);
+    }
+
+    const maxDocs = Math.max(1, ...months.map((m) => m.docs));
+    const maxBytes = Math.max(1, ...months.map((m) => m.bytes));
+
+    return { months, maxDocs, maxBytes };
+  }, [usageDocs]);
 
   const fallbackOrgName =
     !activeOrgId
@@ -182,9 +239,21 @@ export default function DashboardPage() {
         ]);
 
         const documentPayload = await documentsRes.json().catch(() => ({}));
-        const documents: DocumentSummary[] = Array.isArray(documentPayload?.documents)
-          ? documentPayload.documents
-          : [];
+        const rawDocuments: unknown[] = Array.isArray(documentPayload?.documents) ? documentPayload.documents : [];
+        const documents: DocumentSummary[] = rawDocuments
+          .map((item) => {
+            if (typeof item !== "object" || item === null) return null;
+            const rec = item as Record<string, unknown>;
+            if (typeof rec.id !== "string") return null;
+            return {
+              id: rec.id,
+              title: typeof rec.title === "string" ? rec.title : "Untitled document",
+              createdAt: typeof rec.createdAt === "string" ? rec.createdAt : null,
+              updatedAt: typeof rec.updatedAt === "string" ? rec.updatedAt : null,
+              size: typeof rec.size === "number" ? rec.size : null,
+            } satisfies DocumentSummary;
+          })
+          .filter((docRow): docRow is DocumentSummary => Boolean(docRow));
 
         const sortedDocuments = [...documents].sort((a, b) => {
           const aTs = new Date(a.updatedAt || a.createdAt || 0).getTime();
@@ -192,6 +261,7 @@ export default function DashboardPage() {
           return bTs - aTs;
         });
 
+        setUsageDocs(sortedDocuments);
         setDocumentsCount(sortedDocuments.length);
         setLastUpdatedAt(sortedDocuments[0]?.updatedAt || sortedDocuments[0]?.createdAt || null);
 
@@ -211,6 +281,7 @@ export default function DashboardPage() {
         setLastUpdatedAt(null);
         setTeamMembersCount(null);
         setActivity([]);
+        setUsageDocs([]);
       } finally {
         setWorkspaceLoading(false);
       }
@@ -240,6 +311,32 @@ export default function DashboardPage() {
       inviteQueryHandledRef.current = false;
     }
   }, [router, searchParams]);
+
+  useEffect(() => {
+    if (!inviteOpen) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setInviteOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [inviteOpen]);
+
+  useEffect(() => {
+    if (!usageOpen) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setUsageOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [usageOpen]);
 
   function updateEmail(idx: number, value: string) {
     setInviteEmails((prev) => prev.map((e, i) => (i === idx ? value : e)));
@@ -299,12 +396,12 @@ export default function DashboardPage() {
 
   return (
     <main className="min-h-screen overflow-y-auto p-6 md:p-8">
-      <div className="mx-auto max-w-6xl space-y-6">
-        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm md:p-8">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="min-w-0">
-              <p className="inline-flex items-center rounded-full border border-primary-200 bg-primary-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary-700">
-                PurposeFramework Workspace
+      <div className="mx-auto max-w-7xl space-y-6">
+        <section className="border border-slate-200 bg-white p-6 shadow-sm md:p-8">
+          <div className="flex flex-wrap items-start justify-between gap-6">
+            <div className="min-w-0 max-w-4xl">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary-600">
+                Workspace Overview
               </p>
               <h1 className="mt-2 truncate text-3xl font-semibold tracking-tight text-slate-900 md:text-4xl">
                 {orgName}
@@ -313,47 +410,62 @@ export default function DashboardPage() {
                 {mission}
               </p>
             </div>
+
+            <div className="w-full max-w-xs border border-slate-200 bg-slate-50 px-4 py-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                Workspace Status
+              </p>
+              <p className="mt-2 text-sm font-medium text-slate-700">
+                {workspaceLoading ? "Updating metrics..." : "Metrics current"}
+              </p>
+            </div>
           </div>
 
-          <div className="mt-6 grid gap-3 sm:grid-cols-3">
-            <article className="rounded-xl border border-primary-100 bg-primary-50/40 p-4">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Documents</p>
-              <p className="mt-2 text-2xl font-semibold text-slate-900">
+          <div className="mt-6 grid gap-3 border-t border-slate-200 pt-5 sm:grid-cols-3">
+            <article className="border border-slate-200 bg-slate-50/70 p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Documents</p>
+              <p className="mt-2 text-3xl font-semibold text-slate-900">
                 {typeof documentsCount === "number" ? documentsCount : "--"}
               </p>
             </article>
-            <article className="rounded-xl border border-accent-100 bg-accent-50/40 p-4">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Last updated</p>
-              <p className="mt-2 text-lg font-semibold text-slate-900">{formatDateTime(lastUpdatedAt)}</p>
+            <article className="border border-slate-200 bg-slate-50/70 p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Last Updated</p>
+              <p className="mt-2 text-xl font-semibold text-slate-900">{formatDateTime(lastUpdatedAt)}</p>
             </article>
-            <article className="rounded-xl border border-success-100 bg-success-50/40 p-4">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Team members</p>
-              <p className="mt-2 text-2xl font-semibold text-slate-900">
+            <article className="border border-slate-200 bg-slate-50/70 p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Team Members</p>
+              <p className="mt-2 text-3xl font-semibold text-slate-900">
                 {typeof teamMembersCount === "number" ? teamMembersCount : "--"}
               </p>
             </article>
           </div>
-          {workspaceLoading ? (
-            <p className="mt-4 text-xs font-medium uppercase tracking-wide text-slate-500">
-              Updating workspace metrics...
-            </p>
-          ) : null}
         </section>
 
-        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+        <section className="border border-slate-200 bg-white p-5 shadow-sm md:p-6">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-lg font-semibold text-slate-900">Quick Actions</h2>
             <p className="text-xs text-slate-500">Fast paths into your core org workflows</p>
           </div>
 
           <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {QUICK_ACTIONS.map((action) => (
+            {QUICK_ACTIONS.map((action, idx) => (
               <button
                 key={action.label}
                 type="button"
                 onClick={() => router.push(action.href)}
-                className={`rounded-xl border p-4 text-left shadow-sm transition hover:shadow-md ${action.style}`}
+                className={`border p-4 text-left shadow-sm transition hover:shadow-md ${action.style}`}
               >
+                <div
+                  className={`mb-3 h-[2px] w-10 ${
+                    idx === 0
+                      ? "bg-primary-400"
+                      : idx === 1
+                        ? "bg-success-400"
+                        : idx === 2
+                          ? "bg-accent-400"
+                          : "bg-slate-400"
+                  }`}
+                />
                 <p className="text-sm font-semibold">{action.label}</p>
                 <p className="mt-1 text-xs text-slate-600">{action.description}</p>
               </button>
@@ -361,43 +473,110 @@ export default function DashboardPage() {
           </div>
         </section>
 
-        <div className="grid items-start gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-lg font-semibold text-slate-900">Recent Activity</h2>
-              <button type="button" onClick={() => router.push("/activity")} className="btn-secondary px-3 py-1.5 text-xs">
-                Open full activity
+        <section className="border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-lg font-semibold text-slate-900">Recent Activity</h2>
+            <button type="button" onClick={() => setUsageOpen(true)} className="btn-secondary px-3 py-1.5 text-xs">
+              View usage
+            </button>
+          </div>
+
+          {activity.length > 0 ? (
+            <ul className="mt-4 space-y-2">
+              {activity.map((item) => (
+                <li key={item.id} className="border border-slate-200 bg-slate-50/70 px-4 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{item.label}</p>
+                      <p className="truncate text-sm font-semibold text-slate-900">{item.title}</p>
+                    </div>
+                    <p className="text-xs text-slate-500">{formatDateTime(item.when)}</p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="mt-4 border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center">
+              <p className="text-sm text-slate-600">
+                {workspaceLoading
+                  ? "Loading recent activity..."
+                  : "Recent activity will appear here as your team uploads documents, saves answers, and creates grants."}
+              </p>
+            </div>
+          )}
+        </section>
+      </div>
+
+      {usageOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+          <div className="absolute inset-0 bg-black/35 backdrop-blur-sm" onClick={() => setUsageOpen(false)} />
+          <section className="auth-card relative w-full max-w-3xl p-7">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-primary-600">Workspace Usage</p>
+                <h3 className="mt-1 text-2xl font-semibold text-slate-900">Document Storage Overview</h3>
+                <p className="mt-2 text-sm text-slate-600">
+                  Total documents uploaded and storage usage across the last 6 months.
+                </p>
+              </div>
+              <button type="button" onClick={() => setUsageOpen(false)} className="btn-secondary px-3 py-1.5 text-sm">
+                Close
               </button>
             </div>
 
-            {activity.length > 0 ? (
-              <ul className="mt-4 space-y-3">
-                {activity.map((item) => (
-                  <li key={item.id} className="rounded-xl border border-slate-200 bg-slate-50/80 px-4 py-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{item.label}</p>
-                        <p className="truncate text-sm font-semibold text-slate-900">{item.title}</p>
-                      </div>
-                      <p className="text-xs text-slate-500">{formatDateTime(item.when)}</p>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <div className="mt-4 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center">
-                <p className="text-sm text-slate-600">
-                  {workspaceLoading
-                    ? "Loading recent activity..."
-                    : "Recent activity will appear here as your team uploads documents, saves answers, and creates grants."}
-                </p>
-              </div>
-            )}
-          </section>
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <article className="border border-slate-200 bg-slate-50/80 px-4 py-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Documents Uploaded</p>
+                <p className="mt-1 text-2xl font-semibold text-slate-900">{usageTotals.docTotal}</p>
+              </article>
+              <article className="border border-slate-200 bg-slate-50/80 px-4 py-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Data Stored</p>
+                <p className="mt-1 text-2xl font-semibold text-slate-900">{formatStorage(usageTotals.bytesTotal)}</p>
+              </article>
+            </div>
 
-          <KnowledgeAssetPanel className="xl:sticky xl:top-6" />
+            <div className="mt-6 border border-slate-200 bg-white p-4">
+              <div className="mb-3 flex flex-wrap items-center gap-4 text-xs">
+                <span className="inline-flex items-center gap-2 text-slate-700">
+                  <span className="inline-block h-2.5 w-2.5 bg-slate-700" />
+                  Documents uploaded
+                </span>
+                <span className="inline-flex items-center gap-2 text-slate-700">
+                  <span className="inline-block h-2.5 w-2.5 bg-primary-500" />
+                  Data stored
+                </span>
+              </div>
+
+              <div className="grid h-48 grid-cols-6 items-end gap-3">
+                {usageBuckets.months.map((bucket) => {
+                  const docHeight = Math.round((bucket.docs / usageBuckets.maxDocs) * 100);
+                  const bytesHeight = Math.round((bucket.bytes / usageBuckets.maxBytes) * 100);
+                  const safeDocHeight = bucket.docs > 0 ? Math.max(10, docHeight) : 0;
+                  const safeBytesHeight = bucket.bytes > 0 ? Math.max(10, bytesHeight) : 0;
+
+                  return (
+                    <div key={bucket.key} className="flex h-full flex-col items-center justify-end gap-2">
+                      <div className="flex h-full items-end gap-1">
+                        <div
+                          className="w-3 bg-slate-700"
+                          style={{ height: `${safeDocHeight}%` }}
+                          title={`${bucket.label}: ${bucket.docs} documents`}
+                        />
+                        <div
+                          className="w-3 bg-primary-500"
+                          style={{ height: `${safeBytesHeight}%` }}
+                          title={`${bucket.label}: ${formatStorage(bucket.bytes)}`}
+                        />
+                      </div>
+                      <div className="text-[11px] font-medium text-slate-500">{bucket.label}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </section>
         </div>
-      </div>
+      ) : null}
 
       {inviteOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
@@ -449,7 +628,11 @@ export default function DashboardPage() {
                 </div>
               ))}
 
-              {inviteMsg ? <div className="status-box">{inviteMsg}</div> : null}
+              {inviteMsg ? (
+                <div className="status-box" role="status" aria-live="polite">
+                  {inviteMsg}
+                </div>
+              ) : null}
 
               <div className="flex items-center justify-between gap-3 pt-2">
                 <button

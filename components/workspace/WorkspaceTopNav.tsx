@@ -15,6 +15,7 @@ export function WorkspaceTopNav({ active }: WorkspaceTopNavProps) {
         <button
           type="button"
           onClick={() => router.push("/documents")}
+          aria-current={active === "documents" ? "page" : undefined}
           className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
             active === "documents"
               ? "bg-sky-600/90 text-white"
@@ -26,6 +27,7 @@ export function WorkspaceTopNav({ active }: WorkspaceTopNavProps) {
         <button
           type="button"
           onClick={() => router.push("/chat")}
+          aria-current={active === "chat" ? "page" : undefined}
           className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
             active === "chat"
               ? "bg-emerald-600/90 text-white"
