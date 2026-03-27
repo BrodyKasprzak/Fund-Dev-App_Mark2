@@ -163,10 +163,7 @@ export default function InvitePage() {
     await refreshMe();
 
     setMsg("Invite accepted. Redirecting...");
-    setTimeout(
-      () => router.push(`/org-picker?next=${encodeURIComponent("/dashboard")}`),
-      600,
-    );
+    setTimeout(() => router.push(`/org-picker?next=${encodeURIComponent("/dashboard")}`), 600);
   }
 
   async function createAccountAndJoin() {
@@ -205,9 +202,7 @@ export default function InvitePage() {
       auth.currentUser?.email &&
       normalizeInviteEmail(auth.currentUser.email) !== normalizeInviteEmail(normalizedEmail)
     ) {
-      setMsg(
-        `You are signed in as ${auth.currentUser.email}. Use the same invited email or sign out first.`,
-      );
+      setMsg(`You are signed in as ${auth.currentUser.email}. Use the same invited email or sign out first.`);
       return;
     }
 
@@ -221,9 +216,7 @@ export default function InvitePage() {
       user?.email &&
       normalizeInviteEmail(user.email) !== normalizeInviteEmail(normalizedEmail)
     ) {
-      setMsg(
-        `You are signed in as ${user.email}. Use the same invited email or sign out first.`,
-      );
+      setMsg(`You are signed in as ${user.email}. Use the same invited email or sign out first.`);
       return;
     }
 
@@ -292,20 +285,15 @@ export default function InvitePage() {
     }
   }
 
-  const messageClass =
-    msg && msg.startsWith("Error:")
-      ? "border-rose-200 bg-rose-50 text-rose-700"
-      : "border-slate-200 bg-slate-50 text-slate-700";
+  const messageClass = msg && msg.startsWith("Error:") ? "status-box status-box-error" : "status-box";
 
   if (!ready) {
     return (
-      <main className="min-h-screen bg-gradient-to-br from-primary-50 via-slate-50 to-primary-50 p-6">
+      <main className="public-shell p-6">
         <div className="mx-auto flex min-h-[70vh] w-full max-w-xl items-center">
-          <section className="w-full rounded-2xl border border-slate-200 bg-white p-8 shadow-xl shadow-slate-200/60">
-            <div className="inline-flex items-center justify-center rounded-2xl bg-gradient-to-br from-primary-500 to-accent-400 px-5 py-3 shadow-lg">
-              <span className="text-lg font-bold text-white">PurposeFramework</span>
-            </div>
-            <h1 className="mt-5 text-2xl font-semibold tracking-tight text-slate-900">Invalid invite link</h1>
+          <section className="auth-card w-full p-8">
+            <span className="auth-brand-chip">PurposeFramework</span>
+            <h1 className="mt-4 text-2xl font-semibold tracking-tight text-slate-900">Invalid invite link</h1>
             <p className="mt-2 text-sm text-slate-600">
               This link is missing required invite information. Ask your admin to send a new invite.
             </p>
@@ -316,25 +304,19 @@ export default function InvitePage() {
   }
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-primary-50 via-slate-50 to-primary-50 p-6 md:p-8">
+    <main className="public-shell p-6 md:p-8">
       <div className="mx-auto flex min-h-[70vh] w-full max-w-2xl items-center">
-        <section className="w-full rounded-2xl border border-slate-200 bg-white p-7 shadow-xl shadow-slate-200/60 md:p-8">
-          <div className="inline-flex items-center justify-center rounded-2xl bg-gradient-to-br from-primary-500 to-accent-400 px-5 py-3 shadow-lg">
-            <span className="text-lg font-bold text-white">PurposeFramework</span>
-          </div>
-          <h1 className="mt-5 text-3xl font-semibold tracking-tight text-slate-900">
+        <section className="auth-card w-full p-7 md:p-8">
+          <span className="auth-brand-chip">PurposeFramework</span>
+          <h1 className="mt-4 text-3xl font-semibold tracking-tight text-slate-900">
             Join {orgName ?? "organization"}
           </h1>
 
           {inviteLoading ? (
-            <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-              Loading invite...
-            </div>
+            <div className="status-box mt-5">Loading invite...</div>
           ) : (
             <>
-              <p className="mt-2 text-sm text-slate-600">
-              Enter the same email address that received this invite.
-              </p>
+              <p className="mt-2 text-sm text-slate-600">Enter the same email address that received this invite.</p>
               {inviteEmail ? (
                 <p className="mt-1 text-xs text-slate-500">
                   Invite recipient: <span className="font-medium text-slate-700">{inviteEmail}</span>
@@ -343,9 +325,9 @@ export default function InvitePage() {
 
               <div className="mt-5 space-y-4">
                 {existingOrgs && existingOrgs.length > 0 ? (
-                  <div className="space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="auth-section-card space-y-4 p-4">
                     <p className="text-sm font-semibold text-slate-900">
-                    You are already a member of these organizations:
+                      You are already a member of these organizations:
                     </p>
                     <ul className="space-y-2 text-sm">
                       {existingOrgs.map((o) => (
@@ -355,15 +337,13 @@ export default function InvitePage() {
                       ))}
                     </ul>
                     <p className="text-sm text-slate-700">
-                    Do you also want to become a member of {orgName ?? "this organization"}?
+                      Do you also want to become a member of {orgName ?? "this organization"}?
                     </p>
 
-                    {msg ? (
-                      <div className={`rounded-xl border px-4 py-3 text-sm ${messageClass}`}>{msg}</div>
-                    ) : null}
+                    {msg ? <div className={messageClass}>{msg}</div> : null}
 
                     <button
-                      className="w-full rounded-xl bg-gradient-to-r from-primary-500 to-accent-400 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-primary-500/30 transition hover:from-primary-600 hover:to-primary-500 disabled:opacity-60"
+                      className="btn-primary w-full px-4 py-2.5 text-sm"
                       disabled={submitting}
                       onClick={confirmJoinInvitedOrg}
                       type="button"
@@ -372,7 +352,7 @@ export default function InvitePage() {
                     </button>
 
                     <button
-                      className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+                      className="btn-secondary w-full px-4 py-2.5 text-sm"
                       disabled={submitting}
                       onClick={() => {
                         setExistingOrgs(null);
@@ -388,10 +368,10 @@ export default function InvitePage() {
 
                 {!existingOrgs ? (
                   <>
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-semibold text-slate-700">Invite email</label>
+                    <div>
+                      <label className="field-label">Invite email</label>
                       <input
-                        className="w-full rounded-xl border border-slate-300 px-4 py-2.5 text-slate-900 placeholder-slate-400 transition focus:border-transparent focus:outline-none focus:ring-2 focus:ring-primary-500"
+                        className="field-input"
                         value={accountEmail}
                         onChange={(e) => setAccountEmail(e.target.value)}
                         placeholder="you@example.org"
@@ -399,30 +379,30 @@ export default function InvitePage() {
                       />
                     </div>
 
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-semibold text-slate-700">Access code</label>
+                    <div>
+                      <label className="field-label">Access code</label>
                       <input
-                        className="w-full rounded-xl border border-slate-300 px-4 py-2.5 text-slate-900 placeholder-slate-400 transition focus:border-transparent focus:outline-none focus:ring-2 focus:ring-primary-500"
+                        className="field-input"
                         value={code}
                         onChange={(e) => setCode(e.target.value)}
                         placeholder="Paste access code"
                       />
                     </div>
 
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-semibold text-slate-700">Your name</label>
+                    <div>
+                      <label className="field-label">Your name</label>
                       <input
-                        className="w-full rounded-xl border border-slate-300 px-4 py-2.5 text-slate-900 placeholder-slate-400 transition focus:border-transparent focus:outline-none focus:ring-2 focus:ring-primary-500"
+                        className="field-input"
                         value={name}
                         onChange={(e) => setName(e.target.value)}
                         placeholder="Full name"
                       />
                     </div>
 
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-semibold text-slate-700">Position</label>
+                    <div>
+                      <label className="field-label">Position</label>
                       <input
-                        className="w-full rounded-xl border border-slate-300 px-4 py-2.5 text-slate-900 placeholder-slate-400 transition focus:border-transparent focus:outline-none focus:ring-2 focus:ring-primary-500"
+                        className="field-input"
                         value={position}
                         onChange={(e) => setPosition(e.target.value)}
                         placeholder="e.g., Development Director"
@@ -430,27 +410,25 @@ export default function InvitePage() {
                     </div>
 
                     {!auth.currentUser ? (
-                      <div className="space-y-1.5">
-                        <label className="text-sm font-semibold text-slate-700">Password</label>
+                      <div>
+                        <label className="field-label">Password</label>
                         <input
-                          className="w-full rounded-xl border border-slate-300 px-4 py-2.5 text-slate-900 placeholder-slate-400 transition focus:border-transparent focus:outline-none focus:ring-2 focus:ring-primary-500"
+                          className="field-input"
                           value={password}
                           onChange={(e) => setPassword(e.target.value)}
                           type="password"
                           placeholder="Use your existing password, or create one"
                         />
-                        <p className="text-xs text-slate-500">
+                        <p className="field-help">
                           If this email already has an account, we sign you in and then join this org.
                         </p>
                       </div>
                     ) : null}
 
-                    {msg ? (
-                      <div className={`rounded-xl border px-4 py-3 text-sm ${messageClass}`}>{msg}</div>
-                    ) : null}
+                    {msg ? <div className={messageClass}>{msg}</div> : null}
 
                     <button
-                      className="w-full rounded-xl bg-gradient-to-r from-primary-500 to-accent-400 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-primary-500/30 transition hover:from-primary-600 hover:to-primary-500 disabled:opacity-60"
+                      className="btn-primary w-full px-4 py-2.5 text-sm"
                       disabled={submitting || inviteLoading || inviteStatus !== "pending"}
                       onClick={createAccountAndJoin}
                       type="button"

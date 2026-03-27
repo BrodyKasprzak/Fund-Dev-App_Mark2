@@ -17,8 +17,8 @@ export function WorkspaceTopNav({ active }: WorkspaceTopNavProps) {
           onClick={() => router.push("/documents")}
           className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
             active === "documents"
-              ? "bg-sky-600 text-white"
-              : "bg-sky-50 text-sky-700 hover:bg-sky-100"
+              ? "bg-sky-600/90 text-white"
+              : "bg-sky-50/90 text-sky-700/90 hover:bg-sky-100/90"
           }`}
         >
           Documents
@@ -28,8 +28,8 @@ export function WorkspaceTopNav({ active }: WorkspaceTopNavProps) {
           onClick={() => router.push("/chat")}
           className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
             active === "chat"
-              ? "bg-emerald-600 text-white"
-              : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+              ? "bg-emerald-600/90 text-white"
+              : "bg-emerald-50/90 text-emerald-700/90 hover:bg-emerald-100/90"
           }`}
         >
           Chat
@@ -37,7 +37,7 @@ export function WorkspaceTopNav({ active }: WorkspaceTopNavProps) {
         <button
           type="button"
           onClick={() => router.push("/products")}
-          className="rounded-full bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 transition hover:bg-amber-100"
+          className="rounded-full bg-amber-50/90 px-3 py-1.5 text-xs font-semibold text-amber-700/90 transition hover:bg-amber-100/90"
         >
           Create
         </button>

@@ -175,7 +175,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   ) {
     return (
       <main className="workspace-shell min-h-screen flex items-center justify-center">
-        <div className="rounded-2xl border border-slate-300 bg-white/95 px-6 py-4 shadow-sm">
+        <div className="auth-card px-6 py-4">
           <p className="text-sm font-medium text-slate-700">Loading workspace...</p>
         </div>
       </main>
@@ -192,12 +192,12 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
           }`}
         >
           <div
-            className={`workspace-brand-strip border-b border-slate-300/80 bg-white/75 px-5 backdrop-blur md:px-7 ${
-              isDashboardRoute ? "py-3" : "py-1.5"
+            className={`workspace-brand-strip border-b border-slate-200 bg-white/85 px-5 backdrop-blur-md md:px-7 ${
+              isDashboardRoute ? "py-3.5" : "py-2"
             }`}
           >
             <p
-              className={`font-semibold uppercase tracking-[0.16em] text-primary-700 ${
+              className={`font-semibold uppercase tracking-[0.16em] text-primary-600 ${
                 isDashboardRoute ? "text-[11px]" : "text-[10px]"
               }`}
             >
@@ -212,7 +212,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
             </p>
             <h1
               className={`workspace-page-title font-semibold tracking-tight ${
-                isDashboardRoute ? "mt-1 text-2xl md:text-3xl" : "mt-0 text-sm md:text-base"
+                isDashboardRoute ? "mt-1 text-2xl md:text-[2rem]" : "mt-0 text-sm md:text-base"
               }`}
             >
               {pageTitle}
@@ -225,13 +225,13 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
 
       {inviteOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
-          <div className="absolute inset-0 bg-black/45 backdrop-blur-sm" onClick={closeInviteModal} />
+          <div className="absolute inset-0 bg-black/35 backdrop-blur-sm" onClick={closeInviteModal} />
 
-          <div className="relative w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-8 shadow-2xl">
+          <div className="auth-card relative w-full max-w-lg p-7">
             <div className="mb-6 flex items-start justify-between gap-4">
               <div>
                 <div className="mb-2 flex items-center gap-2">
-                  <div className="h-3 w-3 rounded-full bg-gradient-to-r from-accent-300 to-primary-500" />
+                  <div className="h-2.5 w-2.5 rounded-full bg-gradient-to-r from-accent-300 to-primary-500" />
                   <h2 className="text-xl font-semibold text-slate-900">Invite team members</h2>
                 </div>
                 <p className="text-sm text-slate-600">
@@ -240,7 +240,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
               </div>
 
               <button
-                className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-800 transition hover:bg-slate-50"
+                className="btn-secondary px-3 py-1.5 text-sm"
                 onClick={closeInviteModal}
                 type="button"
               >
@@ -254,7 +254,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
               {inviteEmails.map((email, idx) => (
                 <div key={idx} className="flex gap-2">
                   <input
-                    className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm transition focus:border-transparent focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    className="field-input flex-1 text-sm"
                     value={email}
                     onChange={(e) => updateEmail(idx, e.target.value)}
                     placeholder="name@example.org"
@@ -263,7 +263,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
                   {inviteEmails.length > 1 ? (
                     <button
                       type="button"
-                      className="rounded-xl border border-slate-200 px-3 text-slate-800 transition hover:bg-slate-50"
+                      className="btn-secondary px-3 text-slate-800"
                       onClick={() => removeEmail(idx)}
                       aria-label="Remove email"
                     >
@@ -273,16 +273,12 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
                 </div>
               ))}
 
-              {inviteMsg ? (
-                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                  {inviteMsg}
-                </div>
-              ) : null}
+              {inviteMsg ? <div className="status-box">{inviteMsg}</div> : null}
 
               <div className="flex items-center justify-between gap-3 pt-2">
                 <button
                   type="button"
-                  className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-800 transition hover:bg-slate-50"
+                  className="btn-secondary px-4 py-2.5 text-sm"
                   onClick={addAnotherEmail}
                   disabled={inviteSending}
                 >
@@ -291,7 +287,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
 
                 <button
                   type="button"
-                  className="rounded-xl bg-gradient-to-r from-primary-600 to-accent-500 px-6 py-2.5 text-sm font-semibold text-white shadow-lg shadow-primary-500/25 transition hover:from-primary-700 hover:to-primary-600 hover:shadow-primary-500/40 disabled:opacity-60"
+                  className="btn-primary px-6 py-2.5 text-sm"
                   onClick={handleSendInvites}
                   disabled={inviteSending || inviteEmails.every((e) => !e.trim())}
                 >
@@ -305,3 +301,4 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
     </div>
   );
 }
+

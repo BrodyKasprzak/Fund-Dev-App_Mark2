@@ -43,7 +43,7 @@ const NAV_ITEMS: NavItem[] = [
     href: "/documents",
     label: "Documents",
     description: "Upload, organize, and search files",
-    indicatorClass: "bg-white/80",
+    indicatorClass: "bg-primary-200",
     matchPathPrefix: "/documents",
   },
   {
@@ -57,21 +57,21 @@ const NAV_ITEMS: NavItem[] = [
     href: "/products",
     label: "Create",
     description: "Create strategic grant documents",
-    indicatorClass: "bg-indigo-300",
+    indicatorClass: "bg-primary-300",
     matchPathPrefix: "/products",
   },
   {
     href: "/activity",
     label: "Activity",
     description: "Recent edits and document states",
-    indicatorClass: "bg-purple-300",
+    indicatorClass: "bg-slate-300",
     matchPathPrefix: "/activity",
   },
   {
     href: "/members",
     label: "Members",
     description: "View organization members and join dates",
-    indicatorClass: "bg-emerald-300",
+    indicatorClass: "bg-success-300",
     matchPathPrefix: "/members",
   },
 ];
@@ -228,18 +228,18 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
 
   return (
     <aside
-      className={`relative sticky top-0 self-start h-screen flex-shrink-0 border-r border-white/20 bg-gradient-to-br from-primary-800 via-primary-700 to-accent-600 text-white shadow-xl transition-all duration-300 ${
+      className={`relative sticky top-0 self-start h-screen flex-shrink-0 border-r border-slate-300/60 bg-gradient-to-b from-slate-900 via-slate-800 to-primary-900 text-slate-100 shadow-xl transition-all duration-300 ${
         collapsed ? "w-16" : "w-[312px]"
       }`}
     >
       <button
         type="button"
         onClick={toggleCollapsed}
-        className="absolute -right-3 top-6 z-10 flex h-7 w-7 items-center justify-center rounded-full border border-indigo-300/40 bg-indigo-950/50 shadow-[0_8px_20px_rgba(49,46,129,0.35)] backdrop-blur-md transition hover:bg-indigo-900/65 hover:shadow-[0_10px_24px_rgba(49,46,129,0.45)]"
+        className="absolute -right-3 top-6 z-10 flex h-7 w-7 items-center justify-center rounded-full border border-slate-700/70 bg-slate-900/90 shadow-[0_8px_18px_rgba(2,6,23,0.35)] backdrop-blur-md transition hover:bg-slate-800"
         aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
       >
         <svg
-          className={`h-4 w-4 text-indigo-100/95 transition-transform ${collapsed ? "rotate-180" : ""}`}
+          className={`h-4 w-4 text-slate-200 transition-transform ${collapsed ? "rotate-180" : ""}`}
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
@@ -251,12 +251,12 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
       <div className={`h-full overflow-hidden ${collapsed ? "p-3" : "p-5"}`}>
         {!collapsed ? (
           sidebarView === "settings" ? (
-            <div className="flex h-full flex-col rounded-2xl border border-white/20 bg-white/95 p-4 text-slate-900 shadow-2xl">
+            <div className="flex h-full flex-col rounded-2xl border border-slate-200 bg-white/95 p-4 text-slate-900 shadow-2xl">
               <div className="border-b border-slate-200 pb-4">
                 <button
                   type="button"
                   onClick={backToMainMenu}
-                  className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                  className="btn-secondary inline-flex items-center gap-1 px-2.5 py-1.5 text-xs"
                   aria-label="Back to main menu"
                 >
                   <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -305,7 +305,7 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
                 <button
                   type="button"
                   onClick={() => setShowActiveOrg((v) => !v)}
-                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-left text-sm font-semibold text-slate-800 transition hover:bg-slate-100"
+                  className="btn-secondary w-full px-4 py-3 text-left text-sm"
                 >
                   {showActiveOrg ? "Hide active org" : "View active org"}
                 </button>
@@ -323,7 +323,7 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
                   <button
                     type="button"
                     onClick={() => setOrgInfoOpen((v) => !v)}
-                    className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-left text-sm font-semibold text-slate-800 transition hover:bg-slate-50"
+                    className="btn-secondary px-4 py-2.5 text-left text-sm"
                   >
                     Toggle org details
                   </button>
@@ -333,7 +333,7 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
                       setCollapsed(true);
                       backToMainMenu();
                     }}
-                    className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-left text-sm font-semibold text-slate-800 transition hover:bg-slate-50"
+                    className="btn-secondary px-4 py-2.5 text-left text-sm"
                   >
                     Collapse sidebar
                   </button>
@@ -342,28 +342,28 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
             </div>
           ) : (
             <>
-              <div className="border-b border-white/20 pb-5">
-                <div className="flex items-center gap-3 rounded-2xl border border-white/20 bg-white/12 px-4 py-3 backdrop-blur-sm">
-                  <div className="flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-white/15 text-sm font-bold backdrop-blur-sm">
+              <div className="border-b border-white/15 pb-5">
+                <div className="flex items-center gap-3 rounded-2xl border border-white/15 bg-white/8 px-4 py-3 backdrop-blur-sm">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-white/10 text-sm font-bold backdrop-blur-sm">
                     {avatarText}
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-base font-semibold text-white">{orgName}</p>
-                    <p className="truncate text-xs text-white/85">{signedInIdentity}</p>
+                    <p className="truncate text-xs text-slate-200/90">{signedInIdentity}</p>
                   </div>
                 </div>
 
-                <div className="mt-3 rounded-2xl border border-white/20 bg-white/12 p-4 backdrop-blur-sm">
+                <div className="mt-3 rounded-2xl border border-white/15 bg-white/8 p-4 backdrop-blur-sm">
                   <div className="mb-2 flex items-center gap-2">
                     <div className="h-2 w-2 rounded-full bg-success-300" />
-                    <div className="text-xs font-semibold text-white/90">Mission</div>
+                    <div className="text-xs font-semibold text-slate-100">Mission</div>
                   </div>
-                  <p className="text-sm leading-relaxed text-white/95">{mission ?? "Not provided yet."}</p>
+                  <p className="text-sm leading-relaxed text-slate-100">{mission ?? "Not provided yet."}</p>
                 </div>
 
                 <button
                   type="button"
-                  className="mt-3 w-full rounded-xl border border-white/20 bg-white/12 px-4 py-2 text-left backdrop-blur-sm transition hover:bg-white/18"
+                  className="mt-3 w-full rounded-xl border border-white/15 bg-white/8 px-4 py-2 text-left backdrop-blur-sm transition hover:bg-white/15"
                   onClick={() => setOrgInfoOpen((v) => !v)}
                 >
                   <div className="flex items-center justify-between">
@@ -378,19 +378,19 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
                 {orgInfoOpen ? (
                   <div className="mt-3 space-y-2 text-sm">
                     <div className="rounded-xl border border-white/15 bg-white/8 p-3 backdrop-blur-sm">
-                      <div className="text-xs font-semibold text-white/80">Home state</div>
+                      <div className="text-xs font-semibold text-slate-200/90">Home state</div>
                       <div className="mt-1 font-medium">{org?.homeState?.trim() ? org.homeState : "--"}</div>
                     </div>
                     <div className="rounded-xl border border-white/15 bg-white/8 p-3 backdrop-blur-sm">
-                      <div className="text-xs font-semibold text-white/80">Tax status</div>
+                      <div className="text-xs font-semibold text-slate-200/90">Tax status</div>
                       <div className="mt-1 font-medium">{org?.taxStatus?.trim() ? org.taxStatus : "--"}</div>
                     </div>
                     <div className="rounded-xl border border-white/15 bg-white/8 p-3 backdrop-blur-sm">
-                      <div className="text-xs font-semibold text-white/80">Fiscal year</div>
+                      <div className="text-xs font-semibold text-slate-200/90">Fiscal year</div>
                       <div className="mt-1 font-medium">{org?.fiscalYear?.trim() ? org.fiscalYear : "--"}</div>
                     </div>
                     <div className="rounded-xl border border-white/15 bg-white/8 p-3 backdrop-blur-sm">
-                      <div className="text-xs font-semibold text-white/80">CRM</div>
+                      <div className="text-xs font-semibold text-slate-200/90">CRM</div>
                       <div className="mt-1 font-medium">{org?.crm?.trim() ? org.crm : "--"}</div>
                     </div>
                   </div>
@@ -409,15 +409,15 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
                       onClick={() => router.push(item.href)}
                       className={`w-full rounded-xl border ${navPad} text-left backdrop-blur-sm transition ${
                         isActive
-                          ? "border-white/35 bg-white/20"
-                          : "border-white/20 bg-white/12 hover:bg-white/18"
+                          ? "border-white/35 bg-white/20 shadow-[0_0_0_1px_rgba(255,255,255,0.08)_inset]"
+                          : "border-white/15 bg-white/8 hover:bg-white/15"
                       }`}
                     >
                       <div className="flex items-center gap-2">
                         <div className={`h-2 w-2 rounded-full ${item.indicatorClass}`} />
                         <div className="text-[13px] font-semibold">{item.label}</div>
                       </div>
-                      <div className={`${navDesc} text-white/80`}>{item.description}</div>
+                      <div className={`${navDesc} text-slate-200/90`}>{item.description}</div>
                     </button>
                   );
                 })}
@@ -428,55 +428,55 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
                     if (onInviteClick) onInviteClick();
                     else router.push("/dashboard?invite=1");
                   }}
-                  className={`w-full rounded-xl border border-white/20 bg-white/12 ${navPad} text-left backdrop-blur-sm transition hover:bg-white/18`}
+                  className={`w-full rounded-xl border border-white/15 bg-white/8 ${navPad} text-left backdrop-blur-sm transition hover:bg-white/15`}
                 >
                   <div className="flex items-center gap-2">
                     <div className="h-2 w-2 rounded-full bg-amber-300" />
                     <div className="text-[13px] font-semibold">Invite Member</div>
                   </div>
-                  <div className={`${navDesc} text-white/80`}>Invite teammates to this organization</div>
+                  <div className={`${navDesc} text-slate-200/90`}>Invite teammates to this organization</div>
                 </button>
 
                 <button
                   type="button"
                   onClick={openSettingsPanel}
-                  className={`w-full rounded-xl border border-white/20 bg-white/12 ${navPad} text-left backdrop-blur-sm transition hover:bg-white/18`}
+                  className={`w-full rounded-xl border border-white/15 bg-white/8 ${navPad} text-left backdrop-blur-sm transition hover:bg-white/15`}
                 >
                   <div className="flex items-center gap-2">
                     <div className="h-2 w-2 rounded-full bg-sky-300" />
                     <div className="text-[13px] font-semibold">Settings</div>
                   </div>
-                  <div className={`${navDesc} text-white/80`}>Open workspace controls</div>
+                  <div className={`${navDesc} text-slate-200/90`}>Open workspace controls</div>
                 </button>
 
                 <button
                   type="button"
                   onClick={openLogoutConfirm}
-                  className={`w-full rounded-xl border border-white/20 bg-white/12 ${navPad} text-left backdrop-blur-sm transition hover:bg-white/18`}
+                  className={`w-full rounded-xl border border-white/15 bg-white/8 ${navPad} text-left backdrop-blur-sm transition hover:bg-white/15`}
                 >
                   <div className="flex items-center gap-2">
                     <div className="h-2 w-2 rounded-full bg-slate-200" />
                     <div className="text-[13px] font-semibold">Sign out</div>
                   </div>
-                  <div className={`${navDesc} text-white/80`}>Log out of this account</div>
+                  <div className={`${navDesc} text-slate-200/90`}>Log out of this account</div>
                 </button>
               </div>
             </>
           )
         ) : (
           <div className="flex flex-col items-center gap-4 pt-2">
-            <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-white/15 text-sm font-bold backdrop-blur-sm">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/15 bg-white/10 text-sm font-bold backdrop-blur-sm">
               {avatarText}
             </div>
 
-            <div className="w-full border-t border-white/20" />
+            <div className="w-full border-t border-white/15" />
 
             {NAV_ITEMS.map((item) => (
               <button
                 key={item.label}
                 type="button"
                 onClick={() => router.push(item.href)}
-                className="flex h-10 w-10 items-center justify-center rounded-2xl border border-white/20 bg-white/12 backdrop-blur-sm transition hover:bg-white/18"
+                className="flex h-10 w-10 items-center justify-center rounded-2xl border border-white/15 bg-white/8 backdrop-blur-sm transition hover:bg-white/15"
                 title={item.label}
               >
                 <div className={`h-2 w-2 rounded-full ${item.indicatorClass}`} />
@@ -489,7 +489,7 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
                 if (onInviteClick) onInviteClick();
                 else router.push("/dashboard?invite=1");
               }}
-              className="flex h-10 w-10 items-center justify-center rounded-2xl border border-white/20 bg-white/12 backdrop-blur-sm transition hover:bg-white/18"
+              className="flex h-10 w-10 items-center justify-center rounded-2xl border border-white/15 bg-white/8 backdrop-blur-sm transition hover:bg-white/15"
               title="Invite member"
             >
               <div className="h-2 w-2 rounded-full bg-amber-300" />
@@ -498,7 +498,7 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
             <button
               type="button"
               onClick={openSettingsPanel}
-              className="flex h-10 w-10 items-center justify-center rounded-2xl border border-white/20 bg-white/12 backdrop-blur-sm transition hover:bg-white/18"
+              className="flex h-10 w-10 items-center justify-center rounded-2xl border border-white/15 bg-white/8 backdrop-blur-sm transition hover:bg-white/15"
               title="Settings"
             >
               <div className="h-2 w-2 rounded-full bg-sky-300" />
@@ -507,7 +507,7 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
             <button
               type="button"
               onClick={openLogoutConfirm}
-              className="flex h-10 w-10 items-center justify-center rounded-2xl border border-white/20 bg-white/12 backdrop-blur-sm transition hover:bg-white/18"
+              className="flex h-10 w-10 items-center justify-center rounded-2xl border border-white/15 bg-white/8 backdrop-blur-sm transition hover:bg-white/15"
               title="Sign out"
             >
               <div className="h-2 w-2 rounded-full bg-slate-200" />
@@ -535,7 +535,7 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
                     type="button"
                     onClick={closeLogoutConfirm}
                     disabled={logoutPending}
-                    className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+                    className="btn-secondary px-4 py-2 text-sm disabled:opacity-60"
                   >
                     Cancel
                   </button>
@@ -543,7 +543,7 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
                     type="button"
                     onClick={() => void handleConfirmLogout()}
                     disabled={logoutPending}
-                    className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60"
+                    className="btn-primary px-4 py-2 text-sm disabled:opacity-60"
                   >
                     {logoutPending ? "Logging out..." : "Yes - log out"}
                   </button>
@@ -556,3 +556,5 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
     </aside>
   );
 }
+
+

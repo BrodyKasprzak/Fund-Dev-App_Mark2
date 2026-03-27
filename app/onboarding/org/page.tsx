@@ -1,4 +1,3 @@
-// fund-dev-app/app/onboarding/org/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -104,8 +103,6 @@ export default function OrgOnboardingPage() {
     setError(null);
 
     try {
-      // Important: create-org should NOT require x-org-id (no org yet),
-      // so use fetch (or authedFetch only if it does not force x-org-id).
       const idToken = await user.getIdToken();
 
       const res = await fetch("/api/create-org", {
@@ -140,8 +137,6 @@ export default function OrgOnboardingPage() {
       }
 
       const json = await res.json();
-
-      // ✅ NEW: set active org via AuthContext (persists to localStorage inside context)
       setActiveOrgId(json.orgId);
       await refreshMe();
       router.push("/dashboard", { scroll: true });
@@ -156,30 +151,25 @@ export default function OrgOnboardingPage() {
   if (!user) return null;
 
   return (
-    <main className="min-h-screen flex items-start justify-center bg-gradient-to-br from-primary-50 via-white to-primary-50 p-6">
-      <div className="w-full max-w-2xl">
-        {/* Header */}
-        <div className="text-center mb-8">
-          <div className="inline-flex px-6 py-4 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-500 to-accent-400 mb-4 shadow-lg">
-            <span className="text-xl font-bold text-white whitespace-nowrap">PurposeFramework</span>
-          </div>
-          <h1 className="text-3xl font-bold text-slate-900 mb-2">Set up your organization</h1>
-          <p className="text-slate-600">Create your workspace for building fundraising documents</p>
+    <main className="public-shell p-6">
+      <div className="mx-auto w-full max-w-3xl">
+        <div className="mb-7 text-center">
+          <span className="auth-brand-chip">PurposeFramework</span>
+          <h1 className="mt-4 text-3xl font-bold tracking-tight text-slate-900">Set up your organization</h1>
+          <p className="mt-2 text-sm text-slate-600">
+            Create your workspace for building fundraising documents.
+          </p>
         </div>
 
-        {/* Main Form Card */}
-        <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-xl shadow-slate-200/50">
-          <form onSubmit={handleCreateOrg} className="space-y-6">
-            <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-primary-50/30 to-primary-50/30 p-6">
-              <div className="flex items-center gap-2 mb-4">
-                <div className="h-2 w-2 rounded-full bg-gradient-to-r from-primary-500 to-accent-400"></div>
-                <div className="text-sm font-bold text-slate-900">Tester access</div>
-              </div>
-              <label className="block text-sm font-semibold text-slate-700 mb-2">
-                Type in tester access code to create workplace <span className="text-red-500">*</span>
+        <div className="auth-card p-7">
+          <form onSubmit={handleCreateOrg} className="space-y-5">
+            <div className="auth-section-card p-5">
+              <p className="mb-3 text-sm font-semibold text-slate-900">Tester access</p>
+              <label className="field-label">
+                Type in tester access code to create workplace <span className="text-rose-500">*</span>
               </label>
               <input
-                className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition"
+                className="field-input"
                 value={testerAccessCode}
                 onChange={(e) => setTesterAccessCode(e.target.value)}
                 placeholder="Enter tester access code"
@@ -187,20 +177,16 @@ export default function OrgOnboardingPage() {
               />
             </div>
 
-            {/* Core org info */}
-            <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-primary-50/30 to-primary-50/30 p-6">
-              <div className="flex items-center gap-2 mb-4">
-                <div className="h-2 w-2 rounded-full bg-gradient-to-r from-primary-500 to-accent-400"></div>
-                <div className="text-sm font-bold text-slate-900">Organization details</div>
-              </div>
+            <div className="auth-section-card p-5">
+              <p className="mb-3 text-sm font-semibold text-slate-900">Organization details</p>
 
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-semibold text-slate-700 mb-2">
-                    Organization name <span className="text-red-500">*</span>
+                  <label className="field-label">
+                    Organization name <span className="text-rose-500">*</span>
                   </label>
                   <input
-                    className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition"
+                    className="field-input"
                     value={orgName}
                     onChange={(e) => setOrgName(e.target.value)}
                     placeholder="e.g., Friends of FoCo Parks"
@@ -209,24 +195,24 @@ export default function OrgOnboardingPage() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  <label className="field-label">
                     Mission statement <span className="text-slate-500">(optional)</span>
                   </label>
                   <textarea
-                    className="min-h-[110px] w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition resize-none"
+                    className="field-input min-h-[110px] resize-none"
                     value={mission}
                     onChange={(e) => setMission(e.target.value)}
-                    placeholder="1–2 sentences describing your organization's mission"
+                    placeholder="1-2 sentences describing your organization's mission"
                   />
                 </div>
 
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div>
-                    <label className="block text-sm font-semibold text-slate-700 mb-2">
+                    <label className="field-label">
                       Primary state <span className="text-slate-500">(optional)</span>
                     </label>
                     <input
-                      className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition"
+                      className="field-input"
                       value={homeState}
                       onChange={(e) => setHomeState(e.target.value)}
                       placeholder="e.g., Colorado"
@@ -234,11 +220,11 @@ export default function OrgOnboardingPage() {
                   </div>
 
                   <div>
-                    <label className="block text-sm font-semibold text-slate-700 mb-2">
+                    <label className="field-label">
                       Tax status <span className="text-slate-500">(optional)</span>
                     </label>
                     <input
-                      className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition"
+                      className="field-input"
                       value={taxStatus}
                       onChange={(e) => setTaxStatus(e.target.value)}
                       placeholder="e.g., 501(c)(3)"
@@ -246,23 +232,23 @@ export default function OrgOnboardingPage() {
                   </div>
 
                   <div>
-                    <label className="block text-sm font-semibold text-slate-700 mb-2">
+                    <label className="field-label">
                       Fiscal year <span className="text-slate-500">(optional)</span>
                     </label>
                     <input
-                      className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition"
+                      className="field-input"
                       value={fiscalYear}
                       onChange={(e) => setFiscalYear(e.target.value)}
-                      placeholder="e.g., Jan–Dec or Jul–Jun"
+                      placeholder="e.g., Jan-Dec or Jul-Jun"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-sm font-semibold text-slate-700 mb-2">
+                    <label className="field-label">
                       CRM system <span className="text-slate-500">(optional)</span>
                     </label>
                     <input
-                      className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition"
+                      className="field-input"
                       value={crm}
                       onChange={(e) => setCrm(e.target.value)}
                       placeholder="e.g., Bloomerang, Salesforce"
@@ -271,11 +257,11 @@ export default function OrgOnboardingPage() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  <label className="field-label">
                     Address <span className="text-slate-500">(optional)</span>
                   </label>
                   <input
-                    className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition"
+                    className="field-input"
                     value={address}
                     onChange={(e) => setAddress(e.target.value)}
                     placeholder="Street, City, State, ZIP"
@@ -284,11 +270,11 @@ export default function OrgOnboardingPage() {
 
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div>
-                    <label className="block text-sm font-semibold text-slate-700 mb-2">
+                    <label className="field-label">
                       Employees <span className="text-slate-500">(optional)</span>
                     </label>
                     <input
-                      className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition"
+                      className="field-input"
                       value={numEmployees}
                       onChange={(e) => setNumEmployees(e.target.value)}
                       placeholder="e.g., 12"
@@ -297,11 +283,11 @@ export default function OrgOnboardingPage() {
                   </div>
 
                   <div>
-                    <label className="block text-sm font-semibold text-slate-700 mb-2">
+                    <label className="field-label">
                       Year founded <span className="text-slate-500">(optional)</span>
                     </label>
                     <input
-                      className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition"
+                      className="field-input"
                       value={foundedYear}
                       onChange={(e) => setFoundedYear(e.target.value)}
                       placeholder="e.g., 2012"
@@ -313,23 +299,17 @@ export default function OrgOnboardingPage() {
               </div>
             </div>
 
-            {/* Website section */}
-            <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-primary-50/30 to-primary-50/30 p-6">
-              <div className="flex items-center gap-2 mb-2">
-                <div className="h-2 w-2 rounded-full bg-gradient-to-r from-accent-400 to-primary-500"></div>
-                <div className="text-sm font-bold text-slate-900">Website (optional)</div>
-              </div>
-              <p className="text-sm text-slate-600 mb-4">
-                The AI can use public information from your website to ask fewer questions
+            <div className="auth-section-card p-5">
+              <p className="text-sm font-semibold text-slate-900">Website (optional)</p>
+              <p className="mt-1 text-sm text-slate-600">
+                The AI can use public information from your website to ask fewer questions.
               </p>
 
-              <div className="space-y-4">
+              <div className="mt-4 space-y-4">
                 <div>
-                  <label className="block text-sm font-semibold text-slate-700 mb-2">
-                    Website URL
-                  </label>
+                  <label className="field-label">Website URL</label>
                   <input
-                    className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition"
+                    className="field-input"
                     value={websiteUrl}
                     onChange={(e) => {
                       setWebsiteUrl(e.target.value);
@@ -338,9 +318,7 @@ export default function OrgOnboardingPage() {
                     placeholder="https://yourorg.org"
                     type="url"
                   />
-                  <p className="mt-2 text-xs text-slate-500">
-                    Include <span className="font-mono text-primary-500">https://</span>
-                  </p>
+                  <p className="field-help">Include https://</p>
                 </div>
 
                 <div className="rounded-xl border border-slate-200 bg-white p-4">
@@ -355,34 +333,23 @@ export default function OrgOnboardingPage() {
                     />
                     <label
                       htmlFor="website-consent"
-                      className={
-                        hasWebsite
-                          ? "text-sm text-slate-700 cursor-pointer"
-                          : "text-sm text-slate-400"
-                      }
+                      className={hasWebsite ? "cursor-pointer text-sm text-slate-700" : "text-sm text-slate-400"}
                     >
-                      I give permission to view{" "}
-                      <span className="font-semibold">publicly available</span> information on my
-                      organization&apos;s website
+                      I give permission to view <span className="font-semibold">publicly available</span>{" "}
+                      information on my organization&apos;s website.
                     </label>
                   </div>
-                  {!hasWebsite && (
-                    <p className="mt-2 text-xs text-slate-500 ml-7">
-                      Add a website URL to enable this option
-                    </p>
-                  )}
+                  {!hasWebsite ? (
+                    <p className="ml-7 mt-2 text-xs text-slate-500">Add a website URL to enable this option.</p>
+                  ) : null}
                 </div>
               </div>
             </div>
 
-            {error && (
-              <div className="rounded-xl bg-red-50 border border-red-200 px-4 py-3">
-                <p className="text-sm text-red-700 font-medium">{error}</p>
-              </div>
-            )}
+            {error ? <div className="status-box status-box-error">{error}</div> : null}
 
             <button
-              className="w-full bg-gradient-to-r from-primary-500 to-accent-400 hover:from-primary-600 hover:to-primary-500 text-white font-semibold rounded-xl px-4 py-3 transition shadow-lg shadow-primary-500/30 hover:shadow-primary-500/50 disabled:opacity-60 disabled:cursor-not-allowed"
+              className="btn-primary w-full px-4 py-3 text-sm"
               type="submit"
               disabled={saving || !trimmedTesterAccessCode || !trimmedOrg || (hasWebsite && !websiteConsent)}
             >
@@ -391,12 +358,8 @@ export default function OrgOnboardingPage() {
           </form>
         </div>
 
-        <p className="text-center text-xs text-slate-500 mt-6">
-          Your information is secure and private
-        </p>
+        <p className="mt-5 text-center text-xs text-slate-500">Your information is secure and private.</p>
       </div>
     </main>
   );
 }
-
-

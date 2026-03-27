@@ -41,28 +41,28 @@ const QUICK_ACTIONS: QuickAction[] = [
     description: "Add new files to your organization workspace",
     href: "/documents",
     style:
-      "border-primary-200 bg-white text-slate-900 hover:border-primary-300 hover:shadow-primary-100",
+      "border-primary-200 bg-primary-50/40 text-slate-900 hover:border-primary-300",
   },
   {
     label: "Ask a Question",
     description: "Open grounded org chat over your documents",
     href: "/chat",
     style:
-      "border-sky-200 bg-white text-slate-900 hover:border-sky-300 hover:shadow-sky-100",
+      "border-success-200 bg-success-50/35 text-slate-900 hover:border-success-300",
   },
   {
     label: "Create Grant",
     description: "Start from the existing grant strategy flow",
     href: "/products",
     style:
-      "border-accent-200 bg-white text-slate-900 hover:border-accent-300 hover:shadow-accent-100",
+      "border-accent-200 bg-accent-50/40 text-slate-900 hover:border-accent-300",
   },
   {
     label: "Invite Member",
     description: "Invite teammates with secure access codes",
     href: "/dashboard?invite=1",
     style:
-      "border-amber-200 bg-white text-slate-900 hover:border-amber-300 hover:shadow-amber-100",
+      "border-slate-200 bg-slate-50 text-slate-900 hover:border-slate-300",
   },
 ];
 
@@ -282,10 +282,8 @@ export default function DashboardPage() {
   if (loading || checkingOrg) {
     return (
       <main className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <div className="inline-flex items-center justify-center rounded-2xl bg-gradient-to-br from-primary-600 to-accent-400 px-6 py-4 shadow-lg">
-            <span className="whitespace-nowrap text-xl font-bold text-white">PurposeFramework</span>
-          </div>
+        <div className="auth-card text-center px-8 py-7">
+          <span className="auth-brand-chip">PurposeFramework</span>
           <p className="mt-4 text-slate-600">Loading your workspace...</p>
         </div>
       </main>
@@ -305,7 +303,7 @@ export default function DashboardPage() {
         <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm md:p-8">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="min-w-0">
-              <p className="text-xs font-semibold uppercase tracking-wide text-primary-700">
+              <p className="inline-flex items-center rounded-full border border-primary-200 bg-primary-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary-700">
                 PurposeFramework Workspace
               </p>
               <h1 className="mt-2 truncate text-3xl font-semibold tracking-tight text-slate-900 md:text-4xl">
@@ -318,17 +316,17 @@ export default function DashboardPage() {
           </div>
 
           <div className="mt-6 grid gap-3 sm:grid-cols-3">
-            <article className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <article className="rounded-xl border border-primary-100 bg-primary-50/40 p-4">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Documents</p>
               <p className="mt-2 text-2xl font-semibold text-slate-900">
                 {typeof documentsCount === "number" ? documentsCount : "--"}
               </p>
             </article>
-            <article className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <article className="rounded-xl border border-accent-100 bg-accent-50/40 p-4">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Last updated</p>
               <p className="mt-2 text-lg font-semibold text-slate-900">{formatDateTime(lastUpdatedAt)}</p>
             </article>
-            <article className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <article className="rounded-xl border border-success-100 bg-success-50/40 p-4">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Team members</p>
               <p className="mt-2 text-2xl font-semibold text-slate-900">
                 {typeof teamMembersCount === "number" ? teamMembersCount : "--"}
@@ -367,11 +365,7 @@ export default function DashboardPage() {
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-lg font-semibold text-slate-900">Recent Activity</h2>
-              <button
-                type="button"
-                onClick={() => router.push("/activity")}
-                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
-              >
+              <button type="button" onClick={() => router.push("/activity")} className="btn-secondary px-3 py-1.5 text-xs">
                 Open full activity
               </button>
             </div>
@@ -379,7 +373,7 @@ export default function DashboardPage() {
             {activity.length > 0 ? (
               <ul className="mt-4 space-y-3">
                 {activity.map((item) => (
-                  <li key={item.id} className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <li key={item.id} className="rounded-xl border border-slate-200 bg-slate-50/80 px-4 py-3">
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
                         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{item.label}</p>
@@ -407,9 +401,9 @@ export default function DashboardPage() {
 
       {inviteOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={closeInviteModal} />
+          <div className="absolute inset-0 bg-black/35 backdrop-blur-sm" onClick={closeInviteModal} />
 
-          <div className="relative w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-8 shadow-2xl">
+          <div className="auth-card relative w-full max-w-lg p-8">
             <div className="mb-6 flex items-start justify-between gap-4">
               <div>
                 <div className="mb-2 flex items-center gap-2">
@@ -422,7 +416,7 @@ export default function DashboardPage() {
               </div>
 
               <button
-                className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-800 transition hover:bg-slate-50"
+                className="btn-secondary px-3 py-1.5 text-sm"
                 onClick={closeInviteModal}
                 type="button"
               >
@@ -436,7 +430,7 @@ export default function DashboardPage() {
               {inviteEmails.map((email, idx) => (
                 <div key={idx} className="flex gap-2">
                   <input
-                    className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm transition focus:border-transparent focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    className="field-input flex-1 text-sm"
                     value={email}
                     onChange={(e) => updateEmail(idx, e.target.value)}
                     placeholder="name@example.org"
@@ -445,7 +439,7 @@ export default function DashboardPage() {
                   {inviteEmails.length > 1 ? (
                     <button
                       type="button"
-                      className="rounded-xl border border-slate-200 px-3 text-slate-800 transition hover:bg-slate-50"
+                      className="btn-secondary px-3"
                       onClick={() => removeEmail(idx)}
                       aria-label="Remove email"
                     >
@@ -455,16 +449,12 @@ export default function DashboardPage() {
                 </div>
               ))}
 
-              {inviteMsg ? (
-                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                  {inviteMsg}
-                </div>
-              ) : null}
+              {inviteMsg ? <div className="status-box">{inviteMsg}</div> : null}
 
               <div className="flex items-center justify-between gap-3 pt-2">
                 <button
                   type="button"
-                  className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-800 transition hover:bg-slate-50"
+                  className="btn-secondary px-4 py-2.5 text-sm"
                   onClick={addAnotherEmail}
                   disabled={inviteSending}
                 >
@@ -473,7 +463,7 @@ export default function DashboardPage() {
 
                 <button
                   type="button"
-                  className="rounded-xl bg-gradient-to-r from-primary-600 to-accent-500 px-6 py-2.5 text-sm font-semibold text-white shadow-lg shadow-primary-500/25 transition hover:from-primary-700 hover:to-primary-600 hover:shadow-primary-500/40 disabled:opacity-60"
+                  className="btn-primary px-6 py-2.5 text-sm"
                   onClick={handleSendInvites}
                   disabled={!canSendInvites}
                 >
@@ -491,3 +481,4 @@ export default function DashboardPage() {
     </main>
   );
 }
+
