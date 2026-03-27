@@ -6,6 +6,7 @@ import { ref, uploadBytesResumable } from "firebase/storage";
 import { useAuth } from "@/lib/AuthContext";
 import { storage } from "@/lib/firebaseClient";
 import type { RagCitation } from "@/lib/rag/types";
+import { WorkspaceTopNav } from "@/components/workspace/WorkspaceTopNav";
 
 type DocStatus = "ready" | "processing" | "failed";
 type TextStatus = "pending" | "processing" | "ready" | "failed";
@@ -331,19 +332,6 @@ function DocumentIcon() {
   );
 }
 
-function ChatIcon() {
-  return (
-    <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4">
-      <path
-        d="M4 4.5h12v8H9l-3.5 3v-3H4v-8Z"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
 export default function DocumentsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -361,9 +349,7 @@ export default function DocumentsPage() {
   const deepLinkHighlight = searchParams.get("highlight");
 
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>(requestedMode);
-  const [sidebarPanel, setSidebarPanel] = useState<SidebarPanel>(
-    requestedMode === "documents" ? "documents" : "history",
-  );
+  const [sidebarPanel, setSidebarPanel] = useState<SidebarPanel>("documents");
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false);
 
   const [docs, setDocs] = useState<DocumentListItem[]>([]);
@@ -467,11 +453,13 @@ export default function DocumentsPage() {
   const switchToChatMode = useCallback(
     (chatId?: string | null) => {
       const nextChatId = chatId ?? activeChatId ?? null;
-      setWorkspaceMode("chat-private");
-      setSidebarPanel("history");
-      updateWorkspaceUrl("chat-private", nextChatId);
+      if (nextChatId) {
+        router.push(`/chat?chatId=${encodeURIComponent(nextChatId)}`);
+        return;
+      }
+      router.push("/chat");
     },
-    [activeChatId, updateWorkspaceUrl],
+    [activeChatId, router],
   );
 
   useEffect(() => {
@@ -480,11 +468,20 @@ export default function DocumentsPage() {
 
   useEffect(() => {
     setWorkspaceMode(requestedMode);
-    setSidebarPanel(requestedMode === "documents" ? "documents" : "history");
+    setSidebarPanel("documents");
     if (requestedMode === "chat-private" && requestedChatId) {
       setActiveChatId(requestedChatId);
     }
   }, [requestedChatId, requestedMode]);
+
+  useEffect(() => {
+    if (requestedMode !== "chat-private") return;
+    if (requestedChatId) {
+      router.replace(`/chat?chatId=${encodeURIComponent(requestedChatId)}`);
+      return;
+    }
+    router.replace("/chat");
+  }, [requestedChatId, requestedMode, router]);
 
   async function loadDocuments() {
     if (!user) return;
@@ -1017,39 +1014,7 @@ export default function DocumentsPage() {
 
   return (
     <main className="workspace-page-fill min-h-screen bg-white [font-family:var(--font-geist-sans)]">
-      <div className="fixed left-1/2 top-3 z-40 -translate-x-1/2">
-        <div className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white/95 p-1 shadow-lg backdrop-blur">
-          <button
-            type="button"
-            onClick={() => switchToDocumentsMode()}
-            className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
-              workspaceMode === "documents"
-                ? "bg-sky-600 text-white"
-                : "bg-sky-50 text-sky-700 hover:bg-sky-100"
-            }`}
-          >
-            Documents
-          </button>
-          <button
-            type="button"
-            onClick={() => switchToChatMode(activeChatId)}
-            className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
-              workspaceMode === "chat-private"
-                ? "bg-emerald-600 text-white"
-                : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-            }`}
-          >
-            Chat (Private)
-          </button>
-          <button
-            type="button"
-            onClick={() => router.push("/products")}
-            className="rounded-full bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 transition hover:bg-amber-100"
-          >
-            Create
-          </button>
-        </div>
-      </div>
+      <WorkspaceTopNav active="documents" />
       <div className="w-full min-h-screen bg-white pt-0">
         {error || message ? (
           <div className="space-y-2 px-3 pb-2 sm:px-4">
@@ -1111,22 +1076,6 @@ export default function DocumentsPage() {
                 >
                   <DocumentIcon />
                 </button>
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setSidebarPanel("history");
-                    setLeftSidebarCollapsed(false);
-                  }}
-                  className={`inline-flex h-10 items-center justify-center rounded-lg border transition ${
-                    sidebarPanel === "history"
-                      ? "border-emerald-200 bg-emerald-100 text-emerald-700"
-                      : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                  }`}
-                  aria-label="Open history panel"
-                >
-                  <ChatIcon />
-                </button>
               </div>
             ) : (
               <>
@@ -1141,36 +1090,11 @@ export default function DocumentsPage() {
                 {"<"}
               </button>
             </div>
-            <div className="flex w-full items-center border-b border-slate-200 pb-2">
-              <button
-                type="button"
-                onClick={() => setSidebarPanel("documents")}
-                className={`inline-flex flex-1 items-center justify-center gap-2 px-3 py-2 text-xs font-semibold transition ${
-                  sidebarPanel === "documents"
-                    ? "text-slate-900"
-                    : "text-slate-600 hover:text-slate-900"
-                }`}
-                title="Documents"
-                aria-label="Show documents panel"
-              >
-                <DocumentIcon />
+            <div className="flex w-full items-center gap-2 border-b border-slate-200 pb-2">
+              <DocumentIcon />
+              <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-700">
                 Documents
-              </button>
-              <div className="h-5 w-px bg-slate-200" aria-hidden="true" />
-              <button
-                type="button"
-                onClick={() => setSidebarPanel("history")}
-                className={`inline-flex flex-1 items-center justify-center gap-2 px-3 py-2 text-xs font-semibold transition ${
-                  sidebarPanel === "history"
-                    ? "text-slate-900"
-                    : "text-slate-600 hover:text-slate-900"
-                }`}
-                title="Chat history"
-                aria-label="Show chat history panel"
-              >
-                <ChatIcon />
-                History
-              </button>
+              </h2>
             </div>
 
             {sidebarPanel === "documents" ? (

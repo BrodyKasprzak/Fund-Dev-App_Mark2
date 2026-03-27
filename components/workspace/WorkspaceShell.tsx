@@ -9,6 +9,7 @@ import { useAuth } from "@/lib/AuthContext";
 const WORKSPACE_ROUTE_PREFIXES = [
   "/dashboard",
   "/documents",
+  "/chat",
   "/products",
   "/activity",
   "/members",
@@ -26,6 +27,7 @@ function isWorkspaceRoute(pathname: string) {
 function pageTitleFromPath(pathname: string) {
   if (pathname === "/dashboard" || pathname.startsWith("/dashboard/")) return "Workspace Overview";
   if (pathname === "/documents" || pathname.startsWith("/documents/")) return "Document Workspace";
+  if (pathname === "/chat" || pathname.startsWith("/chat/")) return "Chat Workspace";
   if (pathname === "/products" || pathname.startsWith("/products/")) return "Strategic Builders";
   if (pathname === "/activity" || pathname.startsWith("/activity/")) return "Activity";
   if (pathname === "/members" || pathname.startsWith("/members/")) return "Team Members";
@@ -45,6 +47,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   const workspaceRoute = Boolean(pathname && isWorkspaceRoute(pathname));
   const isDashboardRoute = Boolean(pathname && (pathname === "/dashboard" || pathname.startsWith("/dashboard/")));
   const isDocumentsRoute = Boolean(pathname && (pathname === "/documents" || pathname.startsWith("/documents/")));
+  const isChatRoute = Boolean(pathname && (pathname === "/chat" || pathname.startsWith("/chat/")));
   const pageTitle = useMemo(() => pageTitleFromPath(pathname ?? ""), [pathname]);
   const inviteQueryHandledRef = useRef(false);
 
@@ -185,7 +188,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
         <WorkspaceSidebar onInviteClick={openInviteModal} />
         <section
           className={`workspace-main min-w-0 flex-1 ${
-            isDocumentsRoute ? "overflow-visible" : "overflow-y-auto"
+            isDocumentsRoute || isChatRoute ? "overflow-visible" : "overflow-y-auto"
           }`}
         >
           <div

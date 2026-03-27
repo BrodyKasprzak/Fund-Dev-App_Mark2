@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { usePathname, useRouter } from "next/navigation";
 import { signOut } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
@@ -46,11 +47,11 @@ const NAV_ITEMS: NavItem[] = [
     matchPathPrefix: "/documents",
   },
   {
-    href: "/documents?mode=chat",
+    href: "/chat",
     label: "Ask",
     description: "Grounded chat over org documents",
     indicatorClass: "bg-accent-300",
-    matchPathPrefix: "/documents",
+    matchPathPrefix: "/chat",
   },
   {
     href: "/products",
@@ -98,6 +99,9 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
   const [reducedMotion, setReducedMotion] = useState(false);
   const [mutedAccent, setMutedAccent] = useState(false);
   const [showActiveOrg, setShowActiveOrg] = useState(false);
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
+  const [logoutPending, setLogoutPending] = useState(false);
+  const [portalReady, setPortalReady] = useState(false);
 
   const orgName = org?.name ?? "Your organization";
   const mission = org?.mission?.trim() ? org.mission : null;
@@ -121,6 +125,10 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
       root.classList.remove("workspace-muted");
     };
   }, [compactNav, reducedMotion, mutedAccent]);
+
+  useEffect(() => {
+    setPortalReady(true);
+  }, []);
 
   useEffect(() => {
     for (const item of NAV_ITEMS) {
@@ -196,6 +204,26 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
       }
       return next;
     });
+  }
+
+  function openLogoutConfirm() {
+    setLogoutConfirmOpen(true);
+  }
+
+  function closeLogoutConfirm() {
+    if (logoutPending) return;
+    setLogoutConfirmOpen(false);
+  }
+
+  async function handleConfirmLogout() {
+    setLogoutPending(true);
+    try {
+      await signOut(auth);
+      setLogoutConfirmOpen(false);
+      window.location.replace("/");
+    } finally {
+      setLogoutPending(false);
+    }
   }
 
   return (
@@ -423,10 +451,7 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
 
                 <button
                   type="button"
-                  onClick={async () => {
-                    await signOut(auth);
-                    router.push("/page.tsx");
-                  }}
+                  onClick={openLogoutConfirm}
                   className={`w-full rounded-xl border border-white/20 bg-white/12 ${navPad} text-left backdrop-blur-sm transition hover:bg-white/18`}
                 >
                   <div className="flex items-center gap-2">
@@ -481,10 +506,7 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
 
             <button
               type="button"
-              onClick={async () => {
-                await signOut(auth);
-                router.push("/login");
-              }}
+              onClick={openLogoutConfirm}
               className="flex h-10 w-10 items-center justify-center rounded-2xl border border-white/20 bg-white/12 backdrop-blur-sm transition hover:bg-white/18"
               title="Sign out"
             >
@@ -493,6 +515,44 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
           </div>
         )}
       </div>
+
+      {portalReady && logoutConfirmOpen
+        ? createPortal(
+            <div className="fixed inset-0 z-[120] flex items-center justify-center p-4" role="dialog" aria-modal="true">
+              <button
+                type="button"
+                className="absolute inset-0 bg-black/45 backdrop-blur-sm"
+                aria-label="Close logout confirmation"
+                onClick={closeLogoutConfirm}
+              />
+              <div className="relative w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-8 text-slate-900 shadow-2xl">
+                <h3 className="text-xl font-semibold">Are you sure you want to log out?</h3>
+                <p className="mt-2 text-sm text-slate-600">
+                  You will be signed out and returned to the main page.
+                </p>
+                <div className="mt-6 flex items-center justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={closeLogoutConfirm}
+                    disabled={logoutPending}
+                    className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleConfirmLogout()}
+                    disabled={logoutPending}
+                    className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60"
+                  >
+                    {logoutPending ? "Logging out..." : "Yes - log out"}
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </aside>
   );
 }
