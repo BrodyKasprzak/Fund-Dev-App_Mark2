@@ -989,12 +989,12 @@ export default function DocumentsPage() {
         <div
           className={`grid min-h-[100dvh] grid-cols-1 gap-0 ${
             leftSidebarCollapsed
-              ? "lg:grid-cols-[56px_minmax(0,1fr)]"
-              : "lg:grid-cols-[320px_minmax(0,1fr)]"
+              ? "lg:grid-cols-[minmax(0,1fr)_56px]"
+              : "lg:grid-cols-[minmax(0,1fr)_320px]"
           }`}
         >
           <aside
-            className={`sticky top-0 self-start border-r border-slate-200 bg-white ${
+            className={`sticky top-0 self-start border-l border-slate-200 bg-white lg:order-2 ${
               leftSidebarCollapsed
                 ? "h-[100dvh] p-2"
                 : "h-[100dvh] overflow-y-auto p-4"
@@ -1042,7 +1042,7 @@ export default function DocumentsPage() {
                 aria-label="Collapse sidebar"
                 title="Collapse sidebar"
               >
-                {"<"}
+                {">"}
               </button>
             </div>
             <div className="flex w-full items-center gap-2 border-b border-slate-200 pb-2">
@@ -1331,14 +1331,14 @@ export default function DocumentsPage() {
             )}
           </aside>
 
-          <section className="min-w-0 bg-white p-5 lg:min-h-[100dvh] lg:border-l lg:border-slate-200">
+          <section className="min-w-0 bg-white p-5 lg:order-1 lg:min-h-[100dvh] lg:border-r lg:border-slate-200">
             {workspaceMode === "documents" ? (
               !selectedDocId ? (
                 <div className="flex min-h-[68vh] items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
                   <div className="space-y-2">
                     <p className="text-base font-semibold text-slate-900">Select a document to view it</p>
                     <p className="text-sm text-slate-500">
-                      Choose a file from the left sidebar. Upload a file if your library is empty.
+                      Choose a file from the right sidebar. Upload a file if your library is empty.
                     </p>
                   </div>
                 </div>
