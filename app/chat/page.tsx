@@ -94,6 +94,7 @@ const CHAT_MESSAGE_MAX_LENGTH = 4_000;
 const DOC_WINDOW_LIMIT = 50_000;
 const CHUNK_VIEW_OFFSET_PADDING = 8_000;
 const RECENT_DOCS_DEFAULT_LIMIT = 10;
+const MAX_DOWNLOAD_FILENAME_LENGTH = 220;
 
 function asOptionalString(value: unknown) {
   if (typeof value !== "string") return null;
@@ -135,6 +136,36 @@ function deriveTitle(filename: string) {
   const noExt = filename.replace(/\.[^.]+$/, "");
   const cleaned = noExt.trim().replace(/\s+/g, " ");
   return cleaned || "Untitled Document";
+}
+
+function parseFilenameFromContentDisposition(contentDisposition: string | null) {
+  if (!contentDisposition) return null;
+
+  const utf8Match = contentDisposition.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1].trim());
+    } catch {
+      // Fall through to standard filename parsing.
+    }
+  }
+
+  const plainMatch = contentDisposition.match(/filename\s*=\s*(?:"([^"]+)"|([^;]+))/i);
+  const plainFilename = plainMatch?.[1] || plainMatch?.[2];
+  if (plainFilename) return plainFilename.trim();
+  return null;
+}
+
+function sanitizeDownloadFilename(raw: string) {
+  const cleaned = raw
+    .trim()
+    .replace(/[\/\\]+/g, "_")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/[<>:"|?*\u0000-\u001F]/g, "_")
+    .replace(/\s+/g, " ")
+    .slice(0, MAX_DOWNLOAD_FILENAME_LENGTH)
+    .trim();
+  return cleaned || "document";
 }
 
 function escapeRegExp(input: string) {
@@ -361,6 +392,7 @@ export default function DocumentsPage() {
   const [uploadTitle, setUploadTitle] = useState("");
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [downloadingDocId, setDownloadingDocId] = useState<string | null>(null);
 
   const [chatList, setChatList] = useState<ChatSummary[]>([]);
   const [chatListLoading, setChatListLoading] = useState(false);
@@ -419,6 +451,8 @@ export default function DocumentsPage() {
     () => docs.find((d) => d.id === selectedDocId) || null,
     [docs, selectedDocId],
   );
+  const selectedDocStatus = selectedDoc?.status || selectedMeta?.status || "processing";
+  const canDownloadSelectedDoc = Boolean(selectedDocId && selectedDocStatus === "ready");
   const extractedText = selectedDoc?.extractedText?.trim() || "";
   const paragraphs = extractedText ? splitParagraphs(extractedText) : [];
 
@@ -920,6 +954,46 @@ export default function DocumentsPage() {
     router.push(`/documents?${next.toString()}`);
   }
 
+  async function handleDownloadDocument(docIdInput?: string | null) {
+    const docId = (docIdInput || selectedDocId || "").trim();
+    if (!docId) return;
+
+    setError(null);
+    setMessage(null);
+    setDownloadingDocId(docId);
+
+    try {
+      const res = await authedFetch(`/api/documents/${encodeURIComponent(docId)}/download`);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.error || "Failed to download document");
+      }
+
+      const blob = await res.blob();
+      const parsedFilename = parseFilenameFromContentDisposition(
+        res.headers.get("Content-Disposition"),
+      );
+      const fallbackTitle = selectedDoc?.title || selectedMeta?.title || "document";
+      const filename = sanitizeDownloadFilename(parsedFilename || fallbackTitle);
+      const objectUrl = URL.createObjectURL(blob);
+
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
+      setMessage("Download started.");
+    } catch (err: unknown) {
+      if (err instanceof Error) setError(err.message);
+      else setError("Failed to download document");
+    } finally {
+      setDownloadingDocId(null);
+    }
+  }
+
   async function copyAssistantMessage(messageId: string, content: string) {
     if (!content.trim()) return;
     try {
@@ -1387,6 +1461,14 @@ export default function DocumentsPage() {
                         className="rounded-full border border-slate-300 bg-white px-2.5 py-1 font-semibold text-slate-700 transition hover:bg-slate-100"
                       >
                         Close document
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleDownloadDocument(selectedDocId)}
+                        disabled={!canDownloadSelectedDoc || downloadingDocId === selectedDocId}
+                        className="rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 font-semibold text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {downloadingDocId === selectedDocId ? "Downloading..." : "Download original"}
                       </button>
                     </div>
                     {statusInfoOpen ? (
