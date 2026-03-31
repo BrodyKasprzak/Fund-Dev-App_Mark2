@@ -42,12 +42,16 @@ type DocumentRecord = {
   fileType?: unknown;
   size?: unknown;
   status?: unknown;
+  editStatus?: unknown;
   textStatus?: unknown;
   chunkStatus?: unknown;
   chunkCount?: unknown;
   chunkVersion?: unknown;
   extractedText?: unknown;
   version?: unknown;
+  currentVersionNumber?: unknown;
+  originalFilename?: unknown;
+  filename?: unknown;
   createdAt?: FirestoreDateLike;
   createdBy?: unknown;
   textUpdatedAt?: FirestoreDateLike;
@@ -182,6 +186,15 @@ function buildTextChunk(args: {
 }
 
 function serializeDocument(id: string, data: DocumentRecord | undefined) {
+  const resolvedVersion =
+    typeof data?.currentVersionNumber === "number" &&
+    Number.isFinite(data.currentVersionNumber) &&
+    data.currentVersionNumber > 0
+      ? Math.floor(data.currentVersionNumber)
+      : typeof data?.version === "number" && Number.isFinite(data.version) && data.version > 0
+        ? Math.floor(data.version)
+        : 1;
+
   return {
     id,
     title: typeof data?.title === "string" ? data.title : "Untitled",
@@ -192,9 +205,12 @@ function serializeDocument(id: string, data: DocumentRecord | undefined) {
     status: typeof data?.status === "string" ? data.status : "processing",
     textStatus: typeof data?.textStatus === "string" ? data.textStatus : "pending",
     chunkStatus: typeof data?.chunkStatus === "string" ? data.chunkStatus : "pending",
+    editStatus:
+      typeof data?.editStatus === "string" ? data.editStatus : "not_editable",
     chunkCount: typeof data?.chunkCount === "number" ? data.chunkCount : 0,
     chunkVersion: typeof data?.chunkVersion === "string" ? data.chunkVersion : null,
-    version: typeof data?.version === "number" ? data.version : 1,
+    version: resolvedVersion,
+    currentVersionNumber: resolvedVersion,
     createdAt: toIso(data?.createdAt),
     createdBy: typeof data?.createdBy === "string" ? data.createdBy : null,
     textUpdatedAt: toIso(data?.textUpdatedAt),
@@ -357,20 +373,31 @@ export async function PATCH(
     const current = snap.data() as
       | {
           storagePath?: unknown;
+          fileType?: unknown;
+          size?: unknown;
+          filename?: unknown;
+          originalFilename?: unknown;
           status?: unknown;
           version?: unknown;
+          currentVersionNumber?: unknown;
         }
       | undefined;
 
     const currentVersion =
-      typeof current?.version === "number" && Number.isFinite(current.version) && current.version > 0
-        ? Math.floor(current.version)
-        : 1;
+      typeof current?.currentVersionNumber === "number" &&
+      Number.isFinite(current.currentVersionNumber) &&
+      current.currentVersionNumber > 0
+        ? Math.floor(current.currentVersionNumber)
+        : typeof current?.version === "number" && Number.isFinite(current.version) && current.version > 0
+          ? Math.floor(current.version)
+          : 1;
 
     const patch: Record<string, unknown> = {
       updatedAt: new Date(),
       updatedBy: uid,
+      version: currentVersion,
       currentVersion,
+      currentVersionNumber: currentVersion,
       "versionMeta.current": currentVersion,
     };
 
@@ -437,6 +464,19 @@ export async function PATCH(
         }
         patch.size = metadata.size;
         patch[`versionMeta.items.v${currentVersion}.size`] = metadata.size;
+        patch.lastVersionChangeAt = new Date();
+        patch.originalStoragePath = storagePath;
+        patch.originalFileType =
+          typeof patch.fileType === "string"
+            ? patch.fileType
+            : typeof current?.fileType === "string"
+              ? current.fileType
+              : null;
+        patch.editStatus =
+          (typeof patch.fileType === "string" ? patch.fileType : current?.fileType) ===
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            ? "ready"
+            : "not_editable";
       }
 
       patch.status = body.status;
@@ -466,6 +506,39 @@ export async function PATCH(
     await ref.set(patch, { merge: true });
 
     if (body.status === "ready") {
+      const versionRef = ref.collection("versions").doc(`v${currentVersion}`);
+      await versionRef.set(
+        {
+          version: currentVersion,
+          status: "ready",
+          fileType:
+            typeof patch.fileType === "string"
+              ? patch.fileType
+              : typeof current?.fileType === "string"
+                ? current.fileType
+                : null,
+          size:
+            typeof patch.size === "number"
+              ? patch.size
+              : typeof current?.size === "number"
+                ? current.size
+                : null,
+          filename:
+            typeof current?.filename === "string" ? current.filename : null,
+          originalFilename:
+            typeof current?.originalFilename === "string"
+              ? current.originalFilename
+              : null,
+          source: "upload",
+          changeSummary: "Initial upload",
+          promotedAt: new Date(),
+          promotedBy: uid,
+          updatedAt: new Date(),
+          updatedBy: uid,
+        },
+        { merge: true },
+      );
+
       await writeOrgAuditLog({
         orgId,
         eventType: "documents.upload_finalized",

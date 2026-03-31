@@ -21,8 +21,10 @@ type DocumentListItem = {
   fileType: string;
   size: number;
   status: DocStatus;
+  editStatus?: string | null;
   textStatus: TextStatus;
   version: number;
+  currentVersionNumber?: number;
   createdAt: string | null;
   createdBy: string | null;
   textUpdatedAt: string | null;
@@ -42,6 +44,22 @@ type DocumentDetail = DocumentListItem & {
     anchoredQuery: string | null;
     matchOffset: number | null;
   };
+};
+
+type DocumentVersionItem = {
+  version: number;
+  storagePath: string;
+  filename: string | null;
+  originalFilename: string | null;
+  fileType: string;
+  size: number;
+  status: string;
+  source: string;
+  changeSummary: string | null;
+  createdAt: string | null;
+  createdBy: string | null;
+  promotedAt: string | null;
+  isCurrent: boolean;
 };
 
 type ChatSummary = {
@@ -95,6 +113,8 @@ const DOC_WINDOW_LIMIT = 50_000;
 const CHUNK_VIEW_OFFSET_PADDING = 8_000;
 const RECENT_DOCS_DEFAULT_LIMIT = 10;
 const MAX_DOWNLOAD_FILENAME_LENGTH = 220;
+const MAX_CHANGE_SUMMARY_LENGTH = 500;
+const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 function parseWorkspaceMode(raw: string | null): WorkspaceMode {
   if (raw === "chat-private") return "chat-private";
@@ -172,6 +192,12 @@ function sanitizeDownloadFilename(raw: string) {
     .slice(0, MAX_DOWNLOAD_FILENAME_LENGTH)
     .trim();
   return cleaned || "document";
+}
+
+function looksLikeDocx(file: File | null) {
+  if (!file) return false;
+  if (file.type === DOCX_MIME) return true;
+  return file.name.toLowerCase().endsWith(".docx");
 }
 
 function escapeRegExp(input: string) {
@@ -403,6 +429,15 @@ export default function DocumentsPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [downloadingDocId, setDownloadingDocId] = useState<string | null>(null);
+  const [versionHistoryOpen, setVersionHistoryOpen] = useState(false);
+  const [versionHistoryLoading, setVersionHistoryLoading] = useState(false);
+  const [versionHistoryError, setVersionHistoryError] = useState<string | null>(null);
+  const [versions, setVersions] = useState<DocumentVersionItem[]>([]);
+  const [editingDoc, setEditingDoc] = useState(false);
+  const [replacementDocxFile, setReplacementDocxFile] = useState<File | null>(null);
+  const [changeSummary, setChangeSummary] = useState("");
+  const [savingVersion, setSavingVersion] = useState(false);
+  const [versionUploadProgress, setVersionUploadProgress] = useState<number | null>(null);
 
   const [chatList, setChatList] = useState<ChatSummary[]>([]);
   const [chatListLoading, setChatListLoading] = useState(false);
@@ -461,6 +496,19 @@ export default function DocumentsPage() {
     [docs, selectedDocId],
   );
   const selectedDocStatus = selectedDoc?.status || selectedMeta?.status || "processing";
+  const selectedDocFileType = selectedDoc?.fileType || selectedMeta?.fileType || "";
+  const selectedDocVersion =
+    (typeof selectedDoc?.currentVersionNumber === "number"
+      ? selectedDoc.currentVersionNumber
+      : selectedDoc?.version) ??
+    (typeof selectedMeta?.currentVersionNumber === "number"
+      ? selectedMeta.currentVersionNumber
+      : selectedMeta?.version) ??
+    1;
+  const canEditSelectedDoc =
+    Boolean(selectedDocId) &&
+    selectedDocStatus === "ready" &&
+    selectedDocFileType === DOCX_MIME;
   const canDownloadSelectedDoc = Boolean(selectedDocId && selectedDocStatus === "ready");
   const extractedText = selectedDoc?.extractedText?.trim() || "";
   const paragraphs = extractedText ? splitParagraphs(extractedText) : [];
@@ -572,6 +620,35 @@ export default function DocumentsPage() {
     [authedFetch],
   );
 
+  const loadDocumentVersions = useCallback(
+    async (docId: string) => {
+      const cleanedDocId = docId.trim();
+      if (!cleanedDocId) {
+        setVersions([]);
+        return;
+      }
+
+      setVersionHistoryLoading(true);
+      setVersionHistoryError(null);
+      try {
+        const res = await authedFetch(`/api/documents/${encodeURIComponent(cleanedDocId)}/versions`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.error || "Failed to load version history");
+        const rows = Array.isArray(data?.versions)
+          ? (data.versions as DocumentVersionItem[])
+          : [];
+        setVersions(rows);
+      } catch (err: unknown) {
+        setVersions([]);
+        if (err instanceof Error) setVersionHistoryError(err.message);
+        else setVersionHistoryError("Failed to load version history");
+      } finally {
+        setVersionHistoryLoading(false);
+      }
+    },
+    [authedFetch],
+  );
+
   useEffect(() => {
     if (!selectedDocId || !user) {
       setSelectedDoc(null);
@@ -606,6 +683,14 @@ export default function DocumentsPage() {
       cancelled = true;
     };
   }, [detailAnchorQuery, detailOffset, fetchDocumentDetail, selectedDocId, user]);
+
+  useEffect(() => {
+    if (!selectedDocId || !user) {
+      setVersions([]);
+      return;
+    }
+    void loadDocumentVersions(selectedDocId);
+  }, [loadDocumentVersions, selectedDocId, user]);
 
   async function loadMoreExtractedText() {
     if (!selectedDocId || !selectedDoc?.textWindow?.hasMore || loadingMoreText) return;
@@ -838,6 +923,13 @@ export default function DocumentsPage() {
 
   useEffect(() => {
     setStatusInfoOpen(false);
+    setVersionHistoryOpen(false);
+    setVersionHistoryError(null);
+    setVersions([]);
+    setEditingDoc(false);
+    setReplacementDocxFile(null);
+    setChangeSummary("");
+    setVersionUploadProgress(null);
   }, [selectedDocId]);
 
   useEffect(() => {
@@ -951,7 +1043,17 @@ export default function DocumentsPage() {
     }
   }
 
-  async function handleDownloadDocument(docIdInput?: string | null) {
+  async function handleDownloadDocument(args?: {
+    docId?: string | null;
+    version?: number | null;
+    target?: "current" | "original";
+  }) {
+    const target = args?.target || "current";
+    const version =
+      typeof args?.version === "number" && Number.isFinite(args.version) && args.version > 0
+        ? Math.floor(args.version)
+        : null;
+    const docIdInput = args?.docId ?? null;
     const docId = (docIdInput || selectedDocId || "").trim();
     if (!docId) return;
 
@@ -960,7 +1062,12 @@ export default function DocumentsPage() {
     setDownloadingDocId(docId);
 
     try {
-      const res = await authedFetch(`/api/documents/${encodeURIComponent(docId)}/download`);
+      const params = new URLSearchParams();
+      params.set("target", target);
+      if (version !== null) params.set("version", String(version));
+      const res = await authedFetch(
+        `/api/documents/${encodeURIComponent(docId)}/download?${params.toString()}`,
+      );
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data?.error || "Failed to download document");
@@ -988,6 +1095,133 @@ export default function DocumentsPage() {
       else setError("Failed to download document");
     } finally {
       setDownloadingDocId(null);
+    }
+  }
+
+  function beginEditDocument() {
+    if (!canEditSelectedDoc) {
+      setError("Only ready DOCX documents can be edited in this phase.");
+      return;
+    }
+    setError(null);
+    setMessage(null);
+    setEditingDoc(true);
+    setReplacementDocxFile(null);
+    setChangeSummary("");
+    setVersionUploadProgress(null);
+  }
+
+  function cancelEditDocument() {
+    setEditingDoc(false);
+    setReplacementDocxFile(null);
+    setChangeSummary("");
+    setVersionUploadProgress(null);
+  }
+
+  async function handleSaveDocxVersion() {
+    const docId = (selectedDocId || "").trim();
+    if (!docId) return;
+    if (!canEditSelectedDoc) {
+      setError("Only ready DOCX documents can be edited in this phase.");
+      return;
+    }
+    if (!replacementDocxFile || !looksLikeDocx(replacementDocxFile)) {
+      setError("Please choose a .docx file for this update.");
+      return;
+    }
+    const nextFile = replacementDocxFile;
+
+    const summary = changeSummary.trim();
+    if (!summary) {
+      setError("Please describe what changed before saving.");
+      return;
+    }
+
+    setSavingVersion(true);
+    setVersionUploadProgress(0);
+    setError(null);
+    setMessage(null);
+
+    const expectedCurrentVersion = selectedDocVersion;
+
+    try {
+      const initRes = await authedFetch(
+        `/api/documents/${encodeURIComponent(docId)}/versions/init-upload`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            filename: replacementDocxFile.name,
+            fileType: DOCX_MIME,
+            size: nextFile.size,
+            expectedCurrentVersion,
+            changeSummary: summary.slice(0, MAX_CHANGE_SUMMARY_LENGTH),
+          }),
+        },
+      );
+      const initData = await initRes.json().catch(() => ({}));
+      if (!initRes.ok) {
+        throw new Error(initData?.error || "Failed to initialize version upload");
+      }
+
+      const storagePath = String(initData.storagePath || "");
+      const versionNumber = Number(initData.versionNumber);
+      if (!storagePath || !Number.isFinite(versionNumber) || versionNumber < 1) {
+        throw new Error("Invalid version initialization response");
+      }
+
+      const storageRef = ref(storage, storagePath);
+      await new Promise<void>((resolve, reject) => {
+        const task = uploadBytesResumable(storageRef, nextFile, {
+          contentType: DOCX_MIME,
+        });
+        task.on(
+          "state_changed",
+          (snapshot) => {
+            const pct = Math.round(
+              (snapshot.bytesTransferred / Math.max(snapshot.totalBytes, 1)) * 100,
+            );
+            setVersionUploadProgress(pct);
+          },
+          (uploadErr) => reject(uploadErr),
+          () => resolve(),
+        );
+      });
+
+      const finalizeRes = await authedFetch(
+        `/api/documents/${encodeURIComponent(docId)}/versions/finalize`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            versionNumber,
+            expectedCurrentVersion,
+          }),
+        },
+      );
+      const finalizeData = await finalizeRes.json().catch(() => ({}));
+      if (!finalizeRes.ok) {
+        throw new Error(finalizeData?.error || "Failed to finalize new version");
+      }
+
+      await authedFetch(`/api/documents/${encodeURIComponent(docId)}/extract-text`, {
+        method: "POST",
+      });
+
+      await loadDocuments();
+      const refreshedDetail = await fetchDocumentDetail({ docId });
+      setSelectedDoc(refreshedDetail);
+      await loadDocumentVersions(docId);
+      setVersionHistoryOpen(true);
+
+      setEditingDoc(false);
+      setReplacementDocxFile(null);
+      setChangeSummary("");
+      setVersionUploadProgress(null);
+      setMessage(`Saved as version v${versionNumber}.`);
+    } catch (err: unknown) {
+      if (err instanceof Error) setError(err.message);
+      else setError("Failed to save document version");
+    } finally {
+      setSavingVersion(false);
     }
   }
 
@@ -1502,18 +1736,33 @@ export default function DocumentsPage() {
                       </span>
                       <button
                         type="button"
+                        onClick={() => setVersionHistoryOpen((prev) => !prev)}
+                        className="rounded-full border border-slate-300 bg-white px-2.5 py-1 font-semibold text-slate-700 transition hover:bg-slate-100"
+                      >
+                        {versionHistoryOpen ? "Hide versions" : "Version history"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleDownloadDocument({ docId: selectedDocId })}
+                        disabled={!canDownloadSelectedDoc || downloadingDocId === selectedDocId}
+                        className="rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 font-semibold text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {downloadingDocId === selectedDocId ? "Downloading..." : "Download current"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={editingDoc ? cancelEditDocument : beginEditDocument}
+                        disabled={!canEditSelectedDoc || savingVersion}
+                        className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 font-semibold text-amber-700 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {editingDoc ? "Cancel edit" : "Edit"}
+                      </button>
+                      <button
+                        type="button"
                         onClick={closeDocument}
                         className="rounded-full border border-slate-300 bg-white px-2.5 py-1 font-semibold text-slate-700 transition hover:bg-slate-100"
                       >
                         Close document
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void handleDownloadDocument(selectedDocId)}
-                        disabled={!canDownloadSelectedDoc || downloadingDocId === selectedDocId}
-                        className="rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 font-semibold text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {downloadingDocId === selectedDocId ? "Downloading..." : "Download original"}
                       </button>
                     </div>
                     {statusInfoOpen ? (
@@ -1530,6 +1779,117 @@ export default function DocumentsPage() {
                             {selectedDoc?.textStatus || selectedMeta?.textStatus || "pending"}
                           </span>
                         </p>
+                        <p className="mt-1">
+                          Current version: <span className="font-semibold">v{selectedDocVersion}</span>
+                        </p>
+                      </div>
+                    ) : null}
+                    {editingDoc ? (
+                      <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50/60 p-3">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-amber-800">
+                          Save New DOCX Version
+                        </p>
+                        <p className="mt-1 text-xs text-amber-700">
+                          Upload a revised DOCX and describe what changed. This will create the next version.
+                        </p>
+                        <div className="mt-2 space-y-2">
+                          <input
+                            type="file"
+                            accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                            onChange={(event) => {
+                              const file = event.target.files?.[0] ?? null;
+                              setReplacementDocxFile(file);
+                            }}
+                            className="block w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs text-slate-700"
+                          />
+                          <textarea
+                            value={changeSummary}
+                            onChange={(event) => setChangeSummary(event.target.value)}
+                            maxLength={MAX_CHANGE_SUMMARY_LENGTH}
+                            rows={3}
+                            placeholder="Describe what changed in this version..."
+                            className="block w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs text-slate-700"
+                          />
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-[11px] text-amber-700">
+                              {changeSummary.trim().length}/{MAX_CHANGE_SUMMARY_LENGTH}
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => void handleSaveDocxVersion()}
+                              disabled={
+                                savingVersion ||
+                                !replacementDocxFile ||
+                                !looksLikeDocx(replacementDocxFile) ||
+                                !changeSummary.trim()
+                              }
+                              className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {savingVersion ? "Saving..." : "Save changes"}
+                            </button>
+                          </div>
+                          {versionUploadProgress !== null ? (
+                            <p className="text-[11px] text-amber-700">
+                              Upload progress: {versionUploadProgress}%
+                            </p>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
+                    {versionHistoryOpen ? (
+                      <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50/80 p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-700">
+                            Version History
+                          </p>
+                          {versionHistoryLoading ? (
+                            <p className="text-[11px] text-slate-500">Loading...</p>
+                          ) : null}
+                        </div>
+                        {versionHistoryError ? (
+                          <p className="mt-2 text-xs text-rose-700">{versionHistoryError}</p>
+                        ) : null}
+                        {!versionHistoryLoading && versions.length === 0 ? (
+                          <p className="mt-2 text-xs text-slate-500">No version history available yet.</p>
+                        ) : null}
+                        {versions.length > 0 ? (
+                          <div className="mt-2 space-y-2">
+                            {versions.map((versionRow) => (
+                              <div
+                                key={`version-${versionRow.version}`}
+                                className="rounded-lg border border-slate-200 bg-white px-3 py-2"
+                              >
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <div>
+                                    <p className="text-xs font-semibold text-slate-800">
+                                      v{versionRow.version}
+                                      {versionRow.isCurrent ? " (Current)" : ""}
+                                    </p>
+                                    <p className="text-[11px] text-slate-500">
+                                      {formatDateTime(versionRow.promotedAt || versionRow.createdAt)}
+                                    </p>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      void handleDownloadDocument({
+                                        docId: selectedDocId,
+                                        version: versionRow.version,
+                                      })
+                                    }
+                                    disabled={downloadingDocId === selectedDocId}
+                                    className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                  >
+                                    Download v{versionRow.version}
+                                  </button>
+                                </div>
+                                <p className="mt-1 text-[11px] text-slate-600">
+                                  {versionRow.changeSummary || "No summary provided"}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
                       </div>
                     ) : null}
                     {selectedDoc?.textWindow ? (

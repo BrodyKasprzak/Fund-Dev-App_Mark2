@@ -26,6 +26,7 @@ type ActivityRow = {
   label: string;
   title: string;
   when: string | null;
+  changeSummary: string | null;
 };
 
 type QuickAction = {
@@ -233,12 +234,14 @@ export default function DashboardPage() {
       setWorkspaceLoading(true);
 
       try {
-        const [documentsRes, membersCountSnap] = await Promise.all([
+        const [documentsRes, activityRes, membersCountSnap] = await Promise.all([
           authedFetch("/api/documents"),
+          authedFetch("/api/activity/recent?limit=20"),
           getCountFromServer(collection(db, "organizations", activeOrgId, "members")),
         ]);
 
         const documentPayload = await documentsRes.json().catch(() => ({}));
+        const activityPayload = await activityRes.json().catch(() => ({}));
         const rawDocuments: unknown[] = Array.isArray(documentPayload?.documents) ? documentPayload.documents : [];
         const documents: DocumentSummary[] = rawDocuments
           .map((item) => {
@@ -265,15 +268,46 @@ export default function DashboardPage() {
         setDocumentsCount(sortedDocuments.length);
         setLastUpdatedAt(sortedDocuments[0]?.updatedAt || sortedDocuments[0]?.createdAt || null);
 
-        // TODO(ui-only): Add "answers saved" and "grants created" events when existing UI data is available.
-        const documentActivity: ActivityRow[] = sortedDocuments.slice(0, 8).map((d) => ({
-          id: d.id,
-          type: "document",
-          label: "Document uploaded",
-          title: d.title || "Untitled document",
-          when: d.createdAt || d.updatedAt || null,
-        }));
-        setActivity(documentActivity);
+        const activityRows = Array.isArray(activityPayload?.items)
+          ? (activityPayload.items as Array<Record<string, unknown>>)
+              .map((item) => {
+                const id = typeof item.id === "string" ? item.id : null;
+                if (!id) return null;
+                return {
+                  id,
+                  type: "document" as const,
+                  label:
+                    typeof item.label === "string" && item.label.trim()
+                      ? item.label
+                      : "Document activity",
+                  title:
+                    typeof item.docTitle === "string" && item.docTitle.trim()
+                      ? item.docTitle
+                      : "Untitled document",
+                  when: typeof item.when === "string" ? item.when : null,
+                  changeSummary:
+                    typeof item.changeSummary === "string" && item.changeSummary.trim()
+                      ? item.changeSummary
+                      : null,
+                } as ActivityRow;
+              })
+              .filter((row): row is ActivityRow => row !== null)
+              .slice(0, 8)
+          : ([] as ActivityRow[]);
+
+        if (activityRows.length > 0) {
+          setActivity(activityRows);
+        } else {
+          const fallbackActivity: ActivityRow[] = sortedDocuments.slice(0, 8).map((d) => ({
+            id: d.id,
+            type: "document",
+            label: "Document uploaded",
+            title: d.title || "Untitled document",
+            when: d.createdAt || d.updatedAt || null,
+            changeSummary: null,
+          }));
+          setActivity(fallbackActivity);
+        }
 
         setTeamMembersCount(membersCountSnap.data().count);
       } catch {
@@ -489,6 +523,9 @@ export default function DashboardPage() {
                     <div className="min-w-0">
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{item.label}</p>
                       <p className="truncate text-sm font-semibold text-slate-900">{item.title}</p>
+                      {item.changeSummary ? (
+                        <p className="truncate text-xs text-slate-500">{item.changeSummary}</p>
+                      ) : null}
                     </div>
                     <p className="text-xs text-slate-500">{formatDateTime(item.when)}</p>
                   </div>

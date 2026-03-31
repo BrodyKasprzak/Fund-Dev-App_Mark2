@@ -37,8 +37,7 @@ export async function syncChunksToSupabase(args: {
     .from("document_chunks")
     .delete()
     .eq("org_id", orgId)
-    .eq("doc_id", docId)
-    .eq("version", version);
+    .eq("doc_id", docId);
 
   if (deleteError) {
     const parts = [deleteError.message];

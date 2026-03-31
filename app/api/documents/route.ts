@@ -59,11 +59,13 @@ export async function GET(req: Request) {
         fileType?: unknown;
         size?: unknown;
         status?: unknown;
+        editStatus?: unknown;
         textStatus?: unknown;
         chunkStatus?: unknown;
         chunkCount?: unknown;
         chunkVersion?: unknown;
         version?: unknown;
+        currentVersionNumber?: unknown;
         createdAt?: FirestoreDateLike;
         createdBy?: unknown;
         textUpdatedAt?: FirestoreDateLike;
@@ -71,6 +73,15 @@ export async function GET(req: Request) {
         updatedAt?: FirestoreDateLike;
         updatedBy?: unknown;
       };
+
+      const resolvedVersion =
+        typeof data.currentVersionNumber === "number" &&
+        Number.isFinite(data.currentVersionNumber) &&
+        data.currentVersionNumber > 0
+          ? Math.floor(data.currentVersionNumber)
+          : typeof data.version === "number" && Number.isFinite(data.version) && data.version > 0
+            ? Math.floor(data.version)
+            : 1;
 
       return {
         id: d.id,
@@ -82,11 +93,14 @@ export async function GET(req: Request) {
             : "application/octet-stream",
         size: typeof data.size === "number" ? data.size : 0,
         status: typeof data.status === "string" ? data.status : "processing",
+        editStatus:
+          typeof data.editStatus === "string" ? data.editStatus : "not_editable",
         textStatus: typeof data.textStatus === "string" ? data.textStatus : "pending",
         chunkStatus: typeof data.chunkStatus === "string" ? data.chunkStatus : "pending",
         chunkCount: typeof data.chunkCount === "number" ? data.chunkCount : 0,
         chunkVersion: typeof data.chunkVersion === "string" ? data.chunkVersion : null,
-        version: typeof data.version === "number" ? data.version : 1,
+        version: resolvedVersion,
+        currentVersionNumber: resolvedVersion,
         createdAt: toIso(data.createdAt),
         createdBy: typeof data.createdBy === "string" ? data.createdBy : null,
         textUpdatedAt: toIso(data.textUpdatedAt),

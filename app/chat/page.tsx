@@ -1468,7 +1468,7 @@ export default function DocumentsPage() {
                         disabled={!canDownloadSelectedDoc || downloadingDocId === selectedDocId}
                         className="rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 font-semibold text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        {downloadingDocId === selectedDocId ? "Downloading..." : "Download original"}
+                        {downloadingDocId === selectedDocId ? "Downloading..." : "Download current"}
                       </button>
                     </div>
                     {statusInfoOpen ? (

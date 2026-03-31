@@ -100,7 +100,7 @@ export async function ingestDocumentChunks(
     extractedText,
   });
 
-  const existing = await chunksRef.where("version", "==", normalizedVersion).get();
+  const existing = await chunksRef.get();
   if (!existing.empty) {
     await deleteChunkDocsInBatches(existing.docs);
   }

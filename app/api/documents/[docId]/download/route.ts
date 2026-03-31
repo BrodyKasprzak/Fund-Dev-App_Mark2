@@ -28,9 +28,21 @@ type DocumentRecord = {
   fileType?: unknown;
   size?: unknown;
   status?: unknown;
+  originalStoragePath?: unknown;
+  originalFileType?: unknown;
   originalFilename?: unknown;
   filename?: unknown;
   version?: unknown;
+  currentVersionNumber?: unknown;
+};
+
+type VersionRecord = {
+  version?: unknown;
+  storagePath?: unknown;
+  fileType?: unknown;
+  status?: unknown;
+  filename?: unknown;
+  originalFilename?: unknown;
 };
 
 function isValidDocId(docId: string) {
@@ -65,6 +77,20 @@ function withSafeExtension(filename: string, fileType: string | null) {
   const ext = FILE_TYPE_EXTENSIONS[fileType];
   if (!ext) return filename;
   return `${filename}${ext}`;
+}
+
+function normalizeVersion(value: unknown, fallback = 1) {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  return fallback;
+}
+
+function parseRequestedVersion(raw: string | null) {
+  if (raw === null) return null;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 1) return null;
+  return Math.floor(parsed);
 }
 
 function buildContentDisposition(filename: string) {
@@ -120,54 +146,133 @@ export async function GET(
       return NextResponse.json({ error: "Document not found" }, { status: 404 });
     }
 
+    const { searchParams } = new URL(req.url);
+    const targetParam = (searchParams.get("target") || "current").trim().toLowerCase();
+    const target: "current" | "original" =
+      targetParam === "original" ? "original" : "current";
+    const requestedVersion = parseRequestedVersion(searchParams.get("version"));
+    if (searchParams.get("version") !== null && requestedVersion === null) {
+      return NextResponse.json(
+        { error: "version must be a positive integer" },
+        { status: 400 },
+      );
+    }
+    if (target === "original" && requestedVersion !== null) {
+      return NextResponse.json(
+        { error: "version cannot be used with target=original" },
+        { status: 400 },
+      );
+    }
+
     const data = docSnap.data() as DocumentRecord | undefined;
-    const storagePath =
+    const currentVersion = normalizeVersion(
+      data?.currentVersionNumber,
+      normalizeVersion(data?.version, 1),
+    );
+    const currentStoragePath =
       typeof data?.storagePath === "string" ? data.storagePath.trim() : "";
-    const status = typeof data?.status === "string" ? data.status : "processing";
-    const fileType =
+    const currentStatus = typeof data?.status === "string" ? data.status : "processing";
+    const currentFileType =
       typeof data?.fileType === "string" && data.fileType.trim()
         ? data.fileType
         : null;
-    const version =
-      typeof data?.version === "number" && Number.isFinite(data.version)
-        ? Math.max(1, Math.floor(data.version))
-        : 1;
+    const originalStoragePath =
+      typeof data?.originalStoragePath === "string" ? data.originalStoragePath.trim() : "";
+    const originalFileType =
+      typeof data?.originalFileType === "string" && data.originalFileType.trim()
+        ? data.originalFileType
+        : null;
+    const originalFilename =
+      typeof data?.originalFilename === "string" ? data.originalFilename : null;
+    const currentFilename =
+      (typeof data?.filename === "string" && data.filename) ||
+      (typeof data?.originalFilename === "string" && data.originalFilename) ||
+      null;
 
-    if (!storagePath) {
+    let resolvedVersion = currentVersion;
+    let resolvedStoragePath = currentStoragePath;
+    let resolvedStatus = currentStatus;
+    let resolvedFileType = currentFileType;
+    let resolvedFilename = currentFilename;
+    let resolvedTarget: "current" | "original" | "version" = "current";
+
+    if (target === "original") {
+      resolvedTarget = "original";
+      resolvedVersion = 1;
+      resolvedStoragePath = originalStoragePath;
+      resolvedStatus = "ready";
+      resolvedFileType = originalFileType;
+      resolvedFilename = originalFilename;
+      if (!resolvedStoragePath) {
+        const v1Snap = await docRef.collection("versions").doc("v1").get();
+        if (v1Snap.exists) {
+          const v1Data = v1Snap.data() as VersionRecord | undefined;
+          resolvedStoragePath =
+            typeof v1Data?.storagePath === "string" ? v1Data.storagePath.trim() : "";
+          resolvedStatus =
+            typeof v1Data?.status === "string" ? v1Data.status : "processing";
+          resolvedFileType =
+            typeof v1Data?.fileType === "string" ? v1Data.fileType : resolvedFileType;
+          resolvedFilename =
+            (typeof v1Data?.originalFilename === "string" && v1Data.originalFilename) ||
+            (typeof v1Data?.filename === "string" && v1Data.filename) ||
+            resolvedFilename;
+        }
+      }
+    } else if (requestedVersion !== null && requestedVersion !== currentVersion) {
+      const versionSnap = await docRef.collection("versions").doc(`v${requestedVersion}`).get();
+      if (!versionSnap.exists) {
+        return NextResponse.json({ error: "Version not found" }, { status: 404 });
+      }
+      const versionData = versionSnap.data() as VersionRecord | undefined;
+      resolvedTarget = "version";
+      resolvedVersion = normalizeVersion(versionData?.version, requestedVersion);
+      resolvedStoragePath =
+        typeof versionData?.storagePath === "string" ? versionData.storagePath.trim() : "";
+      resolvedStatus = typeof versionData?.status === "string" ? versionData.status : "processing";
+      resolvedFileType =
+        typeof versionData?.fileType === "string" && versionData.fileType.trim()
+          ? versionData.fileType
+          : null;
+      resolvedFilename =
+        (typeof versionData?.originalFilename === "string" && versionData.originalFilename) ||
+        (typeof versionData?.filename === "string" && versionData.filename) ||
+        null;
+    }
+
+    if (!resolvedStoragePath) {
       return NextResponse.json(
         { error: "Document is missing storagePath" },
         { status: 409 },
       );
     }
 
-    if (!storagePath.startsWith(`organizations/${orgId}/documents/${docId}/`)) {
+    if (!resolvedStoragePath.startsWith(`organizations/${orgId}/documents/${docId}/`)) {
       return NextResponse.json(
         { error: "Document storage path is invalid" },
         { status: 409 },
       );
     }
 
-    if (status !== "ready") {
+    if (resolvedStatus !== "ready") {
       return NextResponse.json(
         { error: "Document upload is not finalized yet" },
         { status: 409 },
       );
     }
 
-    const fileRef = adminStorage.bucket().file(storagePath);
+    const fileRef = adminStorage.bucket().file(resolvedStoragePath);
     const [exists] = await fileRef.exists();
     if (!exists) {
       return NextResponse.json({ error: "Stored file was not found" }, { status: 409 });
     }
 
     const [objectMeta] = await fileRef.getMetadata();
-    const contentType = fileType || objectMeta.contentType || "application/octet-stream";
+    const contentType =
+      resolvedFileType || objectMeta.contentType || "application/octet-stream";
     const [buffer] = await fileRef.download();
 
-    const preferredName =
-      (typeof data?.originalFilename === "string" && data.originalFilename) ||
-      (typeof data?.filename === "string" && data.filename) ||
-      basename(storagePath);
+    const preferredName = resolvedFilename || basename(resolvedStoragePath);
 
     const downloadFilename = withSafeExtension(
       sanitizeFilename(preferredName),
@@ -181,7 +286,8 @@ export async function GET(
       actorEmail: email,
       docId,
       metadata: {
-        version,
+        version: resolvedVersion,
+        target: resolvedTarget,
         size: buffer.length,
         fileType: contentType,
         filename: downloadFilename,

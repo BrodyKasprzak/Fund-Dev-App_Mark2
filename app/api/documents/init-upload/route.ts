@@ -39,6 +39,8 @@ type VersionMetadata = {
   fileType: string;
   size: number;
   status: "processing" | "ready" | "failed";
+  source: "upload" | "edit" | "conversion";
+  changeSummary: string | null;
   createdAt: Date;
   createdBy: string;
 };
@@ -138,11 +140,15 @@ export async function POST(req: Request) {
       fileType: rawFileType,
       size: rawSize,
       status: "processing",
+      source: "upload",
+      changeSummary: "Initial upload",
       createdAt: now,
       createdBy: uid,
     };
 
-    await docRef.set({
+    const versionRef = docRef.collection("versions").doc(`v${currentVersion}`);
+    const batch = adminDb.batch();
+    batch.set(docRef, {
       title,
       storagePath,
       fileType: rawFileType,
@@ -156,8 +162,14 @@ export async function POST(req: Request) {
       textUpdatedAt: now,
       version: currentVersion,
       currentVersion,
+      currentVersionNumber: currentVersion,
+      originalStoragePath: storagePath,
+      originalFileType: rawFileType,
       originalFilename,
       filename: safeFilename,
+      editStatus: "processing",
+      pendingVersion: null,
+      lastVersionChangeAt: now,
       versionMeta: {
         current: currentVersion,
         items: {
@@ -169,6 +181,14 @@ export async function POST(req: Request) {
       updatedAt: now,
       updatedBy: uid,
     });
+    batch.set(versionRef, {
+      ...versionMetadata,
+      promotedAt: null,
+      promotedBy: null,
+      updatedAt: now,
+      updatedBy: uid,
+    });
+    await batch.commit();
 
     await writeOrgAuditLog({
       orgId,
