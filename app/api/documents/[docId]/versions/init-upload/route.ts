@@ -3,6 +3,12 @@ import { adminDb } from "@/lib/firebaseAdmin";
 import { requireOrgContext, errorToResponse } from "@/lib/serverAuth";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
 import { writeOrgAuditLog } from "@/lib/auditLog";
+import {
+  DOCX_MIME,
+  buildRenderAssetsFromStoredFile,
+  buildPendingRenderAssets,
+  emptyVersionEditorPayload,
+} from "@/lib/documents/versionMetadata";
 
 export const runtime = "nodejs";
 
@@ -11,9 +17,6 @@ const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
 const MAX_DOC_ID_LENGTH = 128;
 const MAX_FILENAME_LENGTH = 180;
 const MAX_CHANGE_SUMMARY_LENGTH = 500;
-const DOCX_MIME =
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-
 type InitVersionUploadBody = {
   filename?: unknown;
   fileType?: unknown;
@@ -226,8 +229,10 @@ export async function POST(
               ? data.filename
               : "document.docx";
           const currentOriginalFilename =
-            typeof data.originalFilename === "string" && data.originalFilename.trim()
-              ? data.originalFilename
+            typeof data.filename === "string" && data.filename.trim()
+              ? data.filename
+              : typeof data.originalFilename === "string" && data.originalFilename.trim()
+                ? data.originalFilename
               : currentFilename;
           const currentSize =
             typeof data.size === "number" && Number.isFinite(data.size) && data.size > 0
@@ -250,6 +255,12 @@ export async function POST(
               status,
               source: "upload",
               changeSummary: currentVersion === 1 ? "Initial upload" : null,
+              ...emptyVersionEditorPayload(),
+              renderAssets: buildRenderAssetsFromStoredFile({
+                storagePath: currentStoragePath,
+                fileType: DOCX_MIME,
+                now: updatedAt,
+              }),
               createdAt,
               createdBy,
               promotedAt: updatedAt,
@@ -298,6 +309,11 @@ export async function POST(
           status: "processing",
           source: "edit",
           changeSummary,
+          ...emptyVersionEditorPayload(),
+          renderAssets: buildPendingRenderAssets({
+            storagePath,
+            fileType: DOCX_MIME,
+          }),
           createdAt: now,
           createdBy: uid,
           promotedAt: null,

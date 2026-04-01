@@ -4,6 +4,10 @@ import { requireOrgContext, errorToResponse } from "@/lib/serverAuth";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
 import { writeOrgAuditLog } from "@/lib/auditLog";
 import { CHUNKER_VERSION } from "@/lib/documentChunking";
+import {
+  buildPendingRenderAssets,
+  emptyVersionEditorPayload,
+} from "@/lib/documents/versionMetadata";
 
 export const runtime = "nodejs";
 
@@ -41,6 +45,10 @@ type VersionMetadata = {
   status: "processing" | "ready" | "failed";
   source: "upload" | "edit" | "conversion";
   changeSummary: string | null;
+  editorFormat: string | null;
+  editorState: Record<string, unknown> | null;
+  plainText: string | null;
+  renderAssets: ReturnType<typeof buildPendingRenderAssets>;
   createdAt: Date;
   createdBy: string;
 };
@@ -142,6 +150,11 @@ export async function POST(req: Request) {
       status: "processing",
       source: "upload",
       changeSummary: "Initial upload",
+      ...emptyVersionEditorPayload(),
+      renderAssets: buildPendingRenderAssets({
+        storagePath,
+        fileType: rawFileType,
+      }),
       createdAt: now,
       createdBy: uid,
     };

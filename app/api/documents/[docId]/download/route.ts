@@ -3,6 +3,11 @@ import { adminDb, adminStorage } from "@/lib/firebaseAdmin";
 import { requireOrgContext, errorToResponse } from "@/lib/serverAuth";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
 import { writeOrgAuditLog } from "@/lib/auditLog";
+import {
+  DOCX_MIME,
+  LEXICAL_EDITOR_FORMAT,
+  PDF_MIME,
+} from "@/lib/documents/versionMetadata";
 
 export const runtime = "nodejs";
 
@@ -43,7 +48,18 @@ type VersionRecord = {
   status?: unknown;
   filename?: unknown;
   originalFilename?: unknown;
+  editorFormat?: unknown;
+  renderAssets?: unknown;
 };
+
+type RenderAssetRecord = {
+  status?: unknown;
+  storagePath?: unknown;
+  fileType?: unknown;
+  error?: unknown;
+};
+
+type ExportFormat = "docx" | "pdf";
 
 function isValidDocId(docId: string) {
   const trimmed = docId.trim();
@@ -91,6 +107,29 @@ function parseRequestedVersion(raw: string | null) {
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || parsed < 1) return null;
   return Math.floor(parsed);
+}
+
+function parseRequestedFormat(raw: string | null): ExportFormat | "original" | null {
+  if (!raw) return null;
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "docx") return "docx";
+  if (normalized === "pdf") return "pdf";
+  if (normalized === "original") return "original";
+  return null;
+}
+
+function resolveRenderAsset(renderAssets: unknown, format: ExportFormat) {
+  if (!renderAssets || typeof renderAssets !== "object") return null;
+  const record = (renderAssets as Record<string, unknown>)[format];
+  if (!record || typeof record !== "object") return null;
+  return record as RenderAssetRecord;
+}
+
+function safeRenderAssetStatus(value: unknown) {
+  if (value === "ready" || value === "processing" || value === "failed" || value === "not_generated") {
+    return value;
+  }
+  return "not_generated";
 }
 
 function buildContentDisposition(filename: string) {
@@ -150,6 +189,13 @@ export async function GET(
     const targetParam = (searchParams.get("target") || "current").trim().toLowerCase();
     const target: "current" | "original" =
       targetParam === "original" ? "original" : "current";
+    const requestedFormat = parseRequestedFormat(searchParams.get("format"));
+    if (searchParams.get("format") !== null && !requestedFormat) {
+      return NextResponse.json(
+        { error: "format must be one of: docx, pdf, original" },
+        { status: 400 },
+      );
+    }
     const requestedVersion = parseRequestedVersion(searchParams.get("version"));
     if (searchParams.get("version") !== null && requestedVersion === null) {
       return NextResponse.json(
@@ -160,6 +206,12 @@ export async function GET(
     if (target === "original" && requestedVersion !== null) {
       return NextResponse.json(
         { error: "version cannot be used with target=original" },
+        { status: 400 },
+      );
+    }
+    if (requestedFormat === "original" && requestedVersion !== null) {
+      return NextResponse.json(
+        { error: "format=original cannot be used with version" },
         { status: 400 },
       );
     }
@@ -195,8 +247,9 @@ export async function GET(
     let resolvedFileType = currentFileType;
     let resolvedFilename = currentFilename;
     let resolvedTarget: "current" | "original" | "version" = "current";
+    let resolvedVersionRecord: VersionRecord | null = null;
 
-    if (target === "original") {
+    if (target === "original" || requestedFormat === "original") {
       resolvedTarget = "original";
       resolvedVersion = 1;
       resolvedStoragePath = originalStoragePath;
@@ -207,6 +260,7 @@ export async function GET(
         const v1Snap = await docRef.collection("versions").doc("v1").get();
         if (v1Snap.exists) {
           const v1Data = v1Snap.data() as VersionRecord | undefined;
+          resolvedVersionRecord = v1Data || null;
           resolvedStoragePath =
             typeof v1Data?.storagePath === "string" ? v1Data.storagePath.trim() : "";
           resolvedStatus =
@@ -225,6 +279,7 @@ export async function GET(
         return NextResponse.json({ error: "Version not found" }, { status: 404 });
       }
       const versionData = versionSnap.data() as VersionRecord | undefined;
+      resolvedVersionRecord = versionData || null;
       resolvedTarget = "version";
       resolvedVersion = normalizeVersion(versionData?.version, requestedVersion);
       resolvedStoragePath =
@@ -238,6 +293,105 @@ export async function GET(
         (typeof versionData?.originalFilename === "string" && versionData.originalFilename) ||
         (typeof versionData?.filename === "string" && versionData.filename) ||
         null;
+    } else {
+      const currentVersionSnap = await docRef.collection("versions").doc(`v${currentVersion}`).get();
+      if (currentVersionSnap.exists) {
+        const versionData = currentVersionSnap.data() as VersionRecord | undefined;
+        resolvedVersionRecord = versionData || null;
+        resolvedVersion = normalizeVersion(versionData?.version, currentVersion);
+        resolvedStoragePath =
+          typeof versionData?.storagePath === "string" && versionData.storagePath.trim()
+            ? versionData.storagePath
+            : resolvedStoragePath;
+        resolvedStatus =
+          typeof versionData?.status === "string" ? versionData.status : resolvedStatus;
+        resolvedFileType =
+          typeof versionData?.fileType === "string" && versionData.fileType.trim()
+            ? versionData.fileType
+            : resolvedFileType;
+        resolvedFilename =
+          (typeof versionData?.originalFilename === "string" && versionData.originalFilename) ||
+          (typeof versionData?.filename === "string" && versionData.filename) ||
+          resolvedFilename;
+      }
+    }
+
+    const editorBased =
+      resolvedVersionRecord?.editorFormat === LEXICAL_EDITOR_FORMAT;
+    const preferredExportFormat: ExportFormat | null =
+      requestedFormat === "docx" || requestedFormat === "pdf"
+        ? requestedFormat
+        : editorBased
+          ? "docx"
+          : null;
+
+    if (preferredExportFormat && resolvedTarget !== "original") {
+      const asset = resolveRenderAsset(
+        resolvedVersionRecord?.renderAssets,
+        preferredExportFormat,
+      );
+      const assetStatus = safeRenderAssetStatus(asset?.status);
+      const desiredMime = preferredExportFormat === "docx" ? DOCX_MIME : PDF_MIME;
+      const fallbackMatchesSource =
+        !editorBased && resolvedFileType === desiredMime;
+      if (assetStatus === "ready") {
+        const exportPath =
+          typeof asset?.storagePath === "string" ? asset.storagePath.trim() : "";
+        if (exportPath) {
+          if (!exportPath.startsWith(`organizations/${orgId}/documents/${docId}/`)) {
+            return NextResponse.json(
+              { error: "Document export path is invalid" },
+              { status: 409 },
+            );
+          }
+          resolvedStoragePath = exportPath;
+          resolvedStatus = "ready";
+          resolvedFileType =
+            typeof asset?.fileType === "string" && asset.fileType.trim()
+              ? asset.fileType
+              : preferredExportFormat === "docx"
+                ? DOCX_MIME
+                : PDF_MIME;
+          const baseName = (resolvedFilename || "document").replace(/\.[^.]+$/, "");
+          resolvedFilename = `${baseName}.${preferredExportFormat}`;
+        }
+      } else if (fallbackMatchesSource) {
+        const baseName = (resolvedFilename || "document").replace(/\.[^.]+$/, "");
+        resolvedFilename = `${baseName}.${preferredExportFormat}`;
+      } else if (requestedFormat) {
+        if (assetStatus === "processing") {
+          return NextResponse.json(
+            { error: `Requested ${preferredExportFormat.toUpperCase()} export is still processing` },
+            { status: 409 },
+          );
+        }
+        const exportError =
+          typeof asset?.error === "string" && asset.error.trim() ? asset.error : null;
+        return NextResponse.json(
+          {
+            error:
+              exportError ||
+              `Requested ${preferredExportFormat.toUpperCase()} export is not ready`,
+          },
+          { status: 409 },
+        );
+      } else if (editorBased) {
+        if (assetStatus === "processing") {
+          return NextResponse.json(
+            { error: "Current editor export is still processing" },
+            { status: 409 },
+          );
+        }
+        const exportError =
+          typeof asset?.error === "string" && asset.error.trim() ? asset.error : null;
+        return NextResponse.json(
+          {
+            error:
+              exportError || "Current editor export is not ready",
+          },
+          { status: 409 },
+        );
+      }
     }
 
     if (!resolvedStoragePath) {
@@ -288,6 +442,13 @@ export async function GET(
       metadata: {
         version: resolvedVersion,
         target: resolvedTarget,
+        format:
+          requestedFormat ||
+          (resolvedFileType === DOCX_MIME
+            ? "docx"
+            : resolvedFileType === PDF_MIME
+              ? "pdf"
+              : "original"),
         size: buffer.length,
         fileType: contentType,
         filename: downloadFilename,

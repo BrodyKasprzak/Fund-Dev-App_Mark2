@@ -2,6 +2,11 @@ import { NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
 import { requireOrgContext, errorToResponse } from "@/lib/serverAuth";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
+import {
+  DOCX_MIME,
+  PDF_MIME,
+  type RenderAssetStatus,
+} from "@/lib/documents/versionMetadata";
 
 export const runtime = "nodejs";
 
@@ -33,6 +38,10 @@ type VersionDocRecord = {
   updatedBy?: unknown;
   promotedAt?: FirestoreDateLike;
   promotedBy?: unknown;
+  editorFormat?: unknown;
+  editorState?: unknown;
+  plainText?: unknown;
+  renderAssets?: unknown;
 };
 
 type ParentDocumentRecord = {
@@ -53,6 +62,27 @@ type ParentDocumentRecord = {
   version?: unknown;
   currentVersionNumber?: unknown;
   versionMeta?: unknown;
+};
+
+type RenderAssetRecord = {
+  status?: unknown;
+  storagePath?: unknown;
+  fileType?: unknown;
+  generatedAt?: FirestoreDateLike;
+  error?: unknown;
+};
+
+type SerializedRenderAsset = {
+  status: RenderAssetStatus;
+  storagePath: string | null;
+  fileType: string | null;
+  generatedAt: string | null;
+  error: string | null;
+};
+
+type SerializedRenderAssets = {
+  docx: SerializedRenderAsset;
+  pdf: SerializedRenderAsset;
 };
 
 function toIso(value: FirestoreDateLike) {
@@ -80,6 +110,59 @@ function normalizeVersion(value: unknown, fallback = 1) {
   return fallback;
 }
 
+function normalizeRenderAsset(
+  raw: unknown,
+  defaults: { fileType: string },
+): SerializedRenderAsset {
+  const record = raw && typeof raw === "object" ? (raw as RenderAssetRecord) : null;
+  const allowed: RenderAssetStatus[] = ["not_generated", "processing", "ready", "failed"];
+  const status = allowed.includes(record?.status as RenderAssetStatus)
+    ? (record?.status as RenderAssetStatus)
+    : "not_generated";
+  return {
+    status,
+    storagePath:
+      typeof record?.storagePath === "string" && record.storagePath.trim()
+        ? record.storagePath
+        : null,
+    fileType:
+      typeof record?.fileType === "string" && record.fileType.trim()
+        ? record.fileType
+        : defaults.fileType,
+    generatedAt: toIso(record?.generatedAt),
+    error: typeof record?.error === "string" && record.error.trim() ? record.error : null,
+  };
+}
+
+function normalizeRenderAssets(raw: unknown): SerializedRenderAssets {
+  const record = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  return {
+    docx: normalizeRenderAsset(record.docx, { fileType: DOCX_MIME }),
+    pdf: normalizeRenderAsset(record.pdf, { fileType: PDF_MIME }),
+  };
+}
+
+function inferRenderAssetsFromFile(args: { storagePath: unknown; fileType: unknown }) {
+  const storagePath =
+    typeof args.storagePath === "string" && args.storagePath.trim()
+      ? args.storagePath
+      : null;
+  const fileType =
+    typeof args.fileType === "string" && args.fileType.trim() ? args.fileType : null;
+  return normalizeRenderAssets({
+    docx: {
+      status: fileType === DOCX_MIME && storagePath ? "ready" : "not_generated",
+      storagePath: fileType === DOCX_MIME ? storagePath : null,
+      fileType: DOCX_MIME,
+    },
+    pdf: {
+      status: fileType === PDF_MIME && storagePath ? "ready" : "not_generated",
+      storagePath: fileType === PDF_MIME ? storagePath : null,
+      fileType: PDF_MIME,
+    },
+  });
+}
+
 function serializeVersion(record: VersionDocRecord, currentVersionNumber: number) {
   const version = normalizeVersion(record.version, 1);
   return {
@@ -95,6 +178,20 @@ function serializeVersion(record: VersionDocRecord, currentVersionNumber: number
     source: typeof record.source === "string" ? record.source : "upload",
     changeSummary:
       typeof record.changeSummary === "string" ? record.changeSummary : null,
+    editorFormat:
+      typeof record.editorFormat === "string" ? record.editorFormat : null,
+    editorState:
+      record.editorState && typeof record.editorState === "object"
+        ? (record.editorState as Record<string, unknown>)
+        : null,
+    plainText: typeof record.plainText === "string" ? record.plainText : null,
+    renderAssets:
+      record.renderAssets !== undefined
+        ? normalizeRenderAssets(record.renderAssets)
+        : inferRenderAssetsFromFile({
+            storagePath: record.storagePath,
+            fileType: record.fileType,
+          }),
     createdAt: toIso(record.createdAt),
     createdBy: typeof record.createdBy === "string" ? record.createdBy : null,
     updatedAt: toIso(record.updatedAt),
@@ -147,6 +244,14 @@ function fallbackCurrentVersionFromParentDocument(
     status: typeof data.status === "string" ? data.status : "processing",
     source: "upload",
     changeSummary: currentVersionNumber === 1 ? "Initial upload" : null,
+    editorFormat: null,
+    editorState: null,
+    plainText: null,
+    renderAssets:
+      inferRenderAssetsFromFile({
+        storagePath: data.storagePath,
+        fileType: data.fileType,
+      }),
     createdAt: toIso(data.createdAt),
     createdBy: typeof data.createdBy === "string" ? data.createdBy : null,
     updatedAt: toIso(data.updatedAt),
@@ -212,6 +317,41 @@ function ensureSyntheticOriginalVersion(args: {
     status: "ready",
     source: "upload",
     changeSummary: "Initial upload",
+    editorFormat: null,
+    editorState: null,
+    plainText: null,
+    renderAssets: normalizeRenderAssets({
+      docx: {
+        status:
+          (typeof docData.originalFileType === "string"
+            ? docData.originalFileType
+            : docData.fileType) === DOCX_MIME
+            ? "ready"
+            : "not_generated",
+        storagePath:
+          (typeof docData.originalFileType === "string"
+            ? docData.originalFileType
+            : docData.fileType) === DOCX_MIME
+            ? originalStoragePath
+            : null,
+        fileType: DOCX_MIME,
+      },
+      pdf: {
+        status:
+          (typeof docData.originalFileType === "string"
+            ? docData.originalFileType
+            : docData.fileType) === PDF_MIME
+            ? "ready"
+            : "not_generated",
+        storagePath:
+          (typeof docData.originalFileType === "string"
+            ? docData.originalFileType
+            : docData.fileType) === PDF_MIME
+            ? originalStoragePath
+            : null,
+        fileType: PDF_MIME,
+      },
+    }),
     createdAt: toIso(docData.createdAt),
     createdBy: typeof docData.createdBy === "string" ? docData.createdBy : null,
     updatedAt: toIso(docData.createdAt),

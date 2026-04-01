@@ -4,15 +4,17 @@ import { adminDb, adminStorage } from "@/lib/firebaseAdmin";
 import { requireOrgContext, errorToResponse } from "@/lib/serverAuth";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
 import { writeOrgAuditLog } from "@/lib/auditLog";
+import {
+  DOCX_MIME,
+  buildRenderAssetsFromStoredFile,
+  emptyVersionEditorPayload,
+} from "@/lib/documents/versionMetadata";
 
 export const runtime = "nodejs";
 
 const FINALIZE_VERSION_LIMIT_PER_10_MIN = 120;
 const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
 const MAX_DOC_ID_LENGTH = 128;
-const DOCX_MIME =
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-
 type FinalizeVersionBody = {
   versionNumber?: unknown;
   expectedCurrentVersion?: unknown;
@@ -236,6 +238,11 @@ export async function POST(
       typeof pending.changeSummary === "string" ? pending.changeSummary : null;
     const source = typeof pending.source === "string" ? pending.source : "edit";
     const now = new Date();
+    const renderAssets = buildRenderAssetsFromStoredFile({
+      storagePath,
+      fileType: DOCX_MIME,
+      now,
+    });
 
     await adminDb.runTransaction(async (tx) => {
       const freshSnap = await tx.get(docRef);
@@ -273,6 +280,8 @@ export async function POST(
           status: "ready",
           source,
           changeSummary,
+          ...emptyVersionEditorPayload(),
+          renderAssets,
           promotedAt: now,
           promotedBy: uid,
           updatedAt: now,
@@ -291,6 +300,8 @@ export async function POST(
         status: "ready",
         source,
         changeSummary,
+        ...emptyVersionEditorPayload(),
+        renderAssets,
         createdAt: now,
         createdBy: uid,
       };
@@ -311,7 +322,6 @@ export async function POST(
           currentVersion: requestedVersion,
           currentVersionNumber: requestedVersion,
           filename,
-          originalFilename,
           lastVersionChangeAt: now,
           pendingVersion: FieldValue.delete(),
           updatedAt: now,

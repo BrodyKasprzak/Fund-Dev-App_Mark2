@@ -3,6 +3,11 @@ import { adminDb, adminStorage } from "@/lib/firebaseAdmin";
 import { requireOrgContext, errorToResponse } from "@/lib/serverAuth";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
 import { writeOrgAuditLog } from "@/lib/auditLog";
+import {
+  DOCX_MIME,
+  buildRenderAssetsFromStoredFile,
+  emptyVersionEditorPayload,
+} from "@/lib/documents/versionMetadata";
 
 export const runtime = "nodejs";
 
@@ -21,7 +26,7 @@ const SUPPORTED_FILE_TYPES = new Set([
   "application/pdf",
   "text/plain",
   "application/msword",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  DOCX_MIME,
   "text/csv",
   "application/vnd.ms-excel",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -377,6 +382,8 @@ export async function PATCH(
           size?: unknown;
           filename?: unknown;
           originalFilename?: unknown;
+          originalStoragePath?: unknown;
+          originalFileType?: unknown;
           status?: unknown;
           version?: unknown;
           currentVersionNumber?: unknown;
@@ -465,16 +472,35 @@ export async function PATCH(
         patch.size = metadata.size;
         patch[`versionMeta.items.v${currentVersion}.size`] = metadata.size;
         patch.lastVersionChangeAt = new Date();
-        patch.originalStoragePath = storagePath;
-        patch.originalFileType =
-          typeof patch.fileType === "string"
-            ? patch.fileType
-            : typeof current?.fileType === "string"
-              ? current.fileType
+        if (
+          typeof current?.originalStoragePath !== "string" ||
+          !current.originalStoragePath.trim()
+        ) {
+          patch.originalStoragePath = storagePath;
+        }
+        if (
+          typeof current?.originalFileType !== "string" ||
+          !current.originalFileType.trim()
+        ) {
+          patch.originalFileType =
+            typeof patch.fileType === "string"
+              ? patch.fileType
+              : typeof current?.fileType === "string"
+                ? current.fileType
+                : null;
+        }
+        if (
+          typeof current?.originalFilename !== "string" ||
+          !current.originalFilename.trim()
+        ) {
+          patch.originalFilename =
+            typeof current?.filename === "string" && current.filename.trim()
+              ? current.filename
               : null;
+        }
         patch.editStatus =
           (typeof patch.fileType === "string" ? patch.fileType : current?.fileType) ===
-          "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          DOCX_MIME
             ? "ready"
             : "not_editable";
       }
@@ -507,16 +533,19 @@ export async function PATCH(
 
     if (body.status === "ready") {
       const versionRef = ref.collection("versions").doc(`v${currentVersion}`);
+      const resolvedFileType =
+        typeof patch.fileType === "string"
+          ? patch.fileType
+          : typeof current?.fileType === "string"
+            ? current.fileType
+            : "application/octet-stream";
+      const resolvedStoragePath =
+        typeof current?.storagePath === "string" ? current.storagePath : "";
       await versionRef.set(
         {
           version: currentVersion,
           status: "ready",
-          fileType:
-            typeof patch.fileType === "string"
-              ? patch.fileType
-              : typeof current?.fileType === "string"
-                ? current.fileType
-                : null,
+          fileType: resolvedFileType,
           size:
             typeof patch.size === "number"
               ? patch.size
@@ -531,6 +560,12 @@ export async function PATCH(
               : null,
           source: "upload",
           changeSummary: "Initial upload",
+          ...emptyVersionEditorPayload(),
+          renderAssets: buildRenderAssetsFromStoredFile({
+            storagePath: resolvedStoragePath,
+            fileType: resolvedFileType,
+            now: new Date(),
+          }),
           promotedAt: new Date(),
           promotedBy: uid,
           updatedAt: new Date(),
