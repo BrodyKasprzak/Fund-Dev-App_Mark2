@@ -133,6 +133,7 @@ export async function POST(
           chunkCount?: unknown;
           chunkVersion?: unknown;
           version?: unknown;
+          currentVersionNumber?: unknown;
           createdAt?: FirestoreDateLike;
           createdBy?: unknown;
           textUpdatedAt?: FirestoreDateLike;
@@ -171,6 +172,7 @@ export async function POST(
         {
           textStatus: "failed",
           chunkStatus: "failed",
+          chunkCount: 0,
           textUpdatedAt: new Date(),
           chunkUpdatedAt: new Date(),
           updatedAt: new Date(),
@@ -189,6 +191,7 @@ export async function POST(
         {
           textStatus: "failed",
           chunkStatus: "failed",
+          chunkCount: 0,
           textUpdatedAt: new Date(),
           chunkUpdatedAt: new Date(),
           updatedAt: new Date(),
@@ -210,6 +213,7 @@ export async function POST(
         {
           textStatus: "failed",
           chunkStatus: "failed",
+          chunkCount: 0,
           textUpdatedAt: new Date(),
           chunkUpdatedAt: new Date(),
           updatedAt: new Date(),
@@ -227,6 +231,7 @@ export async function POST(
       {
         textStatus: "processing",
         chunkStatus: "processing",
+        chunkCount: 0,
         textUpdatedAt: new Date(),
         chunkUpdatedAt: new Date(),
         updatedAt: new Date(),
@@ -239,9 +244,15 @@ export async function POST(
       const [buffer] = await fileRef.download();
       const extractedText = normalizeText(await extractText(buffer, fileType));
       const version =
-        typeof current?.version === "number" && Number.isFinite(current.version)
-          ? Math.max(1, Math.floor(current.version))
-          : 1;
+        typeof current?.currentVersionNumber === "number" &&
+        Number.isFinite(current.currentVersionNumber) &&
+        current.currentVersionNumber > 0
+          ? Math.floor(current.currentVersionNumber)
+          : typeof current?.version === "number" &&
+              Number.isFinite(current.version) &&
+              current.version > 0
+            ? Math.floor(current.version)
+            : 1;
 
       await docRef.set(
         {
@@ -293,6 +304,7 @@ export async function POST(
         await docRef.set(
           {
             chunkStatus: "failed",
+            chunkCount: 0,
             chunkUpdatedAt: new Date(),
             updatedAt: new Date(),
             updatedBy: uid,
@@ -335,6 +347,7 @@ export async function POST(
           extractedText: null,
           textStatus: "failed",
           chunkStatus: "failed",
+          chunkCount: 0,
           textUpdatedAt: new Date(),
           chunkUpdatedAt: new Date(),
           updatedAt: new Date(),
@@ -358,6 +371,7 @@ export async function POST(
           chunkCount?: unknown;
           chunkVersion?: unknown;
           version?: unknown;
+          currentVersionNumber?: unknown;
           createdAt?: FirestoreDateLike;
           createdBy?: unknown;
           textUpdatedAt?: FirestoreDateLike;
@@ -383,7 +397,16 @@ export async function POST(
         chunkStatus: typeof data?.chunkStatus === "string" ? data.chunkStatus : "pending",
         chunkCount: typeof data?.chunkCount === "number" ? data.chunkCount : 0,
         chunkVersion: typeof data?.chunkVersion === "string" ? data.chunkVersion : null,
-        version: typeof data?.version === "number" ? data.version : 1,
+        version:
+          typeof data?.currentVersionNumber === "number" &&
+          Number.isFinite(data.currentVersionNumber) &&
+          data.currentVersionNumber > 0
+            ? Math.floor(data.currentVersionNumber)
+            : typeof data?.version === "number" &&
+                Number.isFinite(data.version) &&
+                data.version > 0
+              ? Math.floor(data.version)
+              : 1,
         createdAt: toIso(data?.createdAt),
         createdBy: typeof data?.createdBy === "string" ? data.createdBy : null,
         textUpdatedAt: toIso(data?.textUpdatedAt),

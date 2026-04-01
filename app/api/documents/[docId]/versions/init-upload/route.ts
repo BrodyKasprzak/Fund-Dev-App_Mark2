@@ -22,10 +22,26 @@ type InitVersionUploadBody = {
   expectedCurrentVersion?: unknown;
 };
 
+type FirestoreDateLike =
+  | Date
+  | {
+      toDate: () => Date;
+    }
+  | null
+  | undefined;
+
 type CurrentDocument = {
   title?: unknown;
+  storagePath?: unknown;
+  filename?: unknown;
+  originalFilename?: unknown;
+  size?: unknown;
   status?: unknown;
   fileType?: unknown;
+  createdAt?: FirestoreDateLike;
+  createdBy?: unknown;
+  updatedAt?: FirestoreDateLike;
+  updatedBy?: unknown;
   version?: unknown;
   currentVersionNumber?: unknown;
   pendingVersion?: unknown;
@@ -80,6 +96,16 @@ function normalizeChangeSummary(value: unknown) {
 function ensureDocxFilename(name: string) {
   if (name.toLowerCase().endsWith(".docx")) return name;
   return `${name}.docx`;
+}
+
+function asDate(value: FirestoreDateLike, fallback: Date) {
+  if (!value) return fallback;
+  if (value instanceof Date) return value;
+  try {
+    return value.toDate();
+  } catch {
+    return fallback;
+  }
 }
 
 export async function POST(
@@ -184,6 +210,56 @@ export async function POST(
           400,
           "Only DOCX documents are editable in this phase",
         );
+      }
+
+      const currentVersionRef = docRef.collection("versions").doc(`v${currentVersion}`);
+      const currentVersionSnap = await tx.get(currentVersionRef);
+      if (!currentVersionSnap.exists) {
+        const currentStoragePath =
+          typeof data.storagePath === "string" ? data.storagePath.trim() : "";
+        if (
+          currentStoragePath &&
+          currentStoragePath.startsWith(`organizations/${orgId}/documents/${docId}/`)
+        ) {
+          const currentFilename =
+            typeof data.filename === "string" && data.filename.trim()
+              ? data.filename
+              : "document.docx";
+          const currentOriginalFilename =
+            typeof data.originalFilename === "string" && data.originalFilename.trim()
+              ? data.originalFilename
+              : currentFilename;
+          const currentSize =
+            typeof data.size === "number" && Number.isFinite(data.size) && data.size > 0
+              ? data.size
+              : rawSize;
+          const createdAt = asDate(data.createdAt, now);
+          const createdBy = typeof data.createdBy === "string" ? data.createdBy : uid;
+          const updatedAt = asDate(data.updatedAt, createdAt);
+          const updatedBy = typeof data.updatedBy === "string" ? data.updatedBy : createdBy;
+
+          tx.set(
+            currentVersionRef,
+            {
+              version: currentVersion,
+              storagePath: currentStoragePath,
+              filename: currentFilename,
+              originalFilename: currentOriginalFilename,
+              fileType: DOCX_MIME,
+              size: currentSize,
+              status,
+              source: "upload",
+              changeSummary: currentVersion === 1 ? "Initial upload" : null,
+              createdAt,
+              createdBy,
+              promotedAt: updatedAt,
+              promotedBy: updatedBy,
+              updatedAt,
+              updatedBy,
+            },
+            { merge: true },
+          );
+        }
       }
 
       const pending =

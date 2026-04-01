@@ -848,6 +848,7 @@ export default function DocumentsPage() {
     setMessage(null);
 
     let docId: string | null = null;
+    let uploadFinalized = false;
     try {
       const initRes = await authedFetch("/api/documents/init-upload", {
         method: "POST",
@@ -895,8 +896,18 @@ export default function DocumentsPage() {
       });
       const finalizeData = await finalizeRes.json().catch(() => ({}));
       if (!finalizeRes.ok) throw new Error(finalizeData?.error || "Failed to finalize upload");
+      uploadFinalized = true;
 
-      await authedFetch(`/api/documents/${docId}/extract-text`, { method: "POST" });
+      const extractRes = await authedFetch(`/api/documents/${docId}/extract-text`, {
+        method: "POST",
+      });
+      const extractData = await extractRes.json().catch(() => ({}));
+      if (!extractRes.ok) {
+        throw new Error(
+          extractData?.error ||
+            "Upload completed, but text extraction failed. Please re-run extraction.",
+        );
+      }
 
       await loadDocuments();
       setUploadFile(null);
@@ -905,7 +916,7 @@ export default function DocumentsPage() {
       setMessage("Upload complete. Select the document from the list to open it.");
       switchToDocumentsMode();
     } catch (err: unknown) {
-      if (docId) {
+      if (docId && !uploadFinalized) {
         try {
           await authedFetch(`/api/documents/${docId}`, {
             method: "PATCH",
@@ -914,6 +925,13 @@ export default function DocumentsPage() {
         } catch {
           // no-op
         }
+      }
+      if (uploadFinalized) {
+        await loadDocuments();
+        setUploadFile(null);
+        setUploadTitle("");
+        setUploadProgress(null);
+        switchToDocumentsMode();
       }
       if (err instanceof Error) setError(err.message);
       else setError("Upload failed");

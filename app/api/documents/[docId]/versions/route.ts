@@ -36,6 +36,20 @@ type VersionDocRecord = {
 };
 
 type ParentDocumentRecord = {
+  title?: unknown;
+  storagePath?: unknown;
+  originalStoragePath?: unknown;
+  filename?: unknown;
+  originalFilename?: unknown;
+  fileType?: unknown;
+  originalFileType?: unknown;
+  size?: unknown;
+  status?: unknown;
+  createdAt?: FirestoreDateLike;
+  createdBy?: unknown;
+  updatedAt?: FirestoreDateLike;
+  updatedBy?: unknown;
+  lastVersionChangeAt?: FirestoreDateLike;
   version?: unknown;
   currentVersionNumber?: unknown;
   versionMeta?: unknown;
@@ -114,6 +128,102 @@ function fallbackVersionsFromVersionMeta(
   return output;
 }
 
+function fallbackCurrentVersionFromParentDocument(
+  data: ParentDocumentRecord,
+  currentVersionNumber: number,
+) {
+  const storagePath = typeof data.storagePath === "string" ? data.storagePath : "";
+  if (!storagePath) return null;
+
+  return {
+    version: currentVersionNumber,
+    storagePath,
+    filename: typeof data.filename === "string" ? data.filename : null,
+    originalFilename:
+      typeof data.originalFilename === "string" ? data.originalFilename : null,
+    fileType:
+      typeof data.fileType === "string" ? data.fileType : "application/octet-stream",
+    size: typeof data.size === "number" ? data.size : 0,
+    status: typeof data.status === "string" ? data.status : "processing",
+    source: "upload",
+    changeSummary: currentVersionNumber === 1 ? "Initial upload" : null,
+    createdAt: toIso(data.createdAt),
+    createdBy: typeof data.createdBy === "string" ? data.createdBy : null,
+    updatedAt: toIso(data.updatedAt),
+    updatedBy: typeof data.updatedBy === "string" ? data.updatedBy : null,
+    promotedAt: toIso(data.lastVersionChangeAt) || toIso(data.updatedAt),
+    promotedBy: typeof data.updatedBy === "string" ? data.updatedBy : null,
+    isCurrent: true,
+  };
+}
+
+function mergeVersionRows(
+  primary: ReturnType<typeof serializeVersion>[],
+  secondary: ReturnType<typeof serializeVersion>[],
+) {
+  const byVersion = new Map<number, ReturnType<typeof serializeVersion>>();
+  for (const row of secondary) byVersion.set(row.version, row);
+  for (const row of primary) byVersion.set(row.version, row);
+  return Array.from(byVersion.values()).sort((a, b) => b.version - a.version);
+}
+
+function ensureSyntheticOriginalVersion(args: {
+  versions: ReturnType<typeof serializeVersion>[];
+  docData: ParentDocumentRecord;
+  currentVersionNumber: number;
+  orgId: string;
+  docId: string;
+}) {
+  const { versions, docData, currentVersionNumber, orgId, docId } = args;
+  if (currentVersionNumber <= 1) return versions;
+  if (versions.some((row) => row.version === 1)) return versions;
+
+  const originalStoragePath =
+    typeof docData.originalStoragePath === "string"
+      ? docData.originalStoragePath.trim()
+      : "";
+  if (!originalStoragePath) return versions;
+  if (!originalStoragePath.startsWith(`organizations/${orgId}/documents/${docId}/`)) {
+    return versions;
+  }
+
+  const syntheticV1: ReturnType<typeof serializeVersion> = {
+    version: 1,
+    storagePath: originalStoragePath,
+    filename:
+      typeof docData.originalFilename === "string"
+        ? docData.originalFilename
+        : typeof docData.filename === "string"
+          ? docData.filename
+          : null,
+    originalFilename:
+      typeof docData.originalFilename === "string"
+        ? docData.originalFilename
+        : typeof docData.filename === "string"
+          ? docData.filename
+          : null,
+    fileType:
+      typeof docData.originalFileType === "string"
+        ? docData.originalFileType
+        : typeof docData.fileType === "string"
+          ? docData.fileType
+          : "application/octet-stream",
+    size: 0,
+    status: "ready",
+    source: "upload",
+    changeSummary: "Initial upload",
+    createdAt: toIso(docData.createdAt),
+    createdBy: typeof docData.createdBy === "string" ? docData.createdBy : null,
+    updatedAt: toIso(docData.createdAt),
+    updatedBy: typeof docData.createdBy === "string" ? docData.createdBy : null,
+    promotedAt: toIso(docData.createdAt),
+    promotedBy: typeof docData.createdBy === "string" ? docData.createdBy : null,
+    isCurrent: false,
+  };
+
+  return [...versions, syntheticV1].sort((a, b) => b.version - a.version);
+}
+
 export async function GET(
   req: Request,
   context: { params: Promise<{ docId: string }> },
@@ -163,11 +273,25 @@ export async function GET(
       .limit(VERSION_LIST_MAX_ITEMS)
       .get();
 
-    const versions = versionsSnap.empty
-      ? fallbackVersionsFromVersionMeta(docData, currentVersionNumber)
-      : versionsSnap.docs.map((snapshot) =>
-          serializeVersion(snapshot.data() as VersionDocRecord, currentVersionNumber),
-        );
+    const fromCollection = versionsSnap.docs.map((snapshot) =>
+      serializeVersion(snapshot.data() as VersionDocRecord, currentVersionNumber),
+    );
+    const fromMeta = fallbackVersionsFromVersionMeta(docData, currentVersionNumber);
+    let versions = mergeVersionRows(fromCollection, fromMeta);
+    versions = ensureSyntheticOriginalVersion({
+      versions,
+      docData,
+      currentVersionNumber,
+      orgId,
+      docId,
+    });
+    if (versions.length === 0) {
+      const fromParent = fallbackCurrentVersionFromParentDocument(
+        docData,
+        currentVersionNumber,
+      );
+      if (fromParent) versions = [fromParent];
+    }
 
     return NextResponse.json({
       ok: true,
