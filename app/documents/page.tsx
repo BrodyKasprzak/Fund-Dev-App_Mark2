@@ -7,8 +7,6 @@ import { useAuth } from "@/lib/AuthContext";
 import { storage } from "@/lib/firebaseClient";
 import type { RagCitation } from "@/lib/rag/types";
 import { WorkspaceTopNav } from "@/components/workspace/WorkspaceTopNav";
-import { LexicalRichTextEditor } from "@/components/editor/LexicalRichTextEditor";
-import { LEXICAL_EDITOR_FORMAT } from "@/lib/documents/versionMetadata";
 
 type DocStatus = "ready" | "processing" | "failed";
 type TextStatus = "pending" | "processing" | "ready" | "failed";
@@ -130,13 +128,24 @@ const FILTER_LABELS: Record<string, string> = {
   fundraising: "Folder: Fundraising",
 };
 
+const STATUS_FILTER_OPTIONS = [
+  { id: "ready", label: "Text Ready" },
+  { id: "processing", label: "Processing" },
+  { id: "failed", label: "Needs Attention" },
+] as const;
+
+const FOLDER_FILTER_OPTIONS = [
+  { id: "governance", label: "Governance" },
+  { id: "operations", label: "Operations" },
+  { id: "fundraising", label: "Fundraising" },
+] as const;
+
 const RAG_SNIPPET_MAX_LENGTH = 200;
 const CHAT_MESSAGE_MAX_LENGTH = 4_000;
 const DOC_WINDOW_LIMIT = 50_000;
 const CHUNK_VIEW_OFFSET_PADDING = 8_000;
 const RECENT_DOCS_DEFAULT_LIMIT = 10;
 const MAX_DOWNLOAD_FILENAME_LENGTH = 220;
-const MAX_CHANGE_SUMMARY_LENGTH = 500;
 
 function parseWorkspaceMode(raw: string | null): WorkspaceMode {
   if (raw === "chat-private") return "chat-private";
@@ -226,73 +235,6 @@ function formatExportStatusLabel(value: string) {
   if (value === "processing") return "Processing";
   if (value === "failed") return "Failed";
   return "Not generated";
-}
-
-function asEditorStateObject(value: unknown) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
-}
-
-function buildLexicalStateFromPlainText(input: string) {
-  const normalized = input.replace(/\r\n/g, "\n").trim();
-  const paragraphs = normalized
-    ? normalized
-        .split(/\n{2,}/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-    : [];
-
-  const paragraphNodes =
-    paragraphs.length > 0
-      ? paragraphs.map((line) => ({
-          children: [
-            {
-              detail: 0,
-              format: 0,
-              mode: "normal",
-              style: "",
-              text: line,
-              type: "text",
-              version: 1,
-            },
-          ],
-          direction: null,
-          format: "",
-          indent: 0,
-          type: "paragraph",
-          version: 1,
-        }))
-      : [
-          {
-            children: [
-              {
-                detail: 0,
-                format: 0,
-                mode: "normal",
-                style: "",
-                text: "",
-                type: "text",
-                version: 1,
-              },
-            ],
-            direction: null,
-            format: "",
-            indent: 0,
-            type: "paragraph",
-            version: 1,
-          },
-        ];
-
-  return {
-    root: {
-      children: paragraphNodes,
-      direction: null,
-      format: "",
-      indent: 0,
-      type: "root",
-      version: 1,
-    },
-  } as Record<string, unknown>;
 }
 
 function escapeRegExp(input: string) {
@@ -433,6 +375,23 @@ function supportChipClasses(label: string | null) {
   return "bg-rose-50 text-rose-700 border-rose-200";
 }
 
+function documentTextStatusClasses(status: TextStatus) {
+  if (status === "ready") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (status === "failed") return "border-rose-200 bg-rose-50 text-rose-700";
+  if (status === "processing") return "border-amber-200 bg-amber-50 text-amber-700";
+  return "border-slate-200 bg-slate-100 text-slate-600";
+}
+
+function formatFileTypeLabel(fileType: string) {
+  const normalized = (fileType || "").trim().toLowerCase();
+  if (!normalized) return "FILE";
+  if (normalized.includes("/")) {
+    const [, subtype = "file"] = normalized.split("/");
+    return subtype.replace(/[+.-]/g, " ").trim().slice(0, 16).toUpperCase();
+  }
+  return normalized.replace(/[+.-]/g, " ").trim().slice(0, 16).toUpperCase();
+}
+
 function ListSkeleton() {
   return (
     <div className="space-y-3">
@@ -484,6 +443,19 @@ function DocumentIcon() {
   );
 }
 
+function FolderIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4">
+      <path
+        d="M2.75 5.75A1.75 1.75 0 0 1 4.5 4h3l1.5 1.5h6a1.75 1.75 0 0 1 1.75 1.75v6.5A1.75 1.75 0 0 1 15 15.5H4.5a1.75 1.75 0 0 1-1.75-1.75v-8Z"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export default function DocumentsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -512,7 +484,7 @@ export default function DocumentsPage() {
   const [loadingMoreText, setLoadingMoreText] = useState(false);
   const [leftFilter, setLeftFilter] = useState("");
   const [activeFolderId, setActiveFolderId] = useState("all");
-  const [docFiltersOpen, setDocFiltersOpen] = useState(false);
+  const [docFiltersOpen, setDocFiltersOpen] = useState(true);
   const [showAllDocs, setShowAllDocs] = useState(false);
   const [detailAnchorQuery, setDetailAnchorQuery] = useState<string | null>(null);
   const [detailOffset, setDetailOffset] = useState<number | null>(null);
@@ -528,15 +500,6 @@ export default function DocumentsPage() {
   const [versionHistoryLoading, setVersionHistoryLoading] = useState(false);
   const [versionHistoryError, setVersionHistoryError] = useState<string | null>(null);
   const [versions, setVersions] = useState<DocumentVersionItem[]>([]);
-  const [editingDoc, setEditingDoc] = useState(false);
-  const [editorInitialState, setEditorInitialState] = useState<Record<string, unknown> | null>(
-    null,
-  );
-  const [editorDraftState, setEditorDraftState] = useState<unknown>(null);
-  const [editorDraftPlainText, setEditorDraftPlainText] = useState("");
-  const [editorSessionKey, setEditorSessionKey] = useState(0);
-  const [changeSummary, setChangeSummary] = useState("");
-  const [savingVersion, setSavingVersion] = useState(false);
   const [regeneratingVersion, setRegeneratingVersion] = useState<number | null>(null);
 
   const [chatList, setChatList] = useState<ChatSummary[]>([]);
@@ -605,10 +568,6 @@ export default function DocumentsPage() {
       ? selectedMeta.currentVersionNumber
       : selectedMeta?.version) ??
     1;
-  const currentVersionRow = useMemo(
-    () => versions.find((row) => row.isCurrent) || null,
-    [versions],
-  );
   const canEditSelectedDoc =
     Boolean(selectedDocId) &&
     selectedDocStatus === "ready" &&
@@ -1030,11 +989,6 @@ export default function DocumentsPage() {
     setVersionHistoryOpen(false);
     setVersionHistoryError(null);
     setVersions([]);
-    setEditingDoc(false);
-    setEditorInitialState(null);
-    setEditorDraftState(null);
-    setEditorDraftPlainText("");
-    setChangeSummary("");
   }, [selectedDocId]);
 
   useEffect(() => {
@@ -1225,120 +1179,18 @@ export default function DocumentsPage() {
   }
 
   function beginEditDocument() {
-    if (!canEditSelectedDoc) {
-      setError("Document text must be ready before editing.");
-      return;
-    }
-    const persistedEditorState = asEditorStateObject(currentVersionRow?.editorState);
-    const fallbackText =
-      (currentVersionRow?.plainText || selectedDoc?.extractedText || "").trim();
-    const nextInitialState = persistedEditorState || buildLexicalStateFromPlainText(fallbackText);
-
-    setError(null);
-    setMessage(null);
-    setEditingDoc(true);
-    setEditorSessionKey((value) => value + 1);
-    setEditorInitialState(nextInitialState);
-    setEditorDraftState(nextInitialState);
-    setEditorDraftPlainText(fallbackText);
-    setChangeSummary("");
-  }
-
-  function cancelEditDocument() {
-    setEditingDoc(false);
-    setEditorInitialState(null);
-    setEditorDraftState(null);
-    setEditorDraftPlainText("");
-    setChangeSummary("");
-  }
-
-  async function handleSaveEditorVersion() {
     const docId = (selectedDocId || "").trim();
-    if (!docId) return;
+    if (!docId) {
+      setError("Select a document before editing.");
+      return;
+    }
     if (!canEditSelectedDoc) {
       setError("Document text must be ready before editing.");
       return;
     }
-
-    const summary = changeSummary.trim();
-    if (!summary) {
-      setError("Please describe what changed before saving.");
-      return;
-    }
-    const nextEditorState = asEditorStateObject(editorDraftState);
-    if (!nextEditorState) {
-      setError("Editor content is not ready yet. Please try again.");
-      return;
-    }
-
-    setSavingVersion(true);
     setError(null);
     setMessage(null);
-
-    const expectedCurrentVersion = selectedDocVersion;
-    let savedVersionNumber: number | null = null;
-
-    try {
-      const saveRes = await authedFetch(
-        `/api/documents/${encodeURIComponent(docId)}/versions/save-editor`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            expectedCurrentVersion,
-            changeSummary: summary.slice(0, MAX_CHANGE_SUMMARY_LENGTH),
-            editorFormat: LEXICAL_EDITOR_FORMAT,
-            editorState: nextEditorState,
-            plainText: editorDraftPlainText,
-          }),
-        },
-      );
-      const saveData = await saveRes.json().catch(() => ({}));
-      if (!saveRes.ok) {
-        if (saveData?.versionSaved && typeof saveData.versionNumber === "number") {
-          savedVersionNumber = saveData.versionNumber;
-        }
-        throw new Error(saveData?.error || "Failed to save editor version");
-      }
-      const versionNumber = Number(saveData?.versionNumber);
-      if (!Number.isFinite(versionNumber) || versionNumber < 1) {
-        throw new Error("Invalid save-editor response");
-      }
-      savedVersionNumber = versionNumber;
-
-      await loadDocuments();
-      const refreshedDetail = await fetchDocumentDetail({ docId });
-      setSelectedDoc(refreshedDetail);
-      await loadDocumentVersions(docId);
-      setVersionHistoryOpen(true);
-
-      setEditingDoc(false);
-      setEditorInitialState(null);
-      setEditorDraftState(null);
-      setEditorDraftPlainText("");
-      setChangeSummary("");
-      setMessage(`Saved as version v${versionNumber}.`);
-    } catch (err: unknown) {
-      if (savedVersionNumber !== null) {
-        try {
-          await loadDocuments();
-          const refreshedDetail = await fetchDocumentDetail({ docId });
-          setSelectedDoc(refreshedDetail);
-          await loadDocumentVersions(docId);
-          setVersionHistoryOpen(true);
-        } catch {
-          // no-op
-        }
-        setEditingDoc(false);
-        setEditorInitialState(null);
-        setEditorDraftState(null);
-        setEditorDraftPlainText("");
-        setChangeSummary("");
-      }
-      if (err instanceof Error) setError(err.message);
-      else setError("Failed to save document version");
-    } finally {
-      setSavingVersion(false);
-    }
+    router.push(`/documents/${encodeURIComponent(docId)}/edit`);
   }
 
   async function handleRegenerateVersionExports(versionNumber: number) {
@@ -1616,9 +1468,10 @@ export default function DocumentsPage() {
                     aria-expanded={docFiltersOpen}
                     aria-controls="documents-filter-panel"
                   >
-                    <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Filter Docs
-                    </h2>
+                    <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      <FolderIcon />
+                      <span>Folder Options</span>
+                    </div>
                     <span className="text-xs font-semibold text-slate-600">
                       {docFiltersOpen ? "Hide" : "Show"}
                     </span>
@@ -1655,7 +1508,10 @@ export default function DocumentsPage() {
                               : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
                           }`}
                         >
-                          Recent uploads
+                          <span className="flex items-center justify-between gap-2">
+                            <span>Recent uploads</span>
+                            <span className="text-[11px] opacity-80">{docs.length}</span>
+                          </span>
                         </button>
                       </div>
                       <div>
@@ -1663,11 +1519,7 @@ export default function DocumentsPage() {
                           By status
                         </p>
                         <div className="mt-1 grid grid-cols-1 gap-1">
-                          {[
-                            { id: "ready", label: "Text Ready" },
-                            { id: "processing", label: "Processing" },
-                            { id: "failed", label: "Needs Attention" },
-                          ].map((option) => (
+                          {STATUS_FILTER_OPTIONS.map((option) => (
                             <button
                               key={option.id}
                               type="button"
@@ -1681,7 +1533,12 @@ export default function DocumentsPage() {
                                   : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
                               }`}
                             >
-                              {option.label}
+                              <span className="flex items-center justify-between gap-2">
+                                <span>{option.label}</span>
+                                <span className="text-[11px] opacity-80">
+                                  {docs.filter((doc) => FOLDER_FILTERS[option.id](doc)).length}
+                                </span>
+                              </span>
                             </button>
                           ))}
                         </div>
@@ -1691,11 +1548,7 @@ export default function DocumentsPage() {
                           By folders
                         </p>
                         <div className="mt-1 grid grid-cols-1 gap-1">
-                          {[
-                            { id: "governance", label: "Governance" },
-                            { id: "operations", label: "Operations" },
-                            { id: "fundraising", label: "Fundraising" },
-                          ].map((option) => (
+                          {FOLDER_FILTER_OPTIONS.map((option) => (
                             <button
                               key={option.id}
                               type="button"
@@ -1709,7 +1562,12 @@ export default function DocumentsPage() {
                                   : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
                               }`}
                             >
-                              {option.label}
+                              <span className="flex items-center justify-between gap-2">
+                                <span>{option.label}</span>
+                                <span className="text-[11px] opacity-80">
+                                  {docs.filter((doc) => FOLDER_FILTERS[option.id](doc)).length}
+                                </span>
+                              </span>
                             </button>
                           ))}
                         </div>
@@ -1718,72 +1576,20 @@ export default function DocumentsPage() {
                   ) : null}
                 </section>
 
-                <div>
-                  <div className="flex items-center justify-between">
-                    <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Documents
-                    </h2>
-                    {activeFolderId === "all" &&
-                    !normalizedLeftFilter &&
-                    visibleDocs.length > RECENT_DOCS_DEFAULT_LIMIT ? (
-                      <button
-                        type="button"
-                        onClick={() => setShowAllDocs((current) => !current)}
-                        className="rounded-md border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
-                      >
-                        {showAllDocs ? "Top 10" : "Show all"}
-                      </button>
-                    ) : null}
-                  </div>
+                <section className="rounded-xl border border-slate-200 bg-slate-100 p-3">
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Current View
+                  </h3>
+                  <p className="mt-2 text-sm font-medium text-slate-800">{activeFilterLabel}</p>
                   <p className="mt-1 text-[11px] text-slate-500">
                     {showingRecentOnly
                       ? `Showing top ${Math.min(RECENT_DOCS_DEFAULT_LIMIT, displayedDocs.length)} most recent uploads`
                       : `Showing ${displayedDocs.length} matching document(s)`}
                   </p>
-                  <div className="mt-3 max-h-[44vh] space-y-2 overflow-y-auto pr-1">
-                    {docsLoading ? (
-                      <ListSkeleton />
-                    ) : visibleDocs.length === 0 ? (
-                      <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-500">
-                        No documents found.
-                      </p>
-                    ) : (
-                      displayedDocs.map((doc) => {
-                        const selected = doc.id === selectedDocId;
-                        return (
-                          <button
-                            key={doc.id}
-                            type="button"
-                            onClick={() => openDocument(doc.id)}
-                            className={`w-full cursor-pointer rounded-xl border px-3 py-2 text-left transition ${
-                              selected
-                                ? "border-slate-900 bg-slate-900 text-white"
-                                : "border-slate-200 bg-white text-slate-800 hover:border-slate-300 hover:bg-slate-50"
-                            }`}
-                          >
-                            <p className="truncate text-sm font-medium">{doc.title}</p>
-                            <div className="mt-1 flex items-center justify-between gap-2">
-                              <span
-                                className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
-                                  selected
-                                    ? "border-emerald-200/50 bg-emerald-400/20 text-emerald-100"
-                                    : "border-emerald-200 bg-emerald-50 text-emerald-700"
-                                }`}
-                              >
-                                {doc.textStatus}
-                              </span>
-                              <span
-                                className={`text-[11px] ${selected ? "text-white/80" : "text-slate-500"}`}
-                              >
-                                {formatDate(doc.updatedAt || doc.createdAt)}
-                              </span>
-                            </div>
-                          </button>
-                        );
-                      })
-                    )}
-                  </div>
-                </div>
+                  {docsLoading ? (
+                    <div className="mt-2 h-8 animate-pulse rounded-lg bg-white" />
+                  ) : null}
+                </section>
               </div>
             ) : (
               <div className="mt-4 space-y-3">
@@ -1851,14 +1657,106 @@ export default function DocumentsPage() {
           >
             {workspaceMode === "documents" ? (
               !selectedDocId ? (
-                <div className="flex min-h-[68vh] items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
-                  <div className="space-y-2">
-                    <p className="text-base font-semibold text-slate-900">Select a document to view it</p>
-                    <p className="text-sm text-slate-500">
-                      Choose a file from the right sidebar. Upload a file if your library is empty.
-                    </p>
+                docsLoading ? (
+                  <ViewerSkeleton />
+                ) : (
+                  <div className="space-y-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3 rounded-2xl border border-slate-200/80 bg-slate-50/90 p-4">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                          Documents
+                        </p>
+                        <h2 className="mt-1 text-xl font-semibold tracking-tight text-slate-900">
+                          Desktop View
+                        </h2>
+                        <p className="mt-1 text-sm text-slate-600">
+                          Open any file to enter the full document viewer and editing workspace.
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 font-medium text-slate-700">
+                          {activeFilterLabel}
+                        </span>
+                        <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 font-medium text-slate-700">
+                          {showingRecentOnly
+                            ? `Top ${Math.min(RECENT_DOCS_DEFAULT_LIMIT, displayedDocs.length)}`
+                            : `${displayedDocs.length} shown`}
+                        </span>
+                        {activeFolderId === "all" &&
+                        !normalizedLeftFilter &&
+                        visibleDocs.length > RECENT_DOCS_DEFAULT_LIMIT ? (
+                          <button
+                            type="button"
+                            onClick={() => setShowAllDocs((current) => !current)}
+                            className="rounded-full border border-slate-300 bg-white px-2.5 py-1 font-semibold text-slate-700 transition hover:bg-slate-100"
+                          >
+                            {showAllDocs ? "Top 10" : "Show all"}
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <div className="relative min-h-[66vh] overflow-hidden rounded-3xl border border-slate-200/80 bg-gradient-to-br from-white via-slate-50 to-sky-50 p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] sm:p-6">
+                      <div
+                        aria-hidden="true"
+                        className="pointer-events-none absolute inset-0 opacity-40"
+                        style={{
+                          backgroundImage:
+                            "radial-gradient(circle at 18% 18%, rgba(14,116,144,0.13), transparent 38%), radial-gradient(circle at 82% 72%, rgba(30,64,175,0.1), transparent 36%)",
+                        }}
+                      />
+                      {visibleDocs.length === 0 ? (
+                        <div className="relative flex min-h-[58vh] items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white/80 p-8 text-center">
+                          <div className="space-y-2">
+                            <p className="text-base font-semibold text-slate-900">No documents match this view</p>
+                            <p className="text-sm text-slate-500">
+                              Adjust folder options on the right, or upload a new file.
+                            </p>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="relative grid grid-cols-2 gap-3 pb-2 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4 xl:grid-cols-5">
+                          {displayedDocs.map((doc, idx) => {
+                            const xOffset = ((idx * 3) % 5) - 2;
+                            const yOffset = (idx % 4) * 5;
+                            const rotation = ((idx % 2 === 0 ? -1 : 1) * ((idx % 3) + 1)) / 2;
+                            return (
+                              <button
+                                key={doc.id}
+                                type="button"
+                                onClick={() => openDocument(doc.id)}
+                                className="group min-h-[136px] rounded-2xl border border-slate-200/90 bg-white/95 p-3 text-left shadow-[0_10px_25px_rgba(15,23,42,0.07)] transition hover:border-slate-300 hover:shadow-[0_14px_30px_rgba(15,23,42,0.12)] sm:min-h-[150px] sm:p-4"
+                                style={{
+                                  transform: `translate(${xOffset}px, ${yOffset}px) rotate(${rotation}deg)`,
+                                }}
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-sky-100 bg-sky-50 text-sky-700">
+                                    <DocumentIcon />
+                                  </span>
+                                  <span
+                                    className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${documentTextStatusClasses(doc.textStatus)}`}
+                                  >
+                                    {doc.textStatus}
+                                  </span>
+                                </div>
+                                <p className="mt-3 line-clamp-2 text-sm font-semibold leading-snug text-slate-900">
+                                  {doc.title}
+                                </p>
+                                <div className="mt-3 flex items-center justify-between gap-2 text-[11px] text-slate-500">
+                                  <span className="truncate">{formatDate(doc.updatedAt || doc.createdAt)}</span>
+                                  <span className="truncate font-semibold text-slate-600">
+                                    {formatFileTypeLabel(doc.fileType)}
+                                  </span>
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
+                )
               ) : docLoading || docsLoading ? (
                 <ViewerSkeleton />
               ) : (
@@ -1895,11 +1793,11 @@ export default function DocumentsPage() {
                       </button>
                       <button
                         type="button"
-                        onClick={editingDoc ? cancelEditDocument : beginEditDocument}
-                        disabled={!canEditSelectedDoc || savingVersion}
+                        onClick={beginEditDocument}
+                        disabled={!canEditSelectedDoc}
                         className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 font-semibold text-amber-700 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        {editingDoc ? "Cancel edit" : "Edit"}
+                        Edit in full page
                       </button>
                       <button
                         type="button"
@@ -1926,53 +1824,6 @@ export default function DocumentsPage() {
                         <p className="mt-1">
                           Current version: <span className="font-semibold">v{selectedDocVersion}</span>
                         </p>
-                      </div>
-                    ) : null}
-                    {editingDoc ? (
-                      <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50/60 p-3">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-amber-800">
-                          Save Rich Text Version
-                        </p>
-                        <p className="mt-1 text-xs text-amber-700">
-                          Edit the document content below, then save changes to create the next version.
-                        </p>
-                        <div className="mt-2 space-y-2">
-                          <LexicalRichTextEditor
-                            key={`editor-${selectedDocId || "none"}-${editorSessionKey}`}
-                            namespace={`documents-editor-${selectedDocId || "none"}`}
-                            initialEditorState={editorInitialState}
-                            placeholder="Start editing this document..."
-                            onChange={({ editorState, plainText }) => {
-                              setEditorDraftState(editorState);
-                              setEditorDraftPlainText(plainText);
-                            }}
-                          />
-                          <textarea
-                            value={changeSummary}
-                            onChange={(event) => setChangeSummary(event.target.value)}
-                            maxLength={MAX_CHANGE_SUMMARY_LENGTH}
-                            rows={3}
-                            placeholder="Describe what changed in this version..."
-                            className="block w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs text-slate-700"
-                          />
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <p className="text-[11px] text-amber-700">
-                              {changeSummary.trim().length}/{MAX_CHANGE_SUMMARY_LENGTH}
-                            </p>
-                            <button
-                              type="button"
-                              onClick={() => void handleSaveEditorVersion()}
-                              disabled={
-                                savingVersion ||
-                                !asEditorStateObject(editorDraftState) ||
-                                !changeSummary.trim()
-                              }
-                              className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              {savingVersion ? "Saving..." : "Save changes"}
-                            </button>
-                          </div>
-                        </div>
                       </div>
                     ) : null}
                     {versionHistoryOpen ? (

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
-import { requireOrgContext, errorToResponse } from "@/lib/serverAuth";
+import { requireDocumentReadAccess, errorToResponse } from "@/lib/serverAuth";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
@@ -28,7 +28,7 @@ function toIso(value: FirestoreDateLike) {
 
 export async function GET(req: Request) {
   try {
-    const { orgId, uid } = await requireOrgContext(req);
+    const { orgId, uid } = await requireDocumentReadAccess(req);
 
     await enforceRateLimit({
       scope: "documents_list_user",

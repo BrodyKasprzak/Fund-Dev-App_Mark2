@@ -20,8 +20,55 @@ export type IngestDocumentChunksResult = {
 
 const FIRESTORE_BATCH_MAX_WRITES = 450;
 
+type DocumentVersionRecord = {
+  version?: unknown;
+  currentVersionNumber?: unknown;
+};
+
+export class StaleDocumentVersionError extends Error {
+  requestedVersion: number;
+  currentVersion: number;
+  constructor(args: { requestedVersion: number; currentVersion: number }) {
+    super(
+      `Stale chunk ingestion request: requested v${args.requestedVersion}, current v${args.currentVersion}`,
+    );
+    this.requestedVersion = args.requestedVersion;
+    this.currentVersion = args.currentVersion;
+  }
+}
+
 function assertNonEmpty(value: string, field: string) {
   if (!value.trim()) throw new Error(`Invalid ${field}`);
+}
+
+function normalizeVersion(value: unknown, fallback = 1) {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  return fallback;
+}
+
+async function assertDocumentVersionIsCurrent(args: {
+  docRef: FirebaseFirestore.DocumentReference<FirebaseFirestore.DocumentData>;
+  expectedVersion: number;
+}) {
+  const { docRef, expectedVersion } = args;
+  const snap = await docRef.get();
+  if (!snap.exists) {
+    throw new Error("Document not found");
+  }
+
+  const data = (snap.data() ?? {}) as DocumentVersionRecord;
+  const currentVersion = normalizeVersion(
+    data.currentVersionNumber,
+    normalizeVersion(data.version, 1),
+  );
+  if (currentVersion !== expectedVersion) {
+    throw new StaleDocumentVersionError({
+      requestedVersion: expectedVersion,
+      currentVersion,
+    });
+  }
 }
 
 async function deleteChunkDocsInBatches(
@@ -93,11 +140,21 @@ export async function ingestDocumentChunks(
     .doc(docId);
   const chunksRef = docRef.collection("chunks");
 
+  await assertDocumentVersionIsCurrent({
+    docRef,
+    expectedVersion: normalizedVersion,
+  });
+
   const chunks = buildDocumentChunks({
     orgId,
     docId,
     version: normalizedVersion,
     extractedText,
+  });
+
+  await assertDocumentVersionIsCurrent({
+    docRef,
+    expectedVersion: normalizedVersion,
   });
 
   const existing = await chunksRef.get();

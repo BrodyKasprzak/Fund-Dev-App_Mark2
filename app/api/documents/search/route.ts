@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
-import { requireOrgContext, errorToResponse } from "@/lib/serverAuth";
+import { requireDocumentReadAccess, errorToResponse } from "@/lib/serverAuth";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
 import { writeOrgAuditLog } from "@/lib/auditLog";
 
@@ -50,7 +50,7 @@ function buildSnippet(text: string, query: string) {
 
 export async function GET(req: Request) {
   try {
-    const { orgId, uid, email } = await requireOrgContext(req);
+    const { orgId, uid, email } = await requireDocumentReadAccess(req);
 
     await enforceRateLimit({
       scope: "documents_search_user",

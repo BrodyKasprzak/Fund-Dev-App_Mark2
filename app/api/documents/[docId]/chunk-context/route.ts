@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { errorToResponse, requireOrgContext } from "@/lib/serverAuth";
+import { errorToResponse, requireDocumentReadAccess } from "@/lib/serverAuth";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
 import { adminDb } from "@/lib/firebaseAdmin";
 
@@ -43,7 +43,7 @@ export async function GET(
   context: { params: Promise<{ docId: string }> },
 ) {
   try {
-    const { orgId, uid } = await requireOrgContext(req);
+    const { orgId, uid } = await requireDocumentReadAccess(req);
     const { docId: rawDocId } = await context.params;
     const docId = safeDocId(rawDocId);
     if (!docId) {

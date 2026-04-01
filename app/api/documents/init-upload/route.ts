@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
-import { requireOrgContext, errorToResponse } from "@/lib/serverAuth";
+import { requireDocumentWriteAccess, errorToResponse } from "@/lib/serverAuth";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
 import { writeOrgAuditLog } from "@/lib/auditLog";
 import { CHUNKER_VERSION } from "@/lib/documentChunking";
@@ -81,7 +81,7 @@ function safeOriginalFilename(input: string) {
 
 export async function POST(req: Request) {
   try {
-    const { orgId, uid, email } = await requireOrgContext(req);
+    const { orgId, uid, email } = await requireDocumentWriteAccess(req);
 
     await enforceRateLimit({
       scope: "documents_init_upload_user",

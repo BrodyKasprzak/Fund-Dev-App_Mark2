@@ -8,6 +8,7 @@ import { ContentEditable } from "@lexical/react/LexicalContentEditable";
 import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin";
 import { OnChangePlugin } from "@lexical/react/LexicalOnChangePlugin";
 import { ListPlugin } from "@lexical/react/LexicalListPlugin";
+import { CheckListPlugin } from "@lexical/react/LexicalCheckListPlugin";
 import { LinkPlugin } from "@lexical/react/LexicalLinkPlugin";
 import { MarkdownShortcutPlugin } from "@lexical/react/LexicalMarkdownShortcutPlugin";
 import { LexicalErrorBoundary } from "@lexical/react/LexicalErrorBoundary";
@@ -17,6 +18,8 @@ import { HeadingNode, QuoteNode } from "@lexical/rich-text";
 import { ListItemNode, ListNode } from "@lexical/list";
 import { LinkNode } from "@lexical/link";
 import { CodeNode } from "@lexical/code";
+import { LexicalEditorToolbarPlugin } from "@/components/editor/plugins/LexicalEditorToolbarPlugin";
+import { LexicalPasteCleanupPlugin } from "@/components/editor/plugins/LexicalPasteCleanupPlugin";
 
 type LexicalRichTextEditorProps = {
   namespace: string;
@@ -31,6 +34,7 @@ type LexicalRichTextEditorProps = {
 
 const lexicalTheme: InitialConfigType["theme"] = {
   paragraph: "mb-2",
+  code: "my-3 block rounded-md bg-slate-900 px-3 py-2 font-mono text-[13px] leading-6 text-slate-100",
   quote: "border-l-2 border-slate-300 pl-3 italic text-slate-700",
   heading: {
     h1: "text-2xl font-semibold leading-tight mt-4 mb-2",
@@ -42,6 +46,8 @@ const lexicalTheme: InitialConfigType["theme"] = {
   },
   list: {
     listitem: "ml-5",
+    listitemChecked: "ml-5 list-none",
+    listitemUnchecked: "ml-5 list-none",
     nested: {
       listitem: "ml-4",
     },
@@ -87,6 +93,7 @@ export function LexicalRichTextEditor(props: LexicalRichTextEditorProps) {
   return (
     <LexicalComposer initialConfig={initialConfig}>
       <div className="rounded-lg border border-slate-300 bg-white">
+        <LexicalEditorToolbarPlugin readOnly={readOnly} />
         <RichTextPlugin
           contentEditable={
             <ContentEditable className="min-h-[320px] w-full resize-y overflow-auto px-4 py-3 text-sm leading-7 text-slate-800 outline-none" />
@@ -100,7 +107,9 @@ export function LexicalRichTextEditor(props: LexicalRichTextEditorProps) {
         />
         <HistoryPlugin />
         <ListPlugin />
+        <CheckListPlugin />
         <LinkPlugin />
+        <LexicalPasteCleanupPlugin disabled={readOnly} />
         <MarkdownShortcutPlugin transformers={TRANSFORMERS} />
         <OnChangePlugin
           onChange={(editorState) => {

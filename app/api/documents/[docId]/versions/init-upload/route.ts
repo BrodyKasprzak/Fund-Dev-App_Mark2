@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
-import { requireOrgContext, errorToResponse } from "@/lib/serverAuth";
+import { requireDocumentWriteAccess, errorToResponse } from "@/lib/serverAuth";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
 import { writeOrgAuditLog } from "@/lib/auditLog";
 import {
@@ -116,7 +116,7 @@ export async function POST(
   context: { params: Promise<{ docId: string }> },
 ) {
   try {
-    const { orgId, uid, email } = await requireOrgContext(req);
+    const { orgId, uid, email } = await requireDocumentWriteAccess(req);
     const { docId } = await context.params;
 
     if (!isValidDocId(docId)) {

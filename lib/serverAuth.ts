@@ -17,6 +17,15 @@ type AuthContext = {
 type OrgContext = AuthContext & {
   orgId: string;
   role: string;
+  memberStatus: string;
+};
+
+export type OrgCapability = "documents.read" | "documents.write";
+
+const ACTIVE_MEMBER_STATUSES = new Set(["active"]);
+const CAPABILITY_ROLE_ALLOWLIST: Record<OrgCapability, Set<string>> = {
+  "documents.read": new Set(["admin", "member", "viewer"]),
+  "documents.write": new Set(["admin", "member"]),
 };
 
 function asNonEmptyString(v: unknown): string | null {
@@ -57,15 +66,45 @@ export async function requireOrgContext(req: Request): Promise<OrgContext> {
   const memberSnap = await memberRef.get();
   if (!memberSnap.exists) throw new HttpError(403, "Not a member of this org");
 
-  const role = asNonEmptyString(memberSnap.data()?.role) ?? "member";
+  const role = (asNonEmptyString(memberSnap.data()?.role) ?? "member").toLowerCase();
+  const memberStatus = (
+    asNonEmptyString(memberSnap.data()?.status) ?? "active"
+  ).toLowerCase();
+  if (!ACTIVE_MEMBER_STATUSES.has(memberStatus)) {
+    throw new HttpError(403, "Org membership is not active");
+  }
 
-  return { uid, email, orgId, role };
+  return { uid, email, orgId, role, memberStatus };
 }
 
 export async function requireAdmin(req: Request): Promise<OrgContext> {
   const ctx = await requireOrgContext(req);
   if (ctx.role !== "admin") throw new HttpError(403, "Admin only");
   return ctx;
+}
+
+export function assertOrgCapability(ctx: OrgContext, capability: OrgCapability) {
+  const allowed = CAPABILITY_ROLE_ALLOWLIST[capability];
+  if (!allowed?.has(ctx.role)) {
+    throw new HttpError(403, "Insufficient permissions");
+  }
+}
+
+export async function requireOrgCapability(
+  req: Request,
+  capability: OrgCapability,
+): Promise<OrgContext> {
+  const ctx = await requireOrgContext(req);
+  assertOrgCapability(ctx, capability);
+  return ctx;
+}
+
+export async function requireDocumentReadAccess(req: Request): Promise<OrgContext> {
+  return requireOrgCapability(req, "documents.read");
+}
+
+export async function requireDocumentWriteAccess(req: Request): Promise<OrgContext> {
+  return requireOrgCapability(req, "documents.write");
 }
 
 export function errorToResponse(err: unknown): { status: number; message: string } {

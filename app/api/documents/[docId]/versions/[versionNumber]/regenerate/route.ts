@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
-import { requireOrgContext, errorToResponse } from "@/lib/serverAuth";
+import { requireDocumentWriteAccess, errorToResponse } from "@/lib/serverAuth";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
 import { writeOrgAuditLog } from "@/lib/auditLog";
 import { LEXICAL_EDITOR_FORMAT } from "@/lib/documents/versionMetadata";
-import { generateAndStoreEditorExports } from "@/lib/documents/editorExports";
+import {
+  buildEditorProcessingRenderAssets,
+  enqueueDocumentExportJob,
+  processDocumentExportQueueBatch,
+  triggerExportWorkerKick,
+} from "@/lib/documents/exportJobs";
 
 export const runtime = "nodejs";
 
@@ -18,10 +23,6 @@ type VersionRecord = {
   editorFormat?: unknown;
   editorState?: unknown;
   plainText?: unknown;
-};
-
-type DocumentRecord = {
-  title?: unknown;
 };
 
 function isValidDocId(docId: string) {
@@ -43,7 +44,7 @@ export async function POST(
   context: { params: Promise<{ docId: string; versionNumber: string }> },
 ) {
   try {
-    const { orgId, uid, email } = await requireOrgContext(req);
+    const { orgId, uid, email } = await requireDocumentWriteAccess(req);
     const { docId, versionNumber: rawVersionNumber } = await context.params;
 
     if (!isValidDocId(docId)) {
@@ -82,7 +83,6 @@ export async function POST(
       return NextResponse.json({ error: "Version not found" }, { status: 404 });
     }
 
-    const doc = (docSnap.data() ?? {}) as DocumentRecord;
     const version = (versionSnap.data() ?? {}) as VersionRecord;
 
     const editorFormat =
@@ -105,23 +105,7 @@ export async function POST(
       );
     }
 
-    const plainText = typeof version.plainText === "string" ? version.plainText : "";
-    const filename =
-      (typeof version.filename === "string" && version.filename) ||
-      (typeof version.originalFilename === "string" && version.originalFilename) ||
-      "document";
-    const title = typeof doc.title === "string" ? doc.title : "Untitled";
-
-    const exportAssets = await generateAndStoreEditorExports({
-      orgId,
-      docId,
-      versionNumber,
-      title,
-      filename,
-      editorState,
-      plainText,
-    });
-
+    const exportAssets = buildEditorProcessingRenderAssets();
     await versionRef.set(
       {
         renderAssets: exportAssets,
@@ -139,6 +123,20 @@ export async function POST(
       { merge: true },
     );
 
+    const exportJob = await enqueueDocumentExportJob({
+      orgId,
+      docId,
+      versionNumber,
+      requestedByUid: uid,
+      reason: "regenerate",
+      force: true,
+    });
+    void triggerExportWorkerKick({ requestUrl: req.url, maxJobs: 2 });
+    void processDocumentExportQueueBatch({
+      maxJobs: 1,
+      workerId: `opportunistic-${orgId}-${docId}`,
+    });
+
     await writeOrgAuditLog({
       orgId,
       eventType: "documents.version_exports_regenerated",
@@ -149,6 +147,8 @@ export async function POST(
         version: versionNumber,
         docxStatus: exportAssets.docx.status,
         pdfStatus: exportAssets.pdf.status,
+        exportJobId: exportJob.jobId,
+        exportJobQueued: exportJob.queued,
       },
     });
 
@@ -156,6 +156,7 @@ export async function POST(
       ok: true,
       versionNumber,
       exports: exportAssets,
+      exportJob,
     });
   } catch (err: unknown) {
     if (err instanceof RateLimitError) {
@@ -171,4 +172,3 @@ export async function POST(
     return NextResponse.json({ error: message }, { status });
   }
 }
-

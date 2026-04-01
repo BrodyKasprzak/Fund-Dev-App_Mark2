@@ -1,15 +1,21 @@
 import { NextResponse } from "next/server";
 import { adminDb, adminStorage } from "@/lib/firebaseAdmin";
-import { requireOrgContext, errorToResponse } from "@/lib/serverAuth";
+import { requireDocumentWriteAccess, errorToResponse } from "@/lib/serverAuth";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
 import { writeOrgAuditLog } from "@/lib/auditLog";
-import { ingestDocumentChunks } from "@/lib/documentChunkIngestion";
+import {
+  ingestDocumentChunks,
+  StaleDocumentVersionError,
+} from "@/lib/documentChunkIngestion";
+import { LEXICAL_EDITOR_FORMAT } from "@/lib/documents/versionMetadata";
 
 export const runtime = "nodejs";
 
 const EXTRACT_LIMIT_PER_10_MIN = 40;
 const MAX_EXTRACTED_TEXT_CHARS = 200_000;
 const MAX_DOC_ID_LENGTH = 128;
+const TEXT_SOURCE_FILE_EXTRACT = "file_extract";
+const TEXT_SOURCE_LEXICAL_PLAIN_TEXT = "lexical_plain_text";
 
 const SUPPORTED_EXTRACT_FILE_TYPES = new Set([
   "application/pdf",
@@ -25,6 +31,15 @@ type FirestoreDateLike =
     }
   | null
   | undefined;
+
+type ExtractTextSource =
+  | typeof TEXT_SOURCE_FILE_EXTRACT
+  | typeof TEXT_SOURCE_LEXICAL_PLAIN_TEXT;
+
+type VersionRecord = {
+  editorFormat?: unknown;
+  plainText?: unknown;
+};
 
 function toIso(value: FirestoreDateLike) {
   if (!value) return null;
@@ -84,12 +99,19 @@ function isValidDocId(docId: string) {
   return true;
 }
 
+function normalizeVersion(value: unknown, fallback = 1) {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  return fallback;
+}
+
 export async function POST(
   req: Request,
   context: { params: Promise<{ docId: string }> },
 ) {
   try {
-    const { orgId, uid, email } = await requireOrgContext(req);
+    const { orgId, uid, email } = await requireDocumentWriteAccess(req);
     const { docId } = await context.params;
 
     if (!isValidDocId(docId)) {
@@ -147,6 +169,21 @@ export async function POST(
       typeof current?.storagePath === "string" ? current.storagePath.trim() : "";
     const fileType = typeof current?.fileType === "string" ? current.fileType : "";
     const uploadStatus = typeof current?.status === "string" ? current.status : "processing";
+    const version = normalizeVersion(
+      current?.currentVersionNumber,
+      normalizeVersion(current?.version, 1),
+    );
+    const versionSnap = await docRef.collection("versions").doc(`v${version}`).get();
+    const versionData = (versionSnap.data() ?? {}) as VersionRecord;
+    const versionEditorFormat =
+      typeof versionData.editorFormat === "string" ? versionData.editorFormat : null;
+    const versionPlainText =
+      typeof versionData.plainText === "string" ? versionData.plainText : null;
+    const shouldUseLexicalPlainText =
+      versionEditorFormat === LEXICAL_EDITOR_FORMAT && versionPlainText !== null;
+    const extractSource: ExtractTextSource = shouldUseLexicalPlainText
+      ? TEXT_SOURCE_LEXICAL_PLAIN_TEXT
+      : TEXT_SOURCE_FILE_EXTRACT;
 
     await writeOrgAuditLog({
       orgId,
@@ -157,6 +194,8 @@ export async function POST(
       metadata: {
         status: uploadStatus,
         fileType: fileType || null,
+        version,
+        textSource: extractSource,
       },
     });
 
@@ -167,7 +206,7 @@ export async function POST(
       );
     }
 
-    if (!storagePath || !fileType) {
+    if (!shouldUseLexicalPlainText && (!storagePath || !fileType)) {
       await docRef.set(
         {
           textStatus: "failed",
@@ -186,7 +225,7 @@ export async function POST(
       );
     }
 
-    if (!SUPPORTED_EXTRACT_FILE_TYPES.has(fileType)) {
+    if (!shouldUseLexicalPlainText && !SUPPORTED_EXTRACT_FILE_TYPES.has(fileType)) {
       await docRef.set(
         {
           textStatus: "failed",
@@ -205,26 +244,28 @@ export async function POST(
       );
     }
 
-    const bucket = adminStorage.bucket();
-    const fileRef = bucket.file(storagePath);
-    const [exists] = await fileRef.exists();
-    if (!exists) {
-      await docRef.set(
-        {
-          textStatus: "failed",
-          chunkStatus: "failed",
-          chunkCount: 0,
-          textUpdatedAt: new Date(),
-          chunkUpdatedAt: new Date(),
-          updatedAt: new Date(),
-          updatedBy: uid,
-        },
-        { merge: true },
-      );
-      return NextResponse.json(
-        { error: "Stored file was not found" },
-        { status: 409 },
-      );
+    if (!shouldUseLexicalPlainText) {
+      const bucket = adminStorage.bucket();
+      const fileRef = bucket.file(storagePath);
+      const [exists] = await fileRef.exists();
+      if (!exists) {
+        await docRef.set(
+          {
+            textStatus: "failed",
+            chunkStatus: "failed",
+            chunkCount: 0,
+            textUpdatedAt: new Date(),
+            chunkUpdatedAt: new Date(),
+            updatedAt: new Date(),
+            updatedBy: uid,
+          },
+          { merge: true },
+        );
+        return NextResponse.json(
+          { error: "Stored file was not found" },
+          { status: 409 },
+        );
+      }
     }
 
     await docRef.set(
@@ -236,23 +277,20 @@ export async function POST(
         chunkUpdatedAt: new Date(),
         updatedAt: new Date(),
         updatedBy: uid,
+        textSource: extractSource,
+        textSourceVersion: version,
       },
       { merge: true },
     );
 
     try {
-      const [buffer] = await fileRef.download();
-      const extractedText = normalizeText(await extractText(buffer, fileType));
-      const version =
-        typeof current?.currentVersionNumber === "number" &&
-        Number.isFinite(current.currentVersionNumber) &&
-        current.currentVersionNumber > 0
-          ? Math.floor(current.currentVersionNumber)
-          : typeof current?.version === "number" &&
-              Number.isFinite(current.version) &&
-              current.version > 0
-            ? Math.floor(current.version)
-            : 1;
+      const extractedText = shouldUseLexicalPlainText
+        ? normalizeText(versionPlainText ?? "")
+        : await (async () => {
+            const fileRef = adminStorage.bucket().file(storagePath);
+            const [buffer] = await fileRef.download();
+            return normalizeText(await extractText(buffer, fileType));
+          })();
 
       await docRef.set(
         {
@@ -261,6 +299,8 @@ export async function POST(
           textUpdatedAt: new Date(),
           updatedAt: new Date(),
           updatedBy: uid,
+          textSource: extractSource,
+          textSourceVersion: version,
         },
         { merge: true },
       );
@@ -282,6 +322,8 @@ export async function POST(
             chunkUpdatedAt: new Date(),
             updatedAt: new Date(),
             updatedBy: uid,
+            chunkSource: extractSource,
+            chunkSourceVersion: version,
           },
           { merge: true },
         );
@@ -298,9 +340,36 @@ export async function POST(
             totalChars: ingested.totalChars,
             totalTokensEstimate: ingested.totalTokensEstimate,
             chunkVersion: ingested.chunkVersion,
+            textSource: extractSource,
           },
         });
       } catch (chunkErr: unknown) {
+        if (chunkErr instanceof StaleDocumentVersionError) {
+          await writeOrgAuditLog({
+            orgId,
+            eventType: "documents.chunk_ingestion_skipped_stale",
+            actorUid: uid,
+            actorEmail: email,
+            docId,
+            metadata: {
+              requestedVersion: chunkErr.requestedVersion,
+              currentVersion: chunkErr.currentVersion,
+              textSource: extractSource,
+            },
+          });
+
+          return NextResponse.json(
+            {
+              error:
+                "Chunk ingestion was skipped because a newer version is now current. Re-run extraction if needed.",
+              stale: true,
+              requestedVersion: chunkErr.requestedVersion,
+              currentVersion: chunkErr.currentVersion,
+            },
+            { status: 409 },
+          );
+        }
+
         await docRef.set(
           {
             chunkStatus: "failed",
@@ -316,12 +385,13 @@ export async function POST(
           orgId,
           eventType: "documents.chunk_ingestion_failed",
           actorUid: uid,
-          actorEmail: email,
-          docId,
-          metadata: {
-            version,
-          },
-        });
+            actorEmail: email,
+            docId,
+            metadata: {
+              version,
+              textSource: extractSource,
+            },
+          });
 
         const missingSchema =
           chunkErr instanceof Error &&

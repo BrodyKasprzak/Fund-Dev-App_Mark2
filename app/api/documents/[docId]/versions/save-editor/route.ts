@@ -1,15 +1,22 @@
 import { NextResponse } from "next/server";
 import { FieldValue } from "firebase-admin/firestore";
 import { adminDb } from "@/lib/firebaseAdmin";
-import { requireOrgContext, errorToResponse } from "@/lib/serverAuth";
+import { requireDocumentWriteAccess, errorToResponse } from "@/lib/serverAuth";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
 import { writeOrgAuditLog } from "@/lib/auditLog";
-import { ingestDocumentChunks } from "@/lib/documentChunkIngestion";
+import {
+  ingestDocumentChunks,
+  StaleDocumentVersionError,
+} from "@/lib/documentChunkIngestion";
 import {
   LEXICAL_EDITOR_FORMAT,
-  buildPendingRenderAssets,
 } from "@/lib/documents/versionMetadata";
-import { generateAndStoreEditorExports } from "@/lib/documents/editorExports";
+import {
+  buildEditorProcessingRenderAssets,
+  enqueueDocumentExportJob,
+  processDocumentExportQueueBatch,
+  triggerExportWorkerKick,
+} from "@/lib/documents/exportJobs";
 
 export const runtime = "nodejs";
 
@@ -115,7 +122,7 @@ export async function POST(
   context: { params: Promise<{ docId: string }> },
 ) {
   try {
-    const { orgId, uid, email } = await requireOrgContext(req);
+    const { orgId, uid, email } = await requireDocumentWriteAccess(req);
     const { docId } = await context.params;
 
     if (!isValidDocId(docId)) {
@@ -254,10 +261,7 @@ export async function POST(
 
       const nextVersion = currentVersion + 1;
       const versionRef = docRef.collection("versions").doc(`v${nextVersion}`);
-      const renderAssets = buildPendingRenderAssets({
-        storagePath,
-        fileType,
-      });
+      const renderAssets = buildEditorProcessingRenderAssets();
 
       tx.set(
         versionRef,
@@ -324,38 +328,27 @@ export async function POST(
       return {
         versionNumber: nextVersion,
         plainText,
-        title: typeof data.title === "string" ? data.title : "Untitled",
-        filename,
       };
     });
 
-    const versionRef = docRef.collection("versions").doc(`v${transactionResult.versionNumber}`);
-    const exportAssets = await generateAndStoreEditorExports({
+    const exportAssets = buildEditorProcessingRenderAssets();
+    const exportJob = await enqueueDocumentExportJob({
       orgId,
       docId,
       versionNumber: transactionResult.versionNumber,
-      title: transactionResult.title,
-      filename: transactionResult.filename,
-      editorState,
-      plainText: transactionResult.plainText,
+      requestedByUid: uid,
+      reason: "save_editor",
+    });
+    void triggerExportWorkerKick({ requestUrl: req.url, maxJobs: 2 });
+    void processDocumentExportQueueBatch({
+      maxJobs: 1,
+      workerId: `opportunistic-${orgId}-${docId}`,
     });
 
-    await versionRef.set(
-      {
-        renderAssets: exportAssets,
-        updatedAt: new Date(),
-        updatedBy: uid,
-      },
-      { merge: true },
-    );
-    await docRef.set(
-      {
-        [`versionMeta.items.v${transactionResult.versionNumber}.renderAssets`]: exportAssets,
-        updatedAt: new Date(),
-        updatedBy: uid,
-      },
-      { merge: true },
-    );
+    let skippedChunkIngestion: {
+      requestedVersion: number;
+      currentVersion: number;
+    } | null = null;
 
     try {
       const ingested = await ingestDocumentChunks({
@@ -378,6 +371,25 @@ export async function POST(
         { merge: true },
       );
     } catch (chunkErr: unknown) {
+      if (chunkErr instanceof StaleDocumentVersionError) {
+        skippedChunkIngestion = {
+          requestedVersion: chunkErr.requestedVersion,
+          currentVersion: chunkErr.currentVersion,
+        };
+
+        await writeOrgAuditLog({
+          orgId,
+          eventType: "documents.chunk_ingestion_skipped_stale",
+          actorUid: uid,
+          actorEmail: email,
+          docId,
+          metadata: {
+            source: "editor",
+            requestedVersion: chunkErr.requestedVersion,
+            currentVersion: chunkErr.currentVersion,
+          },
+        });
+      } else {
       await docRef.set(
         {
           chunkStatus: "failed",
@@ -413,6 +425,7 @@ export async function POST(
         },
         { status: 500 },
       );
+      }
     }
 
     await writeOrgAuditLog({
@@ -429,6 +442,10 @@ export async function POST(
           plainTextChars: transactionResult.plainText.length,
           exportDocxStatus: exportAssets.docx.status,
           exportPdfStatus: exportAssets.pdf.status,
+          exportJobId: exportJob.jobId,
+          exportJobQueued: exportJob.queued,
+          chunkIngestionSkipped: Boolean(skippedChunkIngestion),
+          chunkIngestionSkippedToVersion: skippedChunkIngestion?.currentVersion ?? null,
         },
       });
 
@@ -439,6 +456,12 @@ export async function POST(
       ok: true,
       versionNumber: transactionResult.versionNumber,
       exports: exportAssets,
+      exportJob,
+      chunkIngestion: {
+        skipped: Boolean(skippedChunkIngestion),
+        requestedVersion: skippedChunkIngestion?.requestedVersion ?? null,
+        currentVersion: skippedChunkIngestion?.currentVersion ?? null,
+      },
       document: {
         id: updatedSnap.id,
         title: typeof updated.title === "string" ? updated.title : "Untitled",
