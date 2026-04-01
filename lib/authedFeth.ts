@@ -1,4 +1,12 @@
-export async function authedFetch(user: any, input: RequestInfo, init: RequestInit = {}) {
+type AuthUser = {
+  getIdToken: () => Promise<string>;
+};
+
+export async function authedFetch(
+  user: AuthUser,
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+) {
   const token = await user.getIdToken();
   const orgId = localStorage.getItem("pf_active_org") || "";
 

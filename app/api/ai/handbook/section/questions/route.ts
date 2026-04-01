@@ -5,7 +5,11 @@ import { adminDb } from "@/lib/firebaseAdmin";
 import { requireOrgContext, errorToResponse } from "@/lib/serverAuth";
 import { openai } from "@/lib/ai/openai";
 import { BASE_TEMPLATES, type HandbookQuestion } from "@/lib/handbookTemplates";
-import { HANDBOOK_BLUEPRINTS } from "@/lib/handbookBlueprints";
+import {
+  HANDBOOK_BLUEPRINTS,
+  type BlueprintField,
+  type SectionBlueprint,
+} from "@/lib/handbookBlueprints";
 
 export const runtime = "nodejs";
 
@@ -13,6 +17,34 @@ type ReqBody = {
   planId?: string;
   sectionKey?: string;
   maxQuestions?: number; // optional knob from client
+};
+
+type OrgDoc = {
+  websiteConsent?: unknown;
+  websiteUrl?: unknown;
+  name?: unknown;
+  mission?: unknown;
+  homeState?: unknown;
+  taxStatus?: unknown;
+  fiscalYear?: unknown;
+  crm?: unknown;
+  address?: unknown;
+  numEmployees?: unknown;
+  foundedYear?: unknown;
+};
+
+type HandbookSection = {
+  answers?: unknown;
+  content?: unknown;
+};
+
+type PlanDoc = {
+  data?: {
+    handbook?: {
+      sections?: Record<string, HandbookSection>;
+      profile?: unknown;
+    };
+  };
 };
 
 function safeString(v: unknown) {
@@ -27,13 +59,13 @@ function hashText(input: string) {
   return crypto.createHash("sha256").update(input ?? "").digest("hex");
 }
 
-function normalizeAnswers(section: any) {
+function normalizeAnswers(section: HandbookSection | null | undefined) {
   const a = section?.answers;
   if (a && typeof a === "object" && !Array.isArray(a)) return a as Record<string, string>;
   return {};
 }
 
-function pickOrgContext(org: any) {
+function pickOrgContext(org: OrgDoc | null | undefined) {
   const websiteConsent = Boolean(org?.websiteConsent);
   const websiteUrl = safeString(org?.websiteUrl).trim();
 
@@ -77,8 +109,8 @@ function bestMatchOption(value: string, options?: string[]) {
  */
 function prefillFromOrgContext(
   sectionKey: string,
-  orgContext: any,
-  blueprint?: { fields?: any[] }
+  orgContext: ReturnType<typeof pickOrgContext>,
+  blueprint?: SectionBlueprint
 ): Record<string, string> {
   const prefilled: Record<string, string> = {};
   if (!blueprint?.fields?.length) return prefilled;
@@ -86,7 +118,7 @@ function prefillFromOrgContext(
   // ✅ s6_processing: CRM system often already known from org onboarding (orgContext.crm)
   if (sectionKey === "s6_processing") {
     const crm = String(orgContext?.crm ?? "").trim();
-    const field = blueprint.fields.find((f: any) => f.id === "primary_gift_processing_system");
+    const field = blueprint.fields.find((f) => f.id === "primary_gift_processing_system");
 
     if (crm && field) {
       const match = bestMatchOption(crm, field.options);
@@ -138,14 +170,14 @@ function isAnswered(id: string, effectiveAnswers: Record<string, string>, questi
     }
   }
 
-  if (hasOtherOption(question ?? ({ options: [] } as any)) && raw === "Other") {
+  if (raw === "Other" && question && hasOtherOption(question)) {
     return otherText.length > 0;
   }
 
   return true;
 }
 
-function toCanonicalQuestion(field: any): HandbookQuestion {
+function toCanonicalQuestion(field: BlueprintField): HandbookQuestion {
   const type =
     field?.type === "textarea" || field?.type === "select" || field?.type === "multiselect" || field?.type === "text"
       ? field.type
@@ -162,8 +194,8 @@ function toCanonicalQuestion(field: any): HandbookQuestion {
   };
 }
 
-function sortByPriority(fields: any[]) {
-  const rank = (p: any) => (p === "high" ? 0 : p === "medium" ? 1 : 2);
+function sortByPriority(fields: BlueprintField[]) {
+  const rank = (p: BlueprintField["priority"]) => (p === "high" ? 0 : p === "medium" ? 1 : 2);
   return [...fields].sort((a, b) => rank(a.priority) - rank(b.priority));
 }
 
@@ -177,7 +209,7 @@ async function selectBlueprintIdsWithAI(args: {
   intent?: string;
   maxQuestions: number;
   baseTemplate: string;
-  orgContext: any;
+  orgContext: ReturnType<typeof pickOrgContext>;
   effectiveAnswers: Record<string, string>;
   existingContent: string;
   candidates: Array<{ id: string; label: string; helper?: string }>;
@@ -266,7 +298,7 @@ export async function POST(req: Request) {
     if (!orgSnap.exists) {
       return NextResponse.json({ ok: false, error: "Organization not found" }, { status: 404 });
     }
-    const orgContext = pickOrgContext(orgSnap.data() as any);
+    const orgContext = pickOrgContext((orgSnap.data() ?? {}) as OrgDoc);
 
     // Load plan scoped to org
     const ref = adminDb.collection("organizations").doc(orgId).collection("plans").doc(planId);
@@ -275,7 +307,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: "Plan not found" }, { status: 404 });
     }
 
-    const plan = snap.data() as any;
+    const plan = (snap.data() ?? {}) as PlanDoc;
     const hb = plan?.data?.handbook ?? {};
     const section = hb?.sections?.[sectionKey] ?? {};
     const existingAnswers = normalizeAnswers(section);
@@ -285,7 +317,7 @@ export async function POST(req: Request) {
     const legacyProfile = hb?.profile ?? null;
 
     // Prefill (confident-only) + merge
-    const prefilled = prefillFromOrgContext(sectionKey, orgContext, blueprint as any);
+    const prefilled = prefillFromOrgContext(sectionKey, orgContext, blueprint);
     const effectiveAnswers: Record<string, string> = { ...prefilled, ...existingAnswers };
 
     // ✅ Blueprint-backed sections: server canonical questions + AI selects IDs only
@@ -409,8 +441,8 @@ ${existingContent || "(none)"}
 
     // Minimal shape cleanup + de-dupe + skip answered
     let cleaned: HandbookQuestion[] = questions
-      .filter((q: any) => q && typeof q.id === "string" && typeof q.label === "string")
-      .map((q: any) => ({
+      .filter((q) => typeof q.id === "string" && typeof q.label === "string")
+      .map((q) => ({
         id: String(q.id).trim(),
         label: String(q.label).trim(),
         helper: typeof q.helper === "string" ? q.helper : undefined,
@@ -435,7 +467,7 @@ ${existingContent || "(none)"}
       questionsGeneratedAt: new Date().toISOString(),
       questions: cleaned,
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     const { status, message } = errorToResponse(err);
     return NextResponse.json({ ok: false, error: message }, { status });
   }

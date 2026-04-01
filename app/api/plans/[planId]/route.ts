@@ -31,7 +31,7 @@ export async function GET(
       ok: true,
       plan: { id: snap.id, ...snap.data() },
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     const { status, message } = errorToResponse(err);
     return NextResponse.json({ error: message }, { status });
   }
@@ -56,7 +56,7 @@ export async function PATCH(
 
     // Keep your validations & merge semantics,
     // but prevent accidental wipes by only writing fields the client sent.
-    const patch: Record<string, any> = {
+    const patch: Record<string, unknown> = {
       updatedAt: new Date(),
       updatedBy: uid, // useful for audit/activity later
     };
@@ -100,7 +100,7 @@ export async function PATCH(
     await ref.set(patch, { merge: true });
 
     return NextResponse.json({ ok: true });
-  } catch (err: any) {
+  } catch (err: unknown) {
     const { status, message } = errorToResponse(err);
     return NextResponse.json({ error: message }, { status });
   }

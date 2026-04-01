@@ -19,7 +19,16 @@ type Plan = {
   id: string;
   title?: string;
   templateType?: string;
-  data?: any;
+  data?: {
+    handbook?: {
+      activeKey?: string;
+      profileCompleted?: boolean;
+      profile?: { orgName?: string };
+      sections?: Record<string, Partial<HandbookSectionState>>;
+      approvedAt?: string;
+      approvedBy?: { email?: string | null };
+    };
+  };
   status?: string;
 };
 
@@ -123,6 +132,10 @@ const ALL_NAV: Section[] = [PROFILE_SECTION, ...SECTIONS];
 
 function classNames(...xs: Array<string | false | undefined | null>) {
   return xs.filter(Boolean).join(" ");
+}
+
+function errorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
 }
 
 function wordTokens(full: string) {
@@ -644,21 +657,21 @@ export default function FundDevHandbookTemplatePage() {
           setOrg(null);
           return;
         }
-        const o = orgSnap.data() as any;
+        const o = (orgSnap.data() ?? {}) as Record<string, unknown>;
 
         const loaded: OrgProfile = {
           id: orgId,
-          name: String(o?.name ?? "").trim() || "Your organization",
-          mission: typeof o?.mission === "string" ? o.mission : null,
-          homeState: typeof o?.homeState === "string" ? o.homeState : null,
-          taxStatus: typeof o?.taxStatus === "string" ? o.taxStatus : null,
-          fiscalYear: typeof o?.fiscalYear === "string" ? o.fiscalYear : null,
-          crm: typeof o?.crm === "string" ? o.crm : null,
-          address: typeof o?.address === "string" ? o.address : null,
-          numEmployees: typeof o?.numEmployees === "number" ? o.numEmployees : null,
-          foundedYear: typeof o?.foundedYear === "number" ? o.foundedYear : null,
-          websiteUrl: typeof o?.websiteUrl === "string" ? o.websiteUrl : null,
-          websiteConsent: typeof o?.websiteConsent === "boolean" ? o.websiteConsent : null,
+          name: String(o["name"] ?? "").trim() || "Your organization",
+          mission: typeof o["mission"] === "string" ? o["mission"] : null,
+          homeState: typeof o["homeState"] === "string" ? o["homeState"] : null,
+          taxStatus: typeof o["taxStatus"] === "string" ? o["taxStatus"] : null,
+          fiscalYear: typeof o["fiscalYear"] === "string" ? o["fiscalYear"] : null,
+          crm: typeof o["crm"] === "string" ? o["crm"] : null,
+          address: typeof o["address"] === "string" ? o["address"] : null,
+          numEmployees: typeof o["numEmployees"] === "number" ? o["numEmployees"] : null,
+          foundedYear: typeof o["foundedYear"] === "number" ? o["foundedYear"] : null,
+          websiteUrl: typeof o["websiteUrl"] === "string" ? o["websiteUrl"] : null,
+          websiteConsent: typeof o["websiteConsent"] === "boolean" ? o["websiteConsent"] : null,
         };
 
         setOrg(loaded);
@@ -752,8 +765,8 @@ export default function FundDevHandbookTemplatePage() {
           const legacy = String(hb?.profile?.orgName ?? "").trim();
           if (legacy) setOrgName(legacy);
         }
-      } catch (e: any) {
-        alert(e?.message || "Failed to load plan");
+      } catch (e: unknown) {
+        alert(errorMessage(e, "Failed to load plan"));
       } finally {
         if (!cancelled) setFetching(false);
       }
@@ -809,8 +822,8 @@ export default function FundDevHandbookTemplatePage() {
       setPlan((p) => (p ? { ...p, data: { ...(p.data ?? {}), handbook } } : p));
       setSaveMsg("Saved");
       setTimeout(() => setSaveMsg(null), 1200);
-    } catch (e: any) {
-      alert(e?.message || "Save failed");
+    } catch (e: unknown) {
+      alert(errorMessage(e, "Save failed"));
     } finally {
       setSaving(false);
     }
@@ -1085,8 +1098,8 @@ export default function FundDevHandbookTemplatePage() {
       a.click();
       a.remove();
       window.URL.revokeObjectURL(url);
-    } catch (e: any) {
-      alert(e?.message || "Export failed");
+    } catch (e: unknown) {
+      alert(errorMessage(e, "Export failed"));
     } finally {
       setExporting(null);
     }
@@ -1122,8 +1135,8 @@ export default function FundDevHandbookTemplatePage() {
       );
 
       alert("Handbook approved.");
-    } catch (e: any) {
-      alert(e?.message || "Approve failed");
+    } catch (e: unknown) {
+      alert(errorMessage(e, "Approve failed"));
     } finally {
       setApproving(false);
     }
@@ -1553,7 +1566,7 @@ export default function FundDevHandbookTemplatePage() {
                         </h2>
 
                         <p className="mt-3 text-sm text-slate-700 leading-relaxed">
-                          You'll build your handbook one section at a time. For each section, the AI will:
+                          You&apos;ll build your handbook one section at a time. For each section, the AI will:
                         </p>
 
                         <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm text-slate-700">
@@ -1666,8 +1679,8 @@ export default function FundDevHandbookTemplatePage() {
 
                                     setSectionsState(next);
                                     await saveHandbookProgress(activeKey, next);
-                                  } catch (e: any) {
-                                    alert(e?.message || "Failed to generate AI questions");
+                                  } catch (e: unknown) {
+                                    alert(errorMessage(e, "Failed to generate AI questions"));
                                   }
                                 }}
                               >
@@ -1720,8 +1733,8 @@ export default function FundDevHandbookTemplatePage() {
 
                                       setSectionsState(next);
                                       await saveHandbookProgress(activeKey, next);
-                                    } catch (e: any) {
-                                      alert(e?.message || "Failed to regenerate questions");
+                                    } catch (e: unknown) {
+                                      alert(errorMessage(e, "Failed to regenerate questions"));
                                     }
                                   }}
                                 >
@@ -1871,8 +1884,8 @@ export default function FundDevHandbookTemplatePage() {
 
                                       setSectionsState(next);
                                       await saveHandbookProgress(activeKey, next);
-                                    } catch (e: any) {
-                                      alert(e?.message || "Failed to generate section");
+                                    } catch (e: unknown) {
+                                      alert(errorMessage(e, "Failed to generate section"));
                                     } finally {
                                       setGenerating(false);
                                     }

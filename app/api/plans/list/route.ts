@@ -38,28 +38,28 @@ export async function GET(req: Request) {
     const snap = await q.get();
 
     const plans = snap.docs.map((d) => {
-      const data = d.data() as any;
+      const data = d.data() as Record<string, unknown>;
       return {
         id: d.id,
-        title: data.title ?? "(Untitled)",
-        titleLower: data.titleLower ?? null,
-        templateType: data.templateType ?? null,
-        status: data.status ?? "in_progress",
-        progress: data.progress ?? null,
-        createdAt: data.createdAt ?? null,
-        updatedAt: data.updatedAt ?? null,
-        createdBy: data.createdBy ?? null,
-        updatedBy: data.updatedBy ?? null,
-        approvedAt: data.approvedAt ?? null,
-        approvedBy: data.approvedBy ?? null,
+        title: data["title"] ?? "(Untitled)",
+        titleLower: data["titleLower"] ?? null,
+        templateType: data["templateType"] ?? null,
+        status: data["status"] ?? "in_progress",
+        progress: data["progress"] ?? null,
+        createdAt: data["createdAt"] ?? null,
+        updatedAt: data["updatedAt"] ?? null,
+        createdBy: data["createdBy"] ?? null,
+        updatedBy: data["updatedBy"] ?? null,
+        approvedAt: data["approvedAt"] ?? null,
+        approvedBy: data["approvedBy"] ?? null,
 
         // keep the full data if you still want it client-side (optional)
-        data: data.data ?? undefined,
+        data: data["data"] ?? undefined,
       };
     });
 
     return NextResponse.json({ ok: true, plans });
-  } catch (err: any) {
+  } catch (err: unknown) {
     const { status, message } = errorToResponse(err);
     return NextResponse.json({ error: message }, { status });
   }

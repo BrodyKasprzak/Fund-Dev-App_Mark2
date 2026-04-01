@@ -31,6 +31,13 @@ const BODY_TEXT_COLOR = "1E293B"; // Slate-800
 const SECONDARY_TEXT_COLOR = "64748B"; // Slate-500
 const DIVIDER_COLOR = "CBD5E1"; // Slate-300
 
+type LooseRecord = Record<string, unknown>;
+
+function asRecord(value: unknown): LooseRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as LooseRecord;
+}
+
 // UI order + titles (matches your UI)
 const UI_SECTIONS: Array<{ key: string; title: string }> = [
   { key: "s1_intro", title: "1. Introduction and Purpose" },
@@ -66,7 +73,7 @@ function formatDateForTitlePage(d: Date) {
 }
 
 // Return "" when missing so fallbacks work correctly with ||
-function cleanOrgName(v: any) {
+function cleanOrgName(v: unknown) {
   const s = String(v ?? "").trim();
   return s.length ? s : "";
 }
@@ -85,13 +92,13 @@ export async function POST(
 ) {
   try {
     // ✅ Authoritative org context (membership verified here)
-    const { uid, orgId } = await requireOrgContext(req);
+    const { orgId } = await requireOrgContext(req);
 
     const { planId } = await context.params;
 
     // ✅ Load org (for name/mission fallback)
     const orgSnap = await adminDb.collection("organizations").doc(orgId).get();
-    const orgDoc = orgSnap.exists ? (orgSnap.data() ?? {}) : {};
+    const orgDoc = orgSnap.exists ? asRecord(orgSnap.data()) : {};
 
     // ✅ Load plan scoped to orgId
     const planRef = adminDb
@@ -105,32 +112,33 @@ export async function POST(
       return NextResponse.json({ error: "Plan not found" }, { status: 404 });
     }
 
-    const plan = planSnap.data() ?? {};
-    const handbook = (plan as any)?.data?.handbook ?? (plan as any)?.handbook ?? {};
-    const profile = (handbook as any)?.profile ?? {};
-    const sections = (handbook as any)?.sections ?? {};
+    const plan = asRecord(planSnap.data());
+    const planData = asRecord(plan["data"]);
+    const handbook = asRecord(planData["handbook"] ?? plan["handbook"]);
+    const profile = asRecord(handbook["profile"]);
+    const sections = asRecord(handbook["sections"]);
 
     const exportDate = new Date();
     const updatedStr = formatDateForTitlePage(exportDate);
 
     // ✅ Org name + mission: handbook profile first, then org doc
     const orgName =
-      cleanOrgName(profile?.orgName) ||
-      cleanOrgName(profile?.name) ||
-      cleanOrgName((orgDoc as any)?.name) ||
-      cleanOrgName((orgDoc as any)?.orgName) ||
-      cleanOrgName((orgDoc as any)?.displayName) ||
+      cleanOrgName(profile["orgName"]) ||
+      cleanOrgName(profile["name"]) ||
+      cleanOrgName(orgDoc["name"]) ||
+      cleanOrgName(orgDoc["orgName"]) ||
+      cleanOrgName(orgDoc["displayName"]) ||
       "Organization";
 
     const mission =
-      String(profile?.mission ?? "").trim() ||
-      String((orgDoc as any)?.mission ?? "").trim();
+      String(profile["mission"] ?? "").trim() ||
+      String(orgDoc["mission"] ?? "").trim();
 
     // Only include completed sections with meaningful content
     const completedInUiOrder = UI_SECTIONS.filter(({ key }) => {
-      const s = sections?.[key] ?? {};
-      const completed = Boolean(s?.completed);
-      const content = String(s?.content ?? "").trim();
+      const s = asRecord(sections[key]);
+      const completed = Boolean(s["completed"]);
+      const content = String(s["content"] ?? "").trim();
       return completed && content.length > 0;
     });
 
@@ -303,8 +311,8 @@ export async function POST(
     // Sections
     for (let i = 0; i < completedInUiOrder.length; i++) {
       const { key, title: sectionTitle } = completedInUiOrder[i];
-      const s = sections?.[key] ?? {};
-      const content = String(s?.content ?? "").trim();
+      const s = asRecord(sections[key]);
+      const content = String(s["content"] ?? "").trim();
 
       bodyChildren.push(
         new Paragraph({
@@ -390,7 +398,7 @@ export async function POST(
         "Content-Disposition": `attachment; filename="${filename}"`,
       },
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     const { status, message } = errorToResponse(err);
     return NextResponse.json({ error: message }, { status });
   }

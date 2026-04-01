@@ -60,7 +60,7 @@ export async function POST(req: Request) {
     });
 
     return NextResponse.json({ ok: true, planId: ref.id });
-  } catch (err: any) {
+  } catch (err: unknown) {
     const { status, message } = errorToResponse(err);
     return NextResponse.json({ error: message }, { status });
   }

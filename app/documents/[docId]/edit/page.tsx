@@ -580,7 +580,7 @@ export default function DocumentEditorPage() {
                   <OnChangePlugin
                     onChange={(editorState) => {
                       editorState.read(() => {
-                        setEditorDraftState(editorState.toJSON() as Record<string, unknown>);
+                        setEditorDraftState(asEditorStateObject(editorState.toJSON()));
                         setPlainText($getRoot().getTextContent());
                       });
                     }}

@@ -41,7 +41,7 @@ export async function PATCH(
       return NextResponse.json({ error: "Plan not found" }, { status: 404 });
     }
 
-    const existing = snap.data() as any;
+    const existing = (snap.data() ?? {}) as { status?: unknown };
 
     // Compute progress from handbook.sections
     const sections =
@@ -70,7 +70,7 @@ export async function PATCH(
     );
 
     return NextResponse.json({ ok: true });
-  } catch (err: any) {
+  } catch (err: unknown) {
     const { status, message } = errorToResponse(err);
     return NextResponse.json({ error: message }, { status });
   }

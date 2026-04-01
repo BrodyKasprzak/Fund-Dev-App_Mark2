@@ -22,11 +22,40 @@ type ReqBody = {
   userPrompt?: string;
 };
 
-function safeString(v: any) {
+type OrgDoc = {
+  websiteConsent?: unknown;
+  websiteUrl?: unknown;
+  name?: unknown;
+  mission?: unknown;
+  homeState?: unknown;
+  taxStatus?: unknown;
+  fiscalYear?: unknown;
+  crm?: unknown;
+  address?: unknown;
+  numEmployees?: unknown;
+  foundedYear?: unknown;
+};
+
+type HandbookSection = {
+  answers?: unknown;
+  content?: unknown;
+  aiQuestions?: unknown;
+};
+
+type PlanDoc = {
+  data?: {
+    handbook?: {
+      sections?: Record<string, HandbookSection>;
+      profile?: unknown;
+    };
+  };
+};
+
+function safeString(v: unknown) {
   return typeof v === "string" ? v : "";
 }
 
-function safeNumber(v: any) {
+function safeNumber(v: unknown) {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
@@ -34,12 +63,12 @@ function hashText(input: string) {
   return crypto.createHash("sha256").update(input ?? "").digest("hex");
 }
 
-function normalizeAnswersLike(v: any) {
+function normalizeAnswersLike(v: unknown) {
   if (v && typeof v === "object" && !Array.isArray(v)) return v as Record<string, string>;
   return {};
 }
 
-function normalizeQuestionsLike(v: any) {
+function normalizeQuestionsLike(v: unknown) {
   if (!Array.isArray(v)) return undefined;
   const cleaned = v
     .filter((q) => q && typeof q.id === "string" && typeof q.label === "string")
@@ -58,7 +87,7 @@ function normalizeQuestionsLike(v: any) {
   return cleaned.length ? (cleaned as HandbookQuestion[]) : undefined;
 }
 
-function pickOrgContext(org: any) {
+function pickOrgContext(org: OrgDoc | null | undefined) {
   const websiteConsent = Boolean(org?.websiteConsent);
   const websiteUrl = safeString(org?.websiteUrl).trim();
 
@@ -120,7 +149,7 @@ export async function POST(req: Request) {
     if (!orgSnap.exists) {
       return NextResponse.json({ ok: false, error: "Organization not found" }, { status: 404 });
     }
-    const org = orgSnap.data() as any;
+    const org = (orgSnap.data() ?? {}) as OrgDoc;
     const orgContext = pickOrgContext(org);
 
     // Load plan scoped to org
@@ -130,7 +159,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: "Plan not found" }, { status: 404 });
     }
 
-    const plan = snap.data() as any;
+    const plan = (snap.data() ?? {}) as PlanDoc;
     const hb = plan?.data?.handbook ?? {};
 
     const section = hb?.sections?.[sectionKey] ?? {};
@@ -306,7 +335,7 @@ ${draft}
       generatedAt: new Date().toISOString(),
       draftContent: noMarkdownHeaders,
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     const { status, message } = errorToResponse(err);
     return NextResponse.json({ ok: false, error: message }, { status });
   }

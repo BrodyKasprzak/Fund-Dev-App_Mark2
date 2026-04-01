@@ -14,26 +14,26 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "Organization not found" }, { status: 404 });
     }
 
-    const o = orgSnap.data() as any;
+    const o = (orgSnap.data() ?? {}) as Record<string, unknown>;
 
     return NextResponse.json({
       ok: true,
       org: {
         id: orgId,
-        name: o?.name ?? null,
-        mission: o?.mission ?? null,
-        homeState: o?.homeState ?? null,
-        taxStatus: o?.taxStatus ?? null,
-        fiscalYear: o?.fiscalYear ?? null,
-        crm: o?.crm ?? null,
-        address: o?.address ?? null,
-        numEmployees: o?.numEmployees ?? null,
-        foundedYear: o?.foundedYear ?? null,
-        websiteUrl: o?.websiteUrl ?? null,
-        websiteConsent: o?.websiteConsent ?? null,
+        name: o["name"] ?? null,
+        mission: o["mission"] ?? null,
+        homeState: o["homeState"] ?? null,
+        taxStatus: o["taxStatus"] ?? null,
+        fiscalYear: o["fiscalYear"] ?? null,
+        crm: o["crm"] ?? null,
+        address: o["address"] ?? null,
+        numEmployees: o["numEmployees"] ?? null,
+        foundedYear: o["foundedYear"] ?? null,
+        websiteUrl: o["websiteUrl"] ?? null,
+        websiteConsent: o["websiteConsent"] ?? null,
       },
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     const { status, message } = errorToResponse(err);
     return NextResponse.json({ error: message }, { status });
   }
