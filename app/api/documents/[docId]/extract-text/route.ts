@@ -7,13 +7,15 @@ import {
   ingestDocumentChunks,
   StaleDocumentVersionError,
 } from "@/lib/documentChunkIngestion";
-import { LEXICAL_EDITOR_FORMAT } from "@/lib/documents/versionMetadata";
+import { DOCX_MIME, LEXICAL_EDITOR_FORMAT } from "@/lib/documents/versionMetadata";
 import { derivePlainTextFromLexicalEditorState } from "@/lib/documents/lexicalPlainText";
+import { lexicalEditorStateFromHtml } from "@/lib/documents/lexicalImportFromHtml";
 
 export const runtime = "nodejs";
 
 const EXTRACT_LIMIT_PER_10_MIN = 40;
 const MAX_EXTRACTED_TEXT_CHARS = 200_000;
+const MAX_IMPORTED_EDITOR_STATE_BYTES = 700_000;
 const MAX_DOC_ID_LENGTH = 128;
 const TEXT_SOURCE_FILE_EXTRACT = "file_extract";
 const TEXT_SOURCE_LEXICAL_PLAIN_TEXT = "lexical_plain_text";
@@ -91,6 +93,52 @@ async function extractText(buffer: Buffer, fileType: string) {
   }
 
   throw new Error("Unsupported file type for extraction");
+}
+
+async function importDocxAsLexical(args: { buffer: Buffer }) {
+  const { buffer } = args;
+  const mammothModule = await import("mammoth");
+  const mammoth = (mammothModule.default ?? mammothModule) as {
+    convertToHtml: (
+      input: { buffer: Buffer },
+      options?: { styleMap?: string[] },
+    ) => Promise<{ value?: string }>;
+  };
+
+  const parsed = await mammoth.convertToHtml(
+    { buffer },
+    {
+      styleMap: [
+        "p[style-name='Heading 1'] => h1:fresh",
+        "p[style-name='Heading 2'] => h2:fresh",
+        "p[style-name='Heading 3'] => h3:fresh",
+        "p[style-name='Title'] => h1:fresh",
+        "b => strong",
+        "i => em",
+      ],
+    },
+  );
+  const html = typeof parsed.value === "string" ? parsed.value.trim() : "";
+  if (!html) return null;
+
+  const editorState = lexicalEditorStateFromHtml(html);
+  if (!editorState) return null;
+
+  let serialized = "";
+  try {
+    serialized = JSON.stringify(editorState);
+  } catch {
+    return null;
+  }
+  if (Buffer.byteLength(serialized, "utf8") > MAX_IMPORTED_EDITOR_STATE_BYTES) {
+    return null;
+  }
+
+  const plainText = derivePlainTextFromLexicalEditorState(editorState, MAX_EXTRACTED_TEXT_CHARS);
+  return {
+    editorState,
+    plainText: normalizeText(plainText),
+  };
 }
 
 function isValidDocId(docId: string) {
@@ -293,13 +341,27 @@ export async function POST(
     );
 
     try {
-      const extractedText = shouldUseLexicalPlainText
-        ? normalizeText(lexicalPlainText)
-        : await (async () => {
-            const fileRef = adminStorage.bucket().file(storagePath);
-            const [buffer] = await fileRef.download();
-            return normalizeText(await extractText(buffer, fileType));
-          })();
+      let extractedText = "";
+      let importedEditorState: Record<string, unknown> | null = null;
+
+      if (shouldUseLexicalPlainText) {
+        extractedText = normalizeText(lexicalPlainText);
+      } else {
+        const fileRef = adminStorage.bucket().file(storagePath);
+        const [buffer] = await fileRef.download();
+
+        if (fileType === DOCX_MIME) {
+          const imported = await importDocxAsLexical({ buffer });
+          if (imported?.editorState) {
+            importedEditorState = imported.editorState;
+            extractedText = imported.plainText;
+          } else {
+            extractedText = normalizeText(await extractText(buffer, fileType));
+          }
+        } else {
+          extractedText = normalizeText(await extractText(buffer, fileType));
+        }
+      }
 
       await docRef.set(
         {
@@ -313,6 +375,29 @@ export async function POST(
         },
         { merge: true },
       );
+
+      if (importedEditorState) {
+        const versionRef = docRef.collection("versions").doc(`v${version}`);
+        await versionRef.set(
+          {
+            editorFormat: LEXICAL_EDITOR_FORMAT,
+            editorState: importedEditorState,
+            plainText: extractedText || null,
+            updatedAt: new Date(),
+            updatedBy: uid,
+          },
+          { merge: true },
+        );
+
+        await docRef.set(
+          {
+            [`versionMeta.items.v${version}.editorFormat`]: LEXICAL_EDITOR_FORMAT,
+            updatedAt: new Date(),
+            updatedBy: uid,
+          },
+          { merge: true },
+        );
+      }
 
       try {
         const ingested = await ingestDocumentChunks({
