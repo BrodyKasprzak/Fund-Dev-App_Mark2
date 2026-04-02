@@ -38,6 +38,7 @@ type PendingVersionRecord = {
   status?: unknown;
   source?: unknown;
   changeSummary?: unknown;
+  docxImportPipeline?: unknown;
   createdAt?: unknown;
   createdBy?: unknown;
 };
@@ -237,6 +238,10 @@ export async function POST(
     const changeSummary =
       typeof pending.changeSummary === "string" ? pending.changeSummary : null;
     const source = typeof pending.source === "string" ? pending.source : "edit";
+    const docxImportPipeline =
+      typeof pending.docxImportPipeline === "string" && pending.docxImportPipeline.trim()
+        ? pending.docxImportPipeline.trim()
+        : null;
     const now = new Date();
     const renderAssets = buildRenderAssetsFromStoredFile({
       storagePath,
@@ -280,6 +285,7 @@ export async function POST(
           status: "ready",
           source,
           changeSummary,
+          docxImportPipeline,
           ...emptyVersionEditorPayload(),
           renderAssets,
           promotedAt: now,
@@ -300,6 +306,7 @@ export async function POST(
         status: "ready",
         source,
         changeSummary,
+        docxImportPipeline,
         ...emptyVersionEditorPayload(),
         renderAssets,
         createdAt: now,

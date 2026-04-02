@@ -5,6 +5,7 @@ import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit"
 import { writeOrgAuditLog } from "@/lib/auditLog";
 import {
   DOCX_MIME,
+  DOCX_IMPORT_PIPELINE_PHASE_A,
   buildRenderAssetsFromStoredFile,
   buildPendingRenderAssets,
   emptyVersionEditorPayload,
@@ -310,6 +311,7 @@ export async function POST(
           source: "edit",
           changeSummary,
           ...emptyVersionEditorPayload(),
+          docxImportPipeline: DOCX_IMPORT_PIPELINE_PHASE_A,
           renderAssets: buildPendingRenderAssets({
             storagePath,
             fileType: DOCX_MIME,
@@ -337,6 +339,7 @@ export async function POST(
             status: "processing",
             source: "edit",
             changeSummary,
+            docxImportPipeline: DOCX_IMPORT_PIPELINE_PHASE_A,
             createdAt: now,
             createdBy: uid,
           },

@@ -1,4 +1,8 @@
 import { DOMParser } from "@xmldom/xmldom";
+export {
+  lexicalEditorStateFromHtmlPhaseA,
+  type LexicalImportPhaseAResult,
+} from "./lexicalImportFromHtmlPhaseA";
 
 const ELEMENT_NODE = 1;
 const TEXT_NODE = 3;

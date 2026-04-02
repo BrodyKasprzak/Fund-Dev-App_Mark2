@@ -1,8 +1,19 @@
 export const LEXICAL_EDITOR_FORMAT = "lexical-json-v1";
+export const DOCX_IMPORT_PIPELINE_PHASE_A = "docx_mammoth_html_phase_a_v1";
 
 export const DOCX_MIME =
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 export const PDF_MIME = "application/pdf";
+
+export type ImportFidelityProfile = {
+  pipeline: string;
+  source: "docx_mammoth_html";
+  mappedFeatures: string[];
+  downgradedFeatures: string[];
+  fallbackUsed: boolean;
+  fallbackReason: string | null;
+  measuredAt: Date;
+};
 
 export type RenderAssetStatus =
   | "not_generated"

@@ -5,6 +5,8 @@ import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit"
 import { writeOrgAuditLog } from "@/lib/auditLog";
 import { CHUNKER_VERSION } from "@/lib/documentChunking";
 import {
+  DOCX_MIME,
+  DOCX_IMPORT_PIPELINE_PHASE_A,
   buildPendingRenderAssets,
   emptyVersionEditorPayload,
 } from "@/lib/documents/versionMetadata";
@@ -48,6 +50,7 @@ type VersionMetadata = {
   editorFormat: string | null;
   editorState: Record<string, unknown> | null;
   plainText: string | null;
+  docxImportPipeline: string | null;
   renderAssets: ReturnType<typeof buildPendingRenderAssets>;
   createdAt: Date;
   createdBy: string;
@@ -151,6 +154,7 @@ export async function POST(req: Request) {
       source: "upload",
       changeSummary: "Initial upload",
       ...emptyVersionEditorPayload(),
+      docxImportPipeline: rawFileType === DOCX_MIME ? DOCX_IMPORT_PIPELINE_PHASE_A : null,
       renderAssets: buildPendingRenderAssets({
         storagePath,
         fileType: rawFileType,

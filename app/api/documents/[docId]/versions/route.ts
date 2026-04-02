@@ -41,6 +41,8 @@ type VersionDocRecord = {
   editorFormat?: unknown;
   editorState?: unknown;
   plainText?: unknown;
+  docxImportPipeline?: unknown;
+  importFidelityProfile?: unknown;
   renderAssets?: unknown;
 };
 
@@ -84,6 +86,65 @@ type SerializedRenderAssets = {
   docx: SerializedRenderAsset;
   pdf: SerializedRenderAsset;
 };
+
+type SerializedImportFidelityProfile = {
+  pipeline: string;
+  source: string;
+  mappedFeatures: string[];
+  downgradedFeatures: string[];
+  fallbackUsed: boolean;
+  fallbackReason: string | null;
+  measuredAt: string | null;
+};
+
+function sanitizeFeatureList(raw: unknown) {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of raw) {
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim().slice(0, 80);
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+    if (out.length >= 20) break;
+  }
+  return out;
+}
+
+function normalizeImportFidelityProfile(raw: unknown): SerializedImportFidelityProfile | null {
+  if (!raw || typeof raw !== "object") return null;
+  const record = raw as {
+    pipeline?: unknown;
+    source?: unknown;
+    mappedFeatures?: unknown;
+    downgradedFeatures?: unknown;
+    fallbackUsed?: unknown;
+    fallbackReason?: unknown;
+    measuredAt?: FirestoreDateLike;
+  };
+  const pipeline =
+    typeof record.pipeline === "string" && record.pipeline.trim()
+      ? record.pipeline.trim().slice(0, 120)
+      : null;
+  if (!pipeline) return null;
+  const source =
+    typeof record.source === "string" && record.source.trim()
+      ? record.source.trim().slice(0, 80)
+      : "docx_mammoth_html";
+  return {
+    pipeline,
+    source,
+    mappedFeatures: sanitizeFeatureList(record.mappedFeatures),
+    downgradedFeatures: sanitizeFeatureList(record.downgradedFeatures),
+    fallbackUsed: record.fallbackUsed === true,
+    fallbackReason:
+      typeof record.fallbackReason === "string" && record.fallbackReason.trim()
+        ? record.fallbackReason.trim().slice(0, 120)
+        : null,
+    measuredAt: toIso(record.measuredAt),
+  };
+}
 
 function toIso(value: FirestoreDateLike) {
   if (!value) return null;
@@ -185,6 +246,9 @@ function serializeVersion(record: VersionDocRecord, currentVersionNumber: number
         ? (record.editorState as Record<string, unknown>)
         : null,
     plainText: typeof record.plainText === "string" ? record.plainText : null,
+    docxImportPipeline:
+      typeof record.docxImportPipeline === "string" ? record.docxImportPipeline : null,
+    importFidelityProfile: normalizeImportFidelityProfile(record.importFidelityProfile),
     renderAssets:
       record.renderAssets !== undefined
         ? normalizeRenderAssets(record.renderAssets)
@@ -247,6 +311,8 @@ function fallbackCurrentVersionFromParentDocument(
     editorFormat: null,
     editorState: null,
     plainText: null,
+    docxImportPipeline: null,
+    importFidelityProfile: null,
     renderAssets:
       inferRenderAssetsFromFile({
         storagePath: data.storagePath,
@@ -320,6 +386,8 @@ function ensureSyntheticOriginalVersion(args: {
     editorFormat: null,
     editorState: null,
     plainText: null,
+    docxImportPipeline: null,
+    importFidelityProfile: null,
     renderAssets: normalizeRenderAssets({
       docx: {
         status:

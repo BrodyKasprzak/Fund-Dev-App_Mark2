@@ -10,6 +10,7 @@ import { OnChangePlugin } from "@lexical/react/LexicalOnChangePlugin";
 import { ListPlugin } from "@lexical/react/LexicalListPlugin";
 import { CheckListPlugin } from "@lexical/react/LexicalCheckListPlugin";
 import { LinkPlugin } from "@lexical/react/LexicalLinkPlugin";
+import { TablePlugin } from "@lexical/react/LexicalTablePlugin";
 import { MarkdownShortcutPlugin } from "@lexical/react/LexicalMarkdownShortcutPlugin";
 import { LexicalErrorBoundary } from "@lexical/react/LexicalErrorBoundary";
 import { TRANSFORMERS } from "@lexical/markdown";
@@ -18,6 +19,7 @@ import { HeadingNode, QuoteNode } from "@lexical/rich-text";
 import { ListItemNode, ListNode } from "@lexical/list";
 import { LinkNode } from "@lexical/link";
 import { CodeNode } from "@lexical/code";
+import { TableCellNode, TableNode, TableRowNode } from "@lexical/table";
 import { LexicalEditorToolbarPlugin } from "@/components/editor/plugins/LexicalEditorToolbarPlugin";
 import { LexicalPasteCleanupPlugin } from "@/components/editor/plugins/LexicalPasteCleanupPlugin";
 
@@ -62,6 +64,11 @@ const lexicalTheme: InitialConfigType["theme"] = {
     code: "rounded bg-slate-100 px-1 py-0.5 font-mono text-[0.95em]",
   },
   link: "text-sky-700 underline",
+  table: "my-3 w-full border-collapse border border-slate-300",
+  tableRow: "border border-slate-300",
+  tableCell: "border border-slate-300 px-2 py-1 align-top",
+  tableCellHeader:
+    "border border-slate-300 bg-slate-100 px-2 py-1 align-top font-semibold text-slate-800",
 };
 
 function parseInitialEditorState(value: Record<string, unknown> | null | undefined) {
@@ -80,7 +87,17 @@ export function LexicalRichTextEditor(props: LexicalRichTextEditorProps) {
     () => ({
       namespace,
       theme: lexicalTheme,
-      nodes: [HeadingNode, QuoteNode, ListNode, ListItemNode, LinkNode, CodeNode],
+      nodes: [
+        HeadingNode,
+        QuoteNode,
+        ListNode,
+        ListItemNode,
+        LinkNode,
+        CodeNode,
+        TableNode,
+        TableRowNode,
+        TableCellNode,
+      ],
       onError: (error: Error) => {
         throw error;
       },
@@ -106,9 +123,10 @@ export function LexicalRichTextEditor(props: LexicalRichTextEditorProps) {
           ErrorBoundary={LexicalErrorBoundary}
         />
         <HistoryPlugin />
-        <ListPlugin />
+        <ListPlugin hasStrictIndent />
         <CheckListPlugin />
         <LinkPlugin />
+        <TablePlugin hasCellMerge hasCellBackgroundColor />
         <LexicalPasteCleanupPlugin disabled={readOnly} />
         <MarkdownShortcutPlugin transformers={TRANSFORMERS} />
         <OnChangePlugin

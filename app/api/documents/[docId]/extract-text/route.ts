@@ -7,9 +7,17 @@ import {
   ingestDocumentChunks,
   StaleDocumentVersionError,
 } from "@/lib/documentChunkIngestion";
-import { DOCX_MIME, LEXICAL_EDITOR_FORMAT } from "@/lib/documents/versionMetadata";
+import {
+  DOCX_IMPORT_PIPELINE_PHASE_A,
+  DOCX_MIME,
+  LEXICAL_EDITOR_FORMAT,
+  type ImportFidelityProfile,
+} from "@/lib/documents/versionMetadata";
 import { derivePlainTextFromLexicalEditorState } from "@/lib/documents/lexicalPlainText";
-import { lexicalEditorStateFromHtml } from "@/lib/documents/lexicalImportFromHtml";
+import {
+  lexicalEditorStateFromHtml,
+  lexicalEditorStateFromHtmlPhaseA,
+} from "@/lib/documents/lexicalImportFromHtml";
 
 export const runtime = "nodejs";
 
@@ -17,6 +25,8 @@ const EXTRACT_LIMIT_PER_10_MIN = 40;
 const MAX_EXTRACTED_TEXT_CHARS = 200_000;
 const MAX_IMPORTED_EDITOR_STATE_BYTES = 700_000;
 const MAX_DOC_ID_LENGTH = 128;
+const MAX_PROFILE_FEATURES = 20;
+const MAX_PROFILE_REASON_LENGTH = 120;
 const TEXT_SOURCE_FILE_EXTRACT = "file_extract";
 const TEXT_SOURCE_LEXICAL_PLAIN_TEXT = "lexical_plain_text";
 
@@ -43,6 +53,8 @@ type VersionRecord = {
   editorFormat?: unknown;
   editorState?: unknown;
   plainText?: unknown;
+  docxImportPipeline?: unknown;
+  importFidelityProfile?: unknown;
 };
 
 function toIso(value: FirestoreDateLike) {
@@ -64,6 +76,42 @@ function normalizeText(raw: string) {
     .trim();
 
   return normalized.slice(0, MAX_EXTRACTED_TEXT_CHARS);
+}
+
+function sanitizeFeatureList(input: string[] | undefined) {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set<string>();
+  const output: string[] = [];
+  for (const value of input) {
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim().slice(0, 80);
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    output.push(trimmed);
+    if (output.length >= MAX_PROFILE_FEATURES) break;
+  }
+  return output;
+}
+
+function buildImportFidelityProfile(args: {
+  mappedFeatures?: string[];
+  downgradedFeatures?: string[];
+  fallbackUsed: boolean;
+  fallbackReason?: string | null;
+}): ImportFidelityProfile {
+  const reason =
+    typeof args.fallbackReason === "string" && args.fallbackReason.trim()
+      ? args.fallbackReason.trim().slice(0, MAX_PROFILE_REASON_LENGTH)
+      : null;
+  return {
+    pipeline: DOCX_IMPORT_PIPELINE_PHASE_A,
+    source: "docx_mammoth_html",
+    mappedFeatures: sanitizeFeatureList(args.mappedFeatures),
+    downgradedFeatures: sanitizeFeatureList(args.downgradedFeatures),
+    fallbackUsed: args.fallbackUsed,
+    fallbackReason: reason,
+    measuredAt: new Date(),
+  };
 }
 
 async function extractText(buffer: Buffer, fileType: string) {
@@ -95,7 +143,7 @@ async function extractText(buffer: Buffer, fileType: string) {
   throw new Error("Unsupported file type for extraction");
 }
 
-async function importDocxAsLexical(args: { buffer: Buffer }) {
+async function importDocxAsLexicalLegacy(args: { buffer: Buffer }) {
   const { buffer } = args;
   const mammothModule = await import("mammoth");
   const mammoth = (mammothModule.default ?? mammothModule) as {
@@ -138,6 +186,106 @@ async function importDocxAsLexical(args: { buffer: Buffer }) {
   return {
     editorState,
     plainText: normalizeText(plainText),
+    profile: null as ImportFidelityProfile | null,
+  };
+}
+
+async function importDocxAsLexicalPhaseA(args: { buffer: Buffer }) {
+  const { buffer } = args;
+  const mammothModule = await import("mammoth");
+  const mammoth = (mammothModule.default ?? mammothModule) as {
+    convertToHtml: (
+      input: { buffer: Buffer },
+      options?: { styleMap?: string[] },
+    ) => Promise<{ value?: string }>;
+  };
+
+  const parsed = await mammoth.convertToHtml(
+    { buffer },
+    {
+      styleMap: [
+        "p[style-name='Heading 1'] => h1:fresh",
+        "p[style-name='Heading 2'] => h2:fresh",
+        "p[style-name='Heading 3'] => h3:fresh",
+        "p[style-name='Heading 4'] => h4:fresh",
+        "p[style-name='Heading 5'] => h5:fresh",
+        "p[style-name='Heading 6'] => h6:fresh",
+        "p[style-name='Title'] => h1:fresh",
+        "b => strong",
+        "i => em",
+        "u => u",
+        "strike => s",
+      ],
+    },
+  );
+  const html = typeof parsed.value === "string" ? parsed.value.trim() : "";
+  if (!html) {
+    return {
+      editorState: null as Record<string, unknown> | null,
+      plainText: null as string | null,
+      profile: buildImportFidelityProfile({
+        fallbackUsed: true,
+        fallbackReason: "empty_html",
+      }),
+    };
+  }
+
+  const parsedLexical = lexicalEditorStateFromHtmlPhaseA(html);
+  if (!parsedLexical.editorState) {
+    return {
+      editorState: null as Record<string, unknown> | null,
+      plainText: null as string | null,
+      profile: buildImportFidelityProfile({
+        mappedFeatures: parsedLexical.summary.mappedFeatures,
+        downgradedFeatures: parsedLexical.summary.downgradedFeatures,
+        fallbackUsed: true,
+        fallbackReason: "unparseable_html",
+      }),
+    };
+  }
+
+  let serialized = "";
+  try {
+    serialized = JSON.stringify(parsedLexical.editorState);
+  } catch {
+    return {
+      editorState: null as Record<string, unknown> | null,
+      plainText: null as string | null,
+      profile: buildImportFidelityProfile({
+        mappedFeatures: parsedLexical.summary.mappedFeatures,
+        downgradedFeatures: parsedLexical.summary.downgradedFeatures,
+        fallbackUsed: true,
+        fallbackReason: "serialize_error",
+      }),
+    };
+  }
+
+  if (Buffer.byteLength(serialized, "utf8") > MAX_IMPORTED_EDITOR_STATE_BYTES) {
+    return {
+      editorState: null as Record<string, unknown> | null,
+      plainText: null as string | null,
+      profile: buildImportFidelityProfile({
+        mappedFeatures: parsedLexical.summary.mappedFeatures,
+        downgradedFeatures: parsedLexical.summary.downgradedFeatures,
+        fallbackUsed: true,
+        fallbackReason: "editor_state_too_large",
+      }),
+    };
+  }
+
+  const plainText = derivePlainTextFromLexicalEditorState(
+    parsedLexical.editorState,
+    MAX_EXTRACTED_TEXT_CHARS,
+  );
+  return {
+    editorState: parsedLexical.editorState,
+    plainText: normalizeText(plainText),
+    profile: buildImportFidelityProfile({
+      mappedFeatures: parsedLexical.summary.mappedFeatures,
+      downgradedFeatures: parsedLexical.summary.downgradedFeatures,
+      fallbackUsed: false,
+      fallbackReason: null,
+    }),
   };
 }
 
@@ -235,6 +383,11 @@ export async function POST(
       typeof versionData.plainText === "string" ? versionData.plainText : null;
     const derivedPlainText = derivePlainTextFromLexicalEditorState(versionEditorState);
     const lexicalPlainText = derivedPlainText || versionPlainText || "";
+    const versionDocxImportPipeline =
+      typeof versionData.docxImportPipeline === "string"
+        ? versionData.docxImportPipeline.trim()
+        : null;
+    const usePhaseADocxImport = versionDocxImportPipeline === DOCX_IMPORT_PIPELINE_PHASE_A;
     const shouldUseLexicalPlainText =
       versionEditorFormat === LEXICAL_EDITOR_FORMAT &&
       (versionEditorState !== null || versionPlainText !== null);
@@ -253,6 +406,7 @@ export async function POST(
         fileType: fileType || null,
         version,
         textSource: extractSource,
+        docxImportPipeline: versionDocxImportPipeline,
       },
     });
 
@@ -343,6 +497,7 @@ export async function POST(
     try {
       let extractedText = "";
       let importedEditorState: Record<string, unknown> | null = null;
+      let importedFidelityProfile: ImportFidelityProfile | null = null;
 
       if (shouldUseLexicalPlainText) {
         extractedText = normalizeText(lexicalPlainText);
@@ -351,12 +506,23 @@ export async function POST(
         const [buffer] = await fileRef.download();
 
         if (fileType === DOCX_MIME) {
-          const imported = await importDocxAsLexical({ buffer });
-          if (imported?.editorState) {
-            importedEditorState = imported.editorState;
-            extractedText = imported.plainText;
+          if (usePhaseADocxImport) {
+            const imported = await importDocxAsLexicalPhaseA({ buffer });
+            importedFidelityProfile = imported.profile;
+            if (imported.editorState && imported.plainText) {
+              importedEditorState = imported.editorState;
+              extractedText = imported.plainText;
+            } else {
+              extractedText = normalizeText(await extractText(buffer, fileType));
+            }
           } else {
-            extractedText = normalizeText(await extractText(buffer, fileType));
+            const imported = await importDocxAsLexicalLegacy({ buffer });
+            if (imported?.editorState) {
+              importedEditorState = imported.editorState;
+              extractedText = imported.plainText;
+            } else {
+              extractedText = normalizeText(await extractText(buffer, fileType));
+            }
           }
         } else {
           extractedText = normalizeText(await extractText(buffer, fileType));
@@ -383,6 +549,7 @@ export async function POST(
             editorFormat: LEXICAL_EDITOR_FORMAT,
             editorState: importedEditorState,
             plainText: extractedText || null,
+            importFidelityProfile: importedFidelityProfile,
             updatedAt: new Date(),
             updatedBy: uid,
           },
@@ -392,6 +559,25 @@ export async function POST(
         await docRef.set(
           {
             [`versionMeta.items.v${version}.editorFormat`]: LEXICAL_EDITOR_FORMAT,
+            [`versionMeta.items.v${version}.importFidelityProfile`]: importedFidelityProfile,
+            updatedAt: new Date(),
+            updatedBy: uid,
+          },
+          { merge: true },
+        );
+      } else if (importedFidelityProfile) {
+        const versionRef = docRef.collection("versions").doc(`v${version}`);
+        await versionRef.set(
+          {
+            importFidelityProfile: importedFidelityProfile,
+            updatedAt: new Date(),
+            updatedBy: uid,
+          },
+          { merge: true },
+        );
+        await docRef.set(
+          {
+            [`versionMeta.items.v${version}.importFidelityProfile`]: importedFidelityProfile,
             updatedAt: new Date(),
             updatedBy: uid,
           },

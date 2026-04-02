@@ -8,11 +8,13 @@ import { ContentEditable } from "@lexical/react/LexicalContentEditable";
 import { ListPlugin } from "@lexical/react/LexicalListPlugin";
 import { CheckListPlugin } from "@lexical/react/LexicalCheckListPlugin";
 import { LinkPlugin } from "@lexical/react/LexicalLinkPlugin";
+import { TablePlugin } from "@lexical/react/LexicalTablePlugin";
 import { LexicalErrorBoundary } from "@lexical/react/LexicalErrorBoundary";
 import { HeadingNode, QuoteNode } from "@lexical/rich-text";
 import { ListItemNode, ListNode } from "@lexical/list";
 import { LinkNode } from "@lexical/link";
 import { CodeNode } from "@lexical/code";
+import { TableCellNode, TableNode, TableRowNode } from "@lexical/table";
 
 type LexicalReadOnlyViewerProps = {
   namespace: string;
@@ -49,6 +51,11 @@ const lexicalTheme: InitialConfigType["theme"] = {
     code: "rounded bg-slate-100 px-1 py-0.5 font-mono text-[0.95em]",
   },
   link: "text-sky-700 underline",
+  table: "my-3 w-full border-collapse border border-slate-300",
+  tableRow: "border border-slate-300",
+  tableCell: "border border-slate-300 px-2 py-1 align-top",
+  tableCellHeader:
+    "border border-slate-300 bg-slate-100 px-2 py-1 align-top font-semibold text-slate-800",
 };
 
 function parseInitialEditorState(value: Record<string, unknown>) {
@@ -66,7 +73,17 @@ export function LexicalReadOnlyViewer(props: LexicalReadOnlyViewerProps) {
     () => ({
       namespace,
       theme: lexicalTheme,
-      nodes: [HeadingNode, QuoteNode, ListNode, ListItemNode, LinkNode, CodeNode],
+      nodes: [
+        HeadingNode,
+        QuoteNode,
+        ListNode,
+        ListItemNode,
+        LinkNode,
+        CodeNode,
+        TableNode,
+        TableRowNode,
+        TableCellNode,
+      ],
       onError: (error: Error) => {
         throw error;
       },
@@ -85,10 +102,10 @@ export function LexicalReadOnlyViewer(props: LexicalReadOnlyViewerProps) {
         placeholder={null}
         ErrorBoundary={LexicalErrorBoundary}
       />
-      <ListPlugin />
+      <ListPlugin hasStrictIndent />
       <CheckListPlugin />
       <LinkPlugin />
+      <TablePlugin hasCellMerge hasCellBackgroundColor />
     </LexicalComposer>
   );
 }
-
