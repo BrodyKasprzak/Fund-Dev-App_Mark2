@@ -17,6 +17,7 @@ import {
   processDocumentExportQueueBatch,
   triggerExportWorkerKick,
 } from "@/lib/documents/exportJobs";
+import { derivePlainTextFromLexicalEditorState } from "@/lib/documents/lexicalPlainText";
 
 export const runtime = "nodejs";
 
@@ -31,7 +32,6 @@ type SaveEditorBody = {
   changeSummary?: unknown;
   editorFormat?: unknown;
   editorState?: unknown;
-  plainText?: unknown;
 };
 
 type FirestoreDateLike =
@@ -99,17 +99,6 @@ function normalizeChangeSummary(value: unknown) {
   const summary = value.trim().replace(/\s+/g, " ");
   if (!summary) return null;
   return summary.slice(0, MAX_CHANGE_SUMMARY_LENGTH);
-}
-
-function normalizePlainText(value: unknown) {
-  if (typeof value !== "string") return "";
-  return value
-    .replace(/\r\n/g, "\n")
-    .replace(/\u0000/g, "")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim()
-    .slice(0, MAX_PLAIN_TEXT_CHARS);
 }
 
 function parseEditorState(value: unknown) {
@@ -188,7 +177,8 @@ export async function POST(
       );
     }
 
-    const plainText = normalizePlainText(body.plainText);
+    // Derive plain text server-side so chunking/search always follows canonical rich editor state.
+    const plainText = derivePlainTextFromLexicalEditorState(editorState, MAX_PLAIN_TEXT_CHARS);
     const now = new Date();
 
     const docRef = adminDb

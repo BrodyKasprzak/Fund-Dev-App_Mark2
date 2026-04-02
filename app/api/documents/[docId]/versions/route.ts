@@ -371,6 +371,12 @@ export async function GET(
   try {
     const { orgId, uid } = await requireDocumentReadAccess(req);
     const { docId } = await context.params;
+    const { searchParams } = new URL(req.url);
+    const modeParam = (searchParams.get("mode") || "all").trim().toLowerCase();
+    if (modeParam !== "all" && modeParam !== "current") {
+      return NextResponse.json({ error: "mode must be one of: all, current" }, { status: 400 });
+    }
+    const currentOnly = modeParam === "current";
 
     if (!isValidDocId(docId)) {
       return NextResponse.json({ error: "Invalid docId" }, { status: 400 });
@@ -406,6 +412,34 @@ export async function GET(
       docData.currentVersionNumber,
       normalizeVersion(docData.version, 1),
     );
+
+    if (currentOnly) {
+      const currentVersionSnap = await docRef
+        .collection("versions")
+        .doc(`v${currentVersionNumber}`)
+        .get();
+
+      let currentVersion: ReturnType<typeof serializeVersion> | null = null;
+      if (currentVersionSnap.exists) {
+        currentVersion = serializeVersion(
+          currentVersionSnap.data() as VersionDocRecord,
+          currentVersionNumber,
+        );
+      } else {
+        const fromMeta = fallbackVersionsFromVersionMeta(docData, currentVersionNumber);
+        currentVersion = fromMeta.find((row) => row.version === currentVersionNumber) || null;
+      }
+
+      if (!currentVersion) {
+        currentVersion = fallbackCurrentVersionFromParentDocument(docData, currentVersionNumber);
+      }
+
+      return NextResponse.json({
+        ok: true,
+        currentVersionNumber,
+        versions: currentVersion ? [currentVersion] : [],
+      });
+    }
 
     const versionsSnap = await docRef
       .collection("versions")

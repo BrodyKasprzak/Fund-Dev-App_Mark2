@@ -8,6 +8,7 @@ import {
   StaleDocumentVersionError,
 } from "@/lib/documentChunkIngestion";
 import { LEXICAL_EDITOR_FORMAT } from "@/lib/documents/versionMetadata";
+import { derivePlainTextFromLexicalEditorState } from "@/lib/documents/lexicalPlainText";
 
 export const runtime = "nodejs";
 
@@ -38,6 +39,7 @@ type ExtractTextSource =
 
 type VersionRecord = {
   editorFormat?: unknown;
+  editorState?: unknown;
   plainText?: unknown;
 };
 
@@ -177,10 +179,17 @@ export async function POST(
     const versionData = (versionSnap.data() ?? {}) as VersionRecord;
     const versionEditorFormat =
       typeof versionData.editorFormat === "string" ? versionData.editorFormat : null;
+    const versionEditorState =
+      versionData.editorState && typeof versionData.editorState === "object"
+        ? (versionData.editorState as Record<string, unknown>)
+        : null;
     const versionPlainText =
       typeof versionData.plainText === "string" ? versionData.plainText : null;
+    const derivedPlainText = derivePlainTextFromLexicalEditorState(versionEditorState);
+    const lexicalPlainText = derivedPlainText || versionPlainText || "";
     const shouldUseLexicalPlainText =
-      versionEditorFormat === LEXICAL_EDITOR_FORMAT && versionPlainText !== null;
+      versionEditorFormat === LEXICAL_EDITOR_FORMAT &&
+      (versionEditorState !== null || versionPlainText !== null);
     const extractSource: ExtractTextSource = shouldUseLexicalPlainText
       ? TEXT_SOURCE_LEXICAL_PLAIN_TEXT
       : TEXT_SOURCE_FILE_EXTRACT;
@@ -285,7 +294,7 @@ export async function POST(
 
     try {
       const extractedText = shouldUseLexicalPlainText
-        ? normalizeText(versionPlainText ?? "")
+        ? normalizeText(lexicalPlainText)
         : await (async () => {
             const fileRef = adminStorage.bucket().file(storagePath);
             const [buffer] = await fileRef.download();

@@ -7,12 +7,15 @@ import { useAuth } from "@/lib/AuthContext";
 import { storage } from "@/lib/firebaseClient";
 import type { RagCitation } from "@/lib/rag/types";
 import { WorkspaceTopNav } from "@/components/workspace/WorkspaceTopNav";
+import { LexicalReadOnlyViewer } from "@/components/editor/LexicalReadOnlyViewer";
+import { LEXICAL_EDITOR_FORMAT } from "@/lib/documents/versionMetadata";
 
 type DocStatus = "ready" | "processing" | "failed";
 type TextStatus = "pending" | "processing" | "ready" | "failed";
 type ChatVisibility = "private";
 type WorkspaceMode = "documents" | "chat-private";
 type SidebarPanel = "documents" | "history";
+type VersionLoadMode = "current" | "all";
 
 type DocumentListItem = {
   id: string;
@@ -146,6 +149,7 @@ const DOC_WINDOW_LIMIT = 50_000;
 const CHUNK_VIEW_OFFSET_PADDING = 8_000;
 const RECENT_DOCS_DEFAULT_LIMIT = 10;
 const MAX_DOWNLOAD_FILENAME_LENGTH = 220;
+const MAX_RICH_PREVIEW_PLAIN_TEXT_CHARS = 80_000;
 
 function parseWorkspaceMode(raw: string | null): WorkspaceMode {
   if (raw === "chat-private") return "chat-private";
@@ -157,6 +161,11 @@ function asOptionalString(value: unknown) {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length ? trimmed : null;
+}
+
+function asEditorStateObject(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
 }
 
 function formatDate(iso: string | null) {
@@ -500,6 +509,7 @@ export default function DocumentsPage() {
   const [versionHistoryLoading, setVersionHistoryLoading] = useState(false);
   const [versionHistoryError, setVersionHistoryError] = useState<string | null>(null);
   const [versions, setVersions] = useState<DocumentVersionItem[]>([]);
+  const [loadedVersionMode, setLoadedVersionMode] = useState<VersionLoadMode | null>(null);
   const [regeneratingVersion, setRegeneratingVersion] = useState<number | null>(null);
 
   const [chatList, setChatList] = useState<ChatSummary[]>([]);
@@ -573,6 +583,23 @@ export default function DocumentsPage() {
     selectedDocStatus === "ready" &&
     selectedDocTextStatus === "ready";
   const canDownloadSelectedDoc = Boolean(selectedDocId && selectedDocStatus === "ready");
+  const currentVersionRow = useMemo(() => {
+    if (!versions.length) return null;
+    return (
+      versions.find((row) => row.isCurrent) ||
+      versions.find((row) => row.version === selectedDocVersion) ||
+      null
+    );
+  }, [selectedDocVersion, versions]);
+  const currentEditorState = asEditorStateObject(currentVersionRow?.editorState);
+  const richPreviewTooLarge =
+    typeof currentVersionRow?.plainText === "string" &&
+    currentVersionRow.plainText.length > MAX_RICH_PREVIEW_PLAIN_TEXT_CHARS;
+  const canRenderRichTextView =
+    Boolean(currentEditorState) &&
+    currentVersionRow?.editorFormat === LEXICAL_EDITOR_FORMAT &&
+    !effectiveHighlightQuery &&
+    !richPreviewTooLarge;
   const extractedText = selectedDoc?.extractedText?.trim() || "";
   const paragraphs = extractedText ? splitParagraphs(extractedText) : [];
 
@@ -684,25 +711,32 @@ export default function DocumentsPage() {
   );
 
   const loadDocumentVersions = useCallback(
-    async (docId: string) => {
+    async (docId: string, mode: VersionLoadMode = "all") => {
       const cleanedDocId = docId.trim();
       if (!cleanedDocId) {
         setVersions([]);
+        setLoadedVersionMode(null);
         return;
       }
 
       setVersionHistoryLoading(true);
       setVersionHistoryError(null);
       try {
-        const res = await authedFetch(`/api/documents/${encodeURIComponent(cleanedDocId)}/versions`);
+        const params = new URLSearchParams();
+        params.set("mode", mode);
+        const res = await authedFetch(
+          `/api/documents/${encodeURIComponent(cleanedDocId)}/versions?${params.toString()}`,
+        );
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data?.error || "Failed to load version history");
         const rows = Array.isArray(data?.versions)
           ? (data.versions as DocumentVersionItem[])
           : [];
         setVersions(rows);
+        setLoadedVersionMode(mode);
       } catch (err: unknown) {
         setVersions([]);
+        setLoadedVersionMode(null);
         if (err instanceof Error) setVersionHistoryError(err.message);
         else setVersionHistoryError("Failed to load version history");
       } finally {
@@ -750,10 +784,17 @@ export default function DocumentsPage() {
   useEffect(() => {
     if (!selectedDocId || !user) {
       setVersions([]);
+      setLoadedVersionMode(null);
       return;
     }
-    void loadDocumentVersions(selectedDocId);
+    void loadDocumentVersions(selectedDocId, "current");
   }, [loadDocumentVersions, selectedDocId, user]);
+
+  useEffect(() => {
+    if (!versionHistoryOpen || !selectedDocId || !user) return;
+    if (loadedVersionMode === "all") return;
+    void loadDocumentVersions(selectedDocId, "all");
+  }, [loadDocumentVersions, loadedVersionMode, selectedDocId, user, versionHistoryOpen]);
 
   async function loadMoreExtractedText() {
     if (!selectedDocId || !selectedDoc?.textWindow?.hasMore || loadingMoreText) return;
@@ -989,6 +1030,7 @@ export default function DocumentsPage() {
     setVersionHistoryOpen(false);
     setVersionHistoryError(null);
     setVersions([]);
+    setLoadedVersionMode(null);
   }, [selectedDocId]);
 
   useEffect(() => {
@@ -1210,7 +1252,7 @@ export default function DocumentsPage() {
         throw new Error(data?.error || "Failed to regenerate exports");
       }
 
-      await loadDocumentVersions(docId);
+      await loadDocumentVersions(docId, "all");
       setVersionHistoryOpen(true);
       setMessage(`Regenerated exports for v${versionNumber}.`);
     } catch (err: unknown) {
@@ -1945,7 +1987,7 @@ export default function DocumentsPage() {
                         ) : null}
                       </div>
                     ) : null}
-                    {selectedDoc?.textWindow ? (
+                    {selectedDoc?.textWindow && !canRenderRichTextView ? (
                       <p className="mt-2 text-xs text-slate-500">
                         Loaded {selectedDoc.textWindow.returnedChars.toLocaleString()} of{" "}
                         {selectedDoc.textWindow.totalChars.toLocaleString()} characters
@@ -1957,7 +1999,18 @@ export default function DocumentsPage() {
                   </div>
 
                   <div className="min-h-[60vh] border border-slate-200 bg-white p-4">
-                    {paragraphs.length === 0 ? (
+                    {richPreviewTooLarge ? (
+                      <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        Rich preview is disabled for very large documents to keep the viewer responsive.
+                        Content is still available below, and Edit mode shows full rich formatting.
+                      </div>
+                    ) : null}
+                    {canRenderRichTextView && currentEditorState ? (
+                      <LexicalReadOnlyViewer
+                        namespace={`document-readonly-${selectedDocId || "unknown"}-${selectedDocVersion}`}
+                        editorState={currentEditorState}
+                      />
+                    ) : paragraphs.length === 0 ? (
                       <div className="flex h-full min-h-[48vh] items-center justify-center text-center">
                         <div className="space-y-3">
                           <p className="text-base font-semibold text-slate-800">Text not available yet</p>
@@ -2002,7 +2055,7 @@ export default function DocumentsPage() {
                       </article>
                     )}
 
-                    {selectedDoc?.textWindow?.hasMore ? (
+                    {selectedDoc?.textWindow?.hasMore && !canRenderRichTextView ? (
                       <div className="mt-4 border-t border-slate-200 pt-4">
                         <button
                           type="button"

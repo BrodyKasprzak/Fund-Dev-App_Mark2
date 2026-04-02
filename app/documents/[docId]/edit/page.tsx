@@ -14,7 +14,6 @@ import { LinkPlugin } from "@lexical/react/LexicalLinkPlugin";
 import { MarkdownShortcutPlugin } from "@lexical/react/LexicalMarkdownShortcutPlugin";
 import { LexicalErrorBoundary } from "@lexical/react/LexicalErrorBoundary";
 import { TRANSFORMERS } from "@lexical/markdown";
-import { $getRoot } from "lexical";
 import { HeadingNode, QuoteNode } from "@lexical/rich-text";
 import { ListItemNode, ListNode } from "@lexical/list";
 import { LinkNode } from "@lexical/link";
@@ -214,7 +213,6 @@ export default function DocumentEditorPage() {
   );
   const [editorDraftState, setEditorDraftState] = useState<Record<string, unknown> | null>(null);
   const [editorSessionKey, setEditorSessionKey] = useState(0);
-  const [plainText, setPlainText] = useState("");
   const [changeSummary, setChangeSummary] = useState("");
   const [savingVersion, setSavingVersion] = useState(false);
   const [downloadingFormat, setDownloadingFormat] = useState<DownloadFormat | null>(null);
@@ -294,7 +292,6 @@ export default function DocumentEditorPage() {
       });
       setInitialEditorState(nextEditorState);
       setEditorDraftState(nextEditorState);
-      setPlainText(normalizedText);
       setEditorSessionKey((value) => value + 1);
       setChangeSummary("");
     } catch (err: unknown) {
@@ -359,7 +356,6 @@ export default function DocumentEditorPage() {
             changeSummary: summary.slice(0, MAX_CHANGE_SUMMARY_LENGTH),
             editorFormat: LEXICAL_EDITOR_FORMAT,
             editorState,
-            plainText,
           }),
         },
       );
@@ -581,7 +577,6 @@ export default function DocumentEditorPage() {
                     onChange={(editorState) => {
                       editorState.read(() => {
                         setEditorDraftState(asEditorStateObject(editorState.toJSON()));
-                        setPlainText($getRoot().getTextContent());
                       });
                     }}
                   />
