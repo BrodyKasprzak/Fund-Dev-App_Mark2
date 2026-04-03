@@ -58,6 +58,9 @@ type SaveEditorResponse = {
 const MAX_CHANGE_SUMMARY_LENGTH = 500;
 const MAX_DOWNLOAD_FILENAME_LENGTH = 220;
 const DEFAULT_FONT_SIZE = "14px";
+const DOCX_PAGE_MAX_WIDTH_PX = 816;
+const DOCX_PAGE_HEIGHT_PX = 1056;
+const DOCX_PAGE_GAP_PX = 14;
 
 const lexicalTheme: InitialConfigType["theme"] = {
   paragraph: "mb-2",
@@ -559,12 +562,18 @@ export default function DocumentEditorPage() {
 
           <section className="mx-auto max-w-[1320px] px-4 pb-16 pt-8 sm:px-8">
             {loading || loadingDoc ? (
-              <div className="mx-auto w-full max-w-[850px] border border-slate-300 bg-white p-10 shadow-[0_6px_24px_rgba(15,23,42,0.08)]">
+              <div
+                className="mx-auto w-full border border-slate-300 bg-white p-10 shadow-[0_6px_24px_rgba(15,23,42,0.08)]"
+                style={{ maxWidth: `${DOCX_PAGE_MAX_WIDTH_PX}px` }}
+              >
                 <div className="h-7 w-56 animate-pulse bg-slate-100" />
-                <div className="mt-6 h-[70vh] animate-pulse bg-slate-50" />
+                <div className="mt-6 min-h-[720px] animate-pulse bg-slate-50 sm:min-h-[1056px]" />
               </div>
             ) : (
-              <div className="mx-auto w-full max-w-[850px] border border-slate-300 bg-white shadow-[0_12px_36px_rgba(15,23,42,0.08)]">
+              <div
+                className="mx-auto w-full border border-slate-300 bg-white shadow-[0_12px_36px_rgba(15,23,42,0.08)]"
+                style={{ maxWidth: `${DOCX_PAGE_MAX_WIDTH_PX}px` }}
+              >
                 {!canEdit ? (
                   <div className="border-b border-amber-300 bg-amber-100/80 px-6 py-3 text-sm text-amber-900">
                     This document is not editable yet. Text must be fully processed before edits can
@@ -572,13 +581,15 @@ export default function DocumentEditorPage() {
                   </div>
                 ) : null}
 
-                <div className="relative min-h-[78vh]">
+                <div
+                  className="doc-page-canvas relative min-h-[720px] sm:min-h-[1056px]"
+                >
                   <RichTextPlugin
                     contentEditable={
-                      <ContentEditable className="min-h-[78vh] w-full resize-y overflow-auto px-[72px] py-[56px] text-[15px] leading-7 text-slate-800 outline-none" />
+                      <ContentEditable className="min-h-[720px] w-full overflow-auto px-[clamp(24px,8vw,96px)] py-[clamp(24px,8vw,96px)] text-[15px] leading-7 text-slate-800 outline-none sm:min-h-[1056px]" />
                     }
                     placeholder={
-                      <div className="pointer-events-none absolute px-[72px] py-[56px] text-sm text-slate-400">
+                      <div className="pointer-events-none absolute px-[clamp(24px,8vw,96px)] py-[clamp(24px,8vw,96px)] text-sm text-slate-400">
                         Start writing...
                       </div>
                     }
@@ -611,6 +622,44 @@ export default function DocumentEditorPage() {
         }
       `}</style>
       <style jsx>{`
+        .doc-page-canvas {
+          background-color: #ffffff;
+        }
+
+        @media (min-width: 640px) {
+          .doc-page-canvas {
+            background-color: #e8edf3;
+            background-image:
+              repeating-linear-gradient(
+                to bottom,
+                #ffffff 0,
+                #ffffff ${DOCX_PAGE_HEIGHT_PX}px,
+                transparent ${DOCX_PAGE_HEIGHT_PX}px,
+                transparent ${DOCX_PAGE_HEIGHT_PX + DOCX_PAGE_GAP_PX}px
+              ),
+              repeating-linear-gradient(
+                to bottom,
+                rgba(148, 163, 184, 0.35) 0,
+                rgba(148, 163, 184, 0.35) 1px,
+                transparent 1px,
+                transparent ${DOCX_PAGE_HEIGHT_PX + DOCX_PAGE_GAP_PX}px
+              ),
+              repeating-linear-gradient(
+                to bottom,
+                transparent 0,
+                transparent ${DOCX_PAGE_HEIGHT_PX - 2}px,
+                rgba(15, 23, 42, 0.11) ${DOCX_PAGE_HEIGHT_PX - 1}px,
+                rgba(15, 23, 42, 0.05) ${DOCX_PAGE_HEIGHT_PX + 2}px,
+                transparent ${DOCX_PAGE_HEIGHT_PX + DOCX_PAGE_GAP_PX}px
+              );
+            background-size: 100% ${DOCX_PAGE_HEIGHT_PX + DOCX_PAGE_GAP_PX}px;
+          }
+
+          .doc-page-canvas :global([contenteditable="true"]) {
+            background: transparent;
+          }
+        }
+
         :global(.workspace-page-fill select) {
           font-size: ${DEFAULT_FONT_SIZE};
         }

@@ -494,7 +494,7 @@ export default function DocumentsPage() {
   const [leftFilter, setLeftFilter] = useState("");
   const [activeFolderId, setActiveFolderId] = useState("all");
   const [docFiltersOpen, setDocFiltersOpen] = useState(true);
-  const [showAllDocs, setShowAllDocs] = useState(false);
+  const [showAllDocs, setShowAllDocs] = useState(true);
   const [detailAnchorQuery, setDetailAnchorQuery] = useState<string | null>(null);
   const [detailOffset, setDetailOffset] = useState<number | null>(null);
   const [viewerHighlightQuery, setViewerHighlightQuery] = useState<string | null>(null);
@@ -552,10 +552,15 @@ export default function DocumentsPage() {
   const visibleDocs = useMemo(() => {
     const q = normalizedLeftFilter.toLowerCase();
     const folderFilter = FOLDER_FILTERS[activeFolderId] || FOLDER_FILTERS.all;
-    return docs.filter((doc) => {
+    const filtered = docs.filter((doc) => {
       if (!folderFilter(doc)) return false;
       if (!q) return true;
       return doc.title.toLowerCase().includes(q);
+    });
+    return filtered.sort((a, b) => {
+      const aTime = Date.parse(a.updatedAt || a.textUpdatedAt || a.createdAt || "") || 0;
+      const bTime = Date.parse(b.updatedAt || b.textUpdatedAt || b.createdAt || "") || 0;
+      return bTime - aTime;
     });
   }, [docs, normalizedLeftFilter, activeFolderId]);
   const showingRecentOnly = activeFolderId === "all" && !normalizedLeftFilter && !showAllDocs;
@@ -1348,8 +1353,8 @@ export default function DocumentsPage() {
 
   if (loading || !user) {
     return (
-      <main className="workspace-page-fill min-h-screen bg-white [font-family:var(--font-geist-sans)]">
-        <div className="w-full min-h-screen bg-white p-3 sm:p-4">
+      <main className="workspace-page-fill min-h-screen bg-[#e3e8ee] [font-family:var(--font-geist-sans)]">
+        <div className="w-full min-h-screen bg-[#e6ebf1] p-3 sm:p-4">
           <div className="h-12 animate-pulse rounded-2xl border border-slate-200 bg-white/90" />
           <div className="grid grid-cols-1 gap-0 lg:grid-cols-[320px_minmax(0,1fr)]">
             <aside className="rounded-2xl border border-slate-200 bg-white/90 p-4">
@@ -1367,7 +1372,7 @@ export default function DocumentsPage() {
   let firstMatchAssigned = false;
 
   return (
-    <main className="workspace-page-fill min-h-screen bg-white [font-family:var(--font-geist-sans)]">
+    <main className="workspace-page-fill min-h-screen bg-[#e3e8ee] [font-family:var(--font-geist-sans)]">
       <a
         href="#documents-main-content"
         className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-white focus:px-3 focus:py-2 focus:text-sm focus:font-semibold focus:text-slate-900"
@@ -1375,7 +1380,7 @@ export default function DocumentsPage() {
         Skip to main content
       </a>
       <WorkspaceTopNav active="documents" />
-      <div className="w-full min-h-screen bg-white pt-0">
+      <div className="w-full min-h-screen bg-[#e6ebf1] pt-0">
         {error || message ? (
           <div className="space-y-2 px-3 pb-2 sm:px-4">
             {error ? (
@@ -1406,7 +1411,7 @@ export default function DocumentsPage() {
           }`}
         >
           <aside
-            className={`sticky top-0 self-start border-l border-slate-200 bg-white lg:order-2 ${
+            className={`sticky top-0 self-start border-l border-slate-300/80 bg-[#edf1f5] lg:order-2 ${
               leftSidebarCollapsed
                 ? "h-[100dvh] p-2"
                 : "h-[100dvh] overflow-y-auto p-4"
@@ -1537,7 +1542,7 @@ export default function DocumentsPage() {
                           const nextValue = e.target.value;
                           setLeftFilter(nextValue);
                           if (nextValue.trim()) setShowAllDocs(true);
-                          else if (activeFolderId === "all") setShowAllDocs(false);
+                          else if (activeFolderId === "all") setShowAllDocs(true);
                         }}
                         placeholder="Search document titles..."
                         className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs"
@@ -1550,7 +1555,7 @@ export default function DocumentsPage() {
                           type="button"
                           onClick={() => {
                             setActiveFolderId("all");
-                            if (!normalizedLeftFilter) setShowAllDocs(false);
+                            if (!normalizedLeftFilter) setShowAllDocs(true);
                           }}
                           className={`mt-1 w-full rounded-lg border px-2.5 py-1.5 text-left text-xs font-medium transition ${
                             activeFolderId === "all"
@@ -1703,108 +1708,108 @@ export default function DocumentsPage() {
 
           <section
             id="documents-main-content"
-            className="min-w-0 bg-white p-5 lg:order-1 lg:min-h-[100dvh] lg:border-r lg:border-slate-200"
+            className="min-w-0 bg-[#e9eef3] p-5 lg:order-1 lg:min-h-[100dvh] lg:border-r lg:border-slate-300/70"
           >
             {workspaceMode === "documents" ? (
               !selectedDocId ? (
                 docsLoading ? (
                   <ViewerSkeleton />
                 ) : (
-                  <div className="space-y-4">
-                    <div className="flex flex-wrap items-start justify-between gap-3 rounded-2xl border border-slate-200/80 bg-slate-50/90 p-4">
-                      <div>
-                        <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                          Documents
-                        </p>
-                        <h2 className="mt-1 text-xl font-semibold tracking-tight text-slate-900">
-                          Desktop View
-                        </h2>
-                        <p className="mt-1 text-sm text-slate-600">
-                          Open any file to enter the full document viewer and editing workspace.
-                        </p>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2 text-xs">
-                        <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 font-medium text-slate-700">
-                          {activeFilterLabel}
-                        </span>
-                        <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 font-medium text-slate-700">
-                          {showingRecentOnly
-                            ? `Top ${Math.min(RECENT_DOCS_DEFAULT_LIMIT, displayedDocs.length)}`
-                            : `${displayedDocs.length} shown`}
-                        </span>
-                        {activeFolderId === "all" &&
-                        !normalizedLeftFilter &&
-                        visibleDocs.length > RECENT_DOCS_DEFAULT_LIMIT ? (
-                          <button
-                            type="button"
-                            onClick={() => setShowAllDocs((current) => !current)}
-                            className="rounded-full border border-slate-300 bg-white px-2.5 py-1 font-semibold text-slate-700 transition hover:bg-slate-100"
-                          >
-                            {showAllDocs ? "Top 10" : "Show all"}
-                          </button>
-                        ) : null}
-                      </div>
-                    </div>
-
-                    <div className="relative min-h-[66vh] overflow-hidden rounded-3xl border border-slate-200/80 bg-gradient-to-br from-white via-slate-50 to-sky-50 p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] sm:p-6">
-                      <div
-                        aria-hidden="true"
-                        className="pointer-events-none absolute inset-0 opacity-40"
-                        style={{
-                          backgroundImage:
-                            "radial-gradient(circle at 18% 18%, rgba(14,116,144,0.13), transparent 38%), radial-gradient(circle at 82% 72%, rgba(30,64,175,0.1), transparent 36%)",
+                  <div className="min-h-[74vh]">
+                    <div className="mb-4 flex flex-wrap items-center justify-end gap-2 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveFolderId("all");
+                          setLeftFilter("");
+                          setShowAllDocs(true);
                         }}
-                      />
-                      {visibleDocs.length === 0 ? (
-                        <div className="relative flex min-h-[58vh] items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white/80 p-8 text-center">
-                          <div className="space-y-2">
-                            <p className="text-base font-semibold text-slate-900">No documents match this view</p>
-                            <p className="text-sm text-slate-500">
-                              Adjust folder options on the right, or upload a new file.
-                            </p>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="relative grid grid-cols-2 gap-3 pb-2 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4 xl:grid-cols-5">
-                          {displayedDocs.map((doc, idx) => {
-                            const xOffset = ((idx * 3) % 5) - 2;
-                            const yOffset = (idx % 4) * 5;
-                            const rotation = ((idx % 2 === 0 ? -1 : 1) * ((idx % 3) + 1)) / 2;
-                            return (
-                              <button
-                                key={doc.id}
-                                type="button"
-                                onClick={() => openDocument(doc.id)}
-                                className="group min-h-[136px] rounded-2xl border border-slate-200/90 bg-white/95 p-3 text-left shadow-[0_10px_25px_rgba(15,23,42,0.07)] transition hover:border-slate-300 hover:shadow-[0_14px_30px_rgba(15,23,42,0.12)] sm:min-h-[150px] sm:p-4"
-                                style={{
-                                  transform: `translate(${xOffset}px, ${yOffset}px) rotate(${rotation}deg)`,
-                                }}
-                              >
-                                <div className="flex items-start justify-between gap-2">
-                                  <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-sky-100 bg-sky-50 text-sky-700">
-                                    <DocumentIcon />
-                                  </span>
-                                  <span
-                                    className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${documentTextStatusClasses(doc.textStatus)}`}
-                                  >
-                                    {doc.textStatus}
-                                  </span>
-                                </div>
-                                <p className="mt-3 line-clamp-2 text-sm font-semibold leading-snug text-slate-900">
-                                  {doc.title}
-                                </p>
-                                <div className="mt-3 flex items-center justify-between gap-2 text-[11px] text-slate-500">
-                                  <span className="truncate">{formatDate(doc.updatedAt || doc.createdAt)}</span>
-                                  <span className="truncate font-semibold text-slate-600">
-                                    {formatFileTypeLabel(doc.fileType)}
-                                  </span>
-                                </div>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
+                        className="rounded-full border border-slate-400/80 bg-white px-2.5 py-1 font-semibold text-slate-700 transition hover:bg-slate-100"
+                      >
+                        Most recent
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveFolderId("all");
+                          setLeftFilter("");
+                          setShowAllDocs(false);
+                        }}
+                        className={`rounded-full border px-2.5 py-1 font-semibold transition ${
+                          activeFolderId === "all" && !normalizedLeftFilter && !showAllDocs
+                            ? "border-slate-500 bg-slate-700 text-white"
+                            : "border-slate-400/80 bg-white text-slate-700 hover:bg-slate-100"
+                        }`}
+                      >
+                        Top 10
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveFolderId("all");
+                          setLeftFilter("");
+                          setShowAllDocs(true);
+                        }}
+                        className={`rounded-full border px-2.5 py-1 font-semibold transition ${
+                          activeFolderId === "all" && !normalizedLeftFilter && showAllDocs
+                            ? "border-slate-500 bg-slate-700 text-white"
+                            : "border-slate-400/80 bg-white text-slate-700 hover:bg-slate-100"
+                        }`}
+                      >
+                        Show all
+                      </button>
+                      <span className="rounded-full border border-slate-300/90 bg-white/90 px-2.5 py-1 font-medium text-slate-700">
+                        {activeFilterLabel}
+                      </span>
+                      <span className="rounded-full border border-slate-300/90 bg-white/90 px-2.5 py-1 font-medium text-slate-700">
+                        {showingRecentOnly
+                          ? `Top ${Math.min(RECENT_DOCS_DEFAULT_LIMIT, displayedDocs.length)}`
+                          : `${displayedDocs.length} shown`}
+                      </span>
                     </div>
+                    {visibleDocs.length === 0 ? (
+                      <div className="flex min-h-[62vh] items-center justify-center border border-dashed border-slate-400/70 bg-white/85 p-8 text-center">
+                        <div className="space-y-2">
+                          <p className="text-base font-semibold text-slate-900">No documents match this view</p>
+                          <p className="text-sm text-slate-600">
+                            Adjust folder options on the right, or upload a new file.
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-2 gap-3 pb-2 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4 xl:grid-cols-5">
+                        {displayedDocs.map((doc) => {
+                          return (
+                            <button
+                              key={doc.id}
+                              type="button"
+                              onClick={() => openDocument(doc.id)}
+                              className="group min-h-[136px] rounded-2xl border border-slate-300/90 bg-white/95 p-3 text-left shadow-[0_10px_25px_rgba(15,23,42,0.09)] transition hover:border-slate-400 hover:shadow-[0_14px_30px_rgba(15,23,42,0.14)] sm:min-h-[150px] sm:p-4"
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-700">
+                                  <DocumentIcon />
+                                </span>
+                                <span
+                                  className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${documentTextStatusClasses(doc.textStatus)}`}
+                                >
+                                  {doc.textStatus}
+                                </span>
+                              </div>
+                              <p className="mt-3 line-clamp-2 text-sm font-semibold leading-snug text-slate-900">
+                                {doc.title}
+                              </p>
+                              <div className="mt-3 flex items-center justify-between gap-2 text-[11px] text-slate-500">
+                                <span className="truncate">{formatDate(doc.updatedAt || doc.createdAt)}</span>
+                                <span className="truncate font-semibold text-slate-600">
+                                  {formatFileTypeLabel(doc.fileType)}
+                                </span>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 )
               ) : docLoading || docsLoading ? (

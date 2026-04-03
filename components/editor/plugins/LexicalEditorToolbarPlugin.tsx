@@ -44,8 +44,17 @@ import {
   UNDO_COMMAND,
 } from "lexical";
 
-type ToolbarBlockType = "paragraph" | "h1" | "h2" | "h3" | "quote" | "code";
-type ToolbarAlignment = "left" | "center" | "right";
+type ToolbarBlockType =
+  | "paragraph"
+  | "h1"
+  | "h2"
+  | "h3"
+  | "h4"
+  | "h5"
+  | "h6"
+  | "quote"
+  | "code";
+type ToolbarAlignment = "left" | "center" | "right" | "justify";
 type ToolbarListType = ListType | null;
 
 type ToolbarState = {
@@ -61,6 +70,8 @@ type ToolbarState = {
   isInlineCode: boolean;
   isLink: boolean;
   fontSize: string;
+  fontFamily: string;
+  textColor: string;
   highlight: string;
 };
 
@@ -68,9 +79,33 @@ type ToolbarPluginProps = {
   readOnly?: boolean;
 };
 
-const DEFAULT_FONT_SIZE = "14px";
+const DEFAULT_FONT_SIZE = "11pt";
+const DEFAULT_FONT_FAMILY = "Calibri";
+const DEFAULT_TEXT_COLOR = "#111827";
 const DEFAULT_HIGHLIGHT = "transparent";
-const FONT_SIZE_OPTIONS = ["12px", "14px", "16px", "18px", "20px", "24px", "28px"];
+const WORD_POINT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72];
+const FONT_SIZE_OPTIONS = WORD_POINT_SIZES.map((size) => `${size}pt`);
+const FONT_FAMILY_OPTIONS = [
+  { label: "Calibri", value: "Calibri" },
+  { label: "Arial", value: "Arial" },
+  { label: "Times New Roman", value: "\"Times New Roman\"" },
+  { label: "Georgia", value: "Georgia" },
+  { label: "Verdana", value: "Verdana" },
+  { label: "Tahoma", value: "Tahoma" },
+  { label: "Trebuchet MS", value: "\"Trebuchet MS\"" },
+  { label: "Courier New", value: "\"Courier New\"" },
+];
+const TEXT_COLOR_OPTIONS = [
+  { label: "Auto", value: DEFAULT_TEXT_COLOR },
+  { label: "Black", value: "#000000" },
+  { label: "Gray", value: "#374151" },
+  { label: "Red", value: "#b91c1c" },
+  { label: "Orange", value: "#c2410c" },
+  { label: "Gold", value: "#a16207" },
+  { label: "Green", value: "#166534" },
+  { label: "Blue", value: "#1d4ed8" },
+  { label: "Purple", value: "#7e22ce" },
+];
 const HIGHLIGHT_OPTIONS = [
   { label: "None", value: "transparent" },
   { label: "Yellow", value: "#fef08a" },
@@ -92,19 +127,76 @@ const INITIAL_TOOLBAR_STATE: ToolbarState = {
   isInlineCode: false,
   isLink: false,
   fontSize: DEFAULT_FONT_SIZE,
+  fontFamily: DEFAULT_FONT_FAMILY,
+  textColor: DEFAULT_TEXT_COLOR,
   highlight: DEFAULT_HIGHLIGHT,
 };
 
 function normalizeAlignment(value: ElementFormatType | ""): ToolbarAlignment {
-  if (value === "center" || value === "right") return value;
+  if (value === "center" || value === "right" || value === "justify") return value;
   return "left";
 }
 
 function normalizeFontSize(value: string) {
   const normalized = value.trim().toLowerCase();
   if (!normalized) return DEFAULT_FONT_SIZE;
-  if (/^\d+px$/.test(normalized)) return normalized;
-  return DEFAULT_FONT_SIZE;
+  const match = normalized.match(/^(\d+(?:\.\d+)?)(pt|px)?$/);
+  if (!match) return DEFAULT_FONT_SIZE;
+
+  const raw = Number(match[1]);
+  if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_FONT_SIZE;
+  const unit = match[2] || "pt";
+  const points = unit === "px" ? (raw * 72) / 96 : raw;
+
+  const nearest = WORD_POINT_SIZES.reduce((best, candidate) => {
+    return Math.abs(candidate - points) < Math.abs(best - points) ? candidate : best;
+  }, WORD_POINT_SIZES[0]);
+  return `${nearest}pt`;
+}
+
+function normalizeFontFamily(value: string) {
+  const normalized = value.trim().replace(/^["']|["']$/g, "").toLowerCase();
+  if (!normalized) return DEFAULT_FONT_FAMILY;
+  const matched = FONT_FAMILY_OPTIONS.find((option) => {
+    const candidate = option.value.replace(/^["']|["']$/g, "").toLowerCase();
+    return candidate === normalized;
+  });
+  return matched?.value || DEFAULT_FONT_FAMILY;
+}
+
+function normalizeTextColor(value: string) {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return DEFAULT_TEXT_COLOR;
+
+  const shortHex = normalized.match(/^#([0-9a-f]{3})$/i);
+  if (shortHex) {
+    const [r, g, b] = shortHex[1].split("");
+    const hex = `#${r}${r}${g}${g}${b}${b}`;
+    return TEXT_COLOR_OPTIONS.some((option) => option.value === hex)
+      ? hex
+      : DEFAULT_TEXT_COLOR;
+  }
+
+  const longHex = normalized.match(/^#([0-9a-f]{6})$/i);
+  if (longHex) {
+    const hex = `#${longHex[1].toLowerCase()}`;
+    return TEXT_COLOR_OPTIONS.some((option) => option.value === hex)
+      ? hex
+      : DEFAULT_TEXT_COLOR;
+  }
+
+  const rgbMatch = normalized.match(/^rgb\((.+)\)$/);
+  if (!rgbMatch) return DEFAULT_TEXT_COLOR;
+  const channels = rgbMatch[1].split(",").map((part) => part.trim());
+  if (channels.length < 3) return DEFAULT_TEXT_COLOR;
+
+  const nums = channels.slice(0, 3).map((raw) => Number(raw));
+  if (nums.some((num) => !Number.isFinite(num))) return DEFAULT_TEXT_COLOR;
+  const toHex = (num: number) => Math.max(0, Math.min(255, Math.round(num))).toString(16).padStart(2, "0");
+  const hex = `#${toHex(nums[0])}${toHex(nums[1])}${toHex(nums[2])}`;
+  return TEXT_COLOR_OPTIONS.some((option) => option.value === hex)
+    ? hex
+    : DEFAULT_TEXT_COLOR;
 }
 
 function normalizeHighlight(value: string) {
@@ -135,6 +227,8 @@ function isSameToolbarState(a: ToolbarState, b: ToolbarState) {
     a.isInlineCode === b.isInlineCode &&
     a.isLink === b.isLink &&
     a.fontSize === b.fontSize &&
+    a.fontFamily === b.fontFamily &&
+    a.textColor === b.textColor &&
     a.highlight === b.highlight
   );
 }
@@ -152,7 +246,15 @@ function readToolbarState(editor: LexicalEditor): ToolbarState {
     let blockType: ToolbarBlockType = "paragraph";
     if ($isHeadingNode(topLevel)) {
       const tag = topLevel.getTag();
-      if (tag === "h1" || tag === "h2" || tag === "h3") blockType = tag;
+      if (
+        tag === "h1" ||
+        tag === "h2" ||
+        tag === "h3" ||
+        tag === "h4" ||
+        tag === "h5" ||
+        tag === "h6"
+      )
+        blockType = tag;
       else blockType = "paragraph";
     } else if ($isQuoteNode(topLevel)) {
       blockType = "quote";
@@ -175,6 +277,12 @@ function readToolbarState(editor: LexicalEditor): ToolbarState {
       isLink: Boolean(linkNode),
       fontSize: normalizeFontSize(
         $getSelectionStyleValueForProperty(selection, "font-size", DEFAULT_FONT_SIZE),
+      ),
+      fontFamily: normalizeFontFamily(
+        $getSelectionStyleValueForProperty(selection, "font-family", DEFAULT_FONT_FAMILY),
+      ),
+      textColor: normalizeTextColor(
+        $getSelectionStyleValueForProperty(selection, "color", DEFAULT_TEXT_COLOR),
       ),
       highlight: normalizeHighlight(
         $getSelectionStyleValueForProperty(
@@ -228,7 +336,14 @@ function applyBlockType(editor: LexicalEditor, blockType: ToolbarBlockType) {
       $setBlocksType(selection, () => $createParagraphNode());
       return;
     }
-    if (blockType === "h1" || blockType === "h2" || blockType === "h3") {
+    if (
+      blockType === "h1" ||
+      blockType === "h2" ||
+      blockType === "h3" ||
+      blockType === "h4" ||
+      blockType === "h5" ||
+      blockType === "h6"
+    ) {
       $setBlocksType(selection, () => $createHeadingNode(blockType));
       return;
     }
@@ -252,6 +367,7 @@ function clearFormatting(editor: LexicalEditor) {
     $setBlocksType(selection, () => $createParagraphNode());
     $patchStyleText(selection, {
       "font-size": null,
+      "font-family": null,
       "background-color": null,
       color: null,
     });
@@ -347,6 +463,7 @@ export function LexicalEditorToolbarPlugin(props: ToolbarPluginProps) {
         { label: "Left", value: "left" },
         { label: "Center", value: "center" },
         { label: "Right", value: "right" },
+        { label: "Justify", value: "justify" },
       ] as const,
     [],
   );
@@ -415,6 +532,44 @@ export function LexicalEditorToolbarPlugin(props: ToolbarPluginProps) {
         </label>
 
         <label className="flex items-center gap-1 text-xs text-slate-600">
+          Font
+          <select
+            value={toolbar.fontFamily}
+            onChange={(event) =>
+              applyTextStyle(editor, {
+                "font-family": normalizeFontFamily(event.target.value),
+              })
+            }
+            className="max-w-[170px] rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-700"
+          >
+            {FONT_FAMILY_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="flex items-center gap-1 text-xs text-slate-600">
+          Color
+          <select
+            value={toolbar.textColor}
+            onChange={(event) =>
+              applyTextStyle(editor, {
+                color: normalizeTextColor(event.target.value),
+              })
+            }
+            className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-700"
+          >
+            {TEXT_COLOR_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="flex items-center gap-1 text-xs text-slate-600">
           Highlight
           <select
             value={toolbar.highlight}
@@ -447,6 +602,9 @@ export function LexicalEditorToolbarPlugin(props: ToolbarPluginProps) {
             <option value="h1">Heading 1</option>
             <option value="h2">Heading 2</option>
             <option value="h3">Heading 3</option>
+            <option value="h4">Heading 4</option>
+            <option value="h5">Heading 5</option>
+            <option value="h6">Heading 6</option>
             <option value="quote">Block Quote</option>
             <option value="code">Code Block</option>
           </select>
