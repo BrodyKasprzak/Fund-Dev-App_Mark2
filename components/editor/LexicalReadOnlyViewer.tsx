@@ -22,40 +22,44 @@ type LexicalReadOnlyViewerProps = {
 };
 
 const lexicalTheme: InitialConfigType["theme"] = {
-  paragraph: "mb-2 whitespace-pre-wrap",
+  paragraph: "lexical-doc-paragraph whitespace-pre-wrap",
   code: "my-3 block rounded-md bg-slate-900 px-3 py-2 font-mono text-[13px] leading-6 text-slate-100",
-  quote: "border-l-2 border-slate-300 pl-3 italic text-slate-700",
+  quote: "lexical-doc-quote border-l-2 border-slate-300 pl-4 text-slate-700",
   heading: {
-    h1: "text-2xl font-semibold leading-tight mt-4 mb-2",
-    h2: "text-xl font-semibold leading-tight mt-4 mb-2",
-    h3: "text-lg font-semibold leading-tight mt-3 mb-2",
-    h4: "text-base font-semibold leading-tight mt-3 mb-2",
-    h5: "text-sm font-semibold leading-tight mt-2 mb-1",
-    h6: "text-xs font-semibold leading-tight mt-2 mb-1 uppercase tracking-wide",
+    h1: "lexical-doc-h1",
+    h2: "lexical-doc-h2",
+    h3: "lexical-doc-h3",
+    h4: "lexical-doc-h4",
+    h5: "lexical-doc-h5",
+    h6: "lexical-doc-h6",
   },
   list: {
-    listitem: "ml-5",
-    listitemChecked: "ml-5 list-none",
-    listitemUnchecked: "ml-5 list-none",
+    listitem: "lexical-doc-listitem",
+    listitemChecked: "lexical-doc-listitem lexical-doc-listitem-check list-none",
+    listitemUnchecked: "lexical-doc-listitem lexical-doc-listitem-check list-none",
     nested: {
-      listitem: "ml-4",
+      listitem: "lexical-doc-listitem-nested",
     },
-    olDepth: ["list-decimal", "list-[lower-alpha]", "list-[lower-roman]"],
-    ul: "list-disc",
+    olDepth: [
+      "lexical-doc-ol-depth-1 list-decimal",
+      "lexical-doc-ol-depth-2 list-[lower-alpha]",
+      "lexical-doc-ol-depth-3 list-[lower-roman]",
+    ],
+    ul: "lexical-doc-ul list-disc",
   },
   text: {
-    bold: "font-semibold",
+    bold: "font-bold",
     italic: "italic",
     underline: "underline",
     strikethrough: "line-through",
     code: "rounded bg-slate-100 px-1 py-0.5 font-mono text-[0.95em]",
   },
-  link: "text-sky-700 underline",
-  table: "my-3 w-full border-collapse border border-slate-300",
-  tableRow: "border border-slate-300",
-  tableCell: "border border-slate-300 px-2 py-1 align-top",
+  link: "lexical-doc-link text-sky-700 underline decoration-sky-500/70 underline-offset-2",
+  table: "lexical-doc-table",
+  tableRow: "lexical-doc-table-row",
+  tableCell: "lexical-doc-table-cell align-top",
   tableCellHeader:
-    "border border-slate-300 bg-slate-100 px-2 py-1 align-top font-semibold text-slate-800",
+    "lexical-doc-table-cell lexical-doc-table-header align-top font-semibold text-slate-800",
 };
 
 function parseInitialEditorState(value: Record<string, unknown>) {
@@ -97,7 +101,7 @@ export function LexicalReadOnlyViewer(props: LexicalReadOnlyViewerProps) {
     <LexicalComposer initialConfig={initialConfig}>
       <RichTextPlugin
         contentEditable={
-          <ContentEditable className="min-h-[48vh] w-full overflow-auto p-0 text-[15px] leading-7 text-slate-700 outline-none" />
+          <ContentEditable className="lexical-doc-viewer min-h-[48vh] w-full overflow-auto p-0 text-[15px] leading-7 text-slate-700 outline-none" />
         }
         placeholder={null}
         ErrorBoundary={LexicalErrorBoundary}
@@ -106,6 +110,116 @@ export function LexicalReadOnlyViewer(props: LexicalReadOnlyViewerProps) {
       <CheckListPlugin />
       <LinkPlugin />
       <TablePlugin hasCellMerge hasCellBackgroundColor />
+      <style jsx global>{`
+        .lexical-doc-viewer {
+          --lexical-indent-base-value: 34px;
+          color: #334155;
+          line-height: 1.58;
+          word-break: break-word;
+        }
+
+        .lexical-doc-viewer .lexical-doc-paragraph {
+          margin: 0 0 0.62em 0;
+        }
+
+        .lexical-doc-viewer .lexical-doc-h1 {
+          margin: 0.92em 0 0.42em;
+          color: #0f172a;
+          font-size: 2rem;
+          font-weight: 700;
+          letter-spacing: -0.01em;
+          line-height: 1.24;
+        }
+
+        .lexical-doc-viewer .lexical-doc-h2 {
+          margin: 0.84em 0 0.4em;
+          color: #0f172a;
+          font-size: 1.48rem;
+          font-weight: 700;
+          letter-spacing: -0.006em;
+          line-height: 1.28;
+        }
+
+        .lexical-doc-viewer .lexical-doc-h3 {
+          margin: 0.78em 0 0.36em;
+          color: #0f172a;
+          font-size: 1.2rem;
+          font-weight: 650;
+          line-height: 1.32;
+        }
+
+        .lexical-doc-viewer .lexical-doc-h4 {
+          margin: 0.72em 0 0.32em;
+          color: #0f172a;
+          font-size: 1.06rem;
+          font-weight: 650;
+          line-height: 1.34;
+        }
+
+        .lexical-doc-viewer .lexical-doc-h5 {
+          margin: 0.62em 0 0.3em;
+          color: #0f172a;
+          font-size: 0.94rem;
+          font-weight: 650;
+          line-height: 1.34;
+        }
+
+        .lexical-doc-viewer .lexical-doc-h6 {
+          margin: 0.58em 0 0.26em;
+          color: #334155;
+          font-size: 0.82rem;
+          font-weight: 700;
+          letter-spacing: 0.04em;
+          line-height: 1.36;
+          text-transform: uppercase;
+        }
+
+        .lexical-doc-viewer .lexical-doc-quote {
+          margin: 0.78em 0;
+          color: #475569;
+          font-style: italic;
+        }
+
+        .lexical-doc-viewer ul.lexical-doc-ul,
+        .lexical-doc-viewer ol[class*="lexical-doc-ol-depth"] {
+          margin: 0.2em 0 0.66em;
+          padding-inline-start: 1.55em;
+        }
+
+        .lexical-doc-viewer li.lexical-doc-listitem {
+          margin: 0.08em 0;
+          padding-inline-start: 0.12em;
+        }
+
+        .lexical-doc-viewer li.lexical-doc-listitem > ul.lexical-doc-ul,
+        .lexical-doc-viewer li.lexical-doc-listitem > ol[class*="lexical-doc-ol-depth"] {
+          margin-top: 0.24em;
+          margin-bottom: 0.24em;
+        }
+
+        .lexical-doc-viewer .lexical-doc-table {
+          margin: 0.95em 0 1em;
+          width: 100%;
+          border-collapse: collapse;
+          table-layout: auto;
+        }
+
+        .lexical-doc-viewer .lexical-doc-table-cell {
+          border: 1px solid #cbd5e1;
+          padding: 0.34rem 0.46rem;
+          line-height: 1.42;
+          vertical-align: top;
+        }
+
+        .lexical-doc-viewer .lexical-doc-table-header {
+          background: #f8fafc;
+          font-weight: 700;
+        }
+
+        .lexical-doc-viewer .lexical-doc-link {
+          text-decoration-thickness: from-font;
+        }
+      `}</style>
     </LexicalComposer>
   );
 }

@@ -597,6 +597,7 @@ export default function DocumentsPage() {
     typeof currentVersionRow?.plainText === "string" &&
     currentVersionRow.plainText.length > MAX_RICH_PREVIEW_PLAIN_TEXT_CHARS;
   const richPreviewBlockedBySize = richPreviewTooLarge && !forceFormattedPreview;
+  const richPreviewForcedByUser = richPreviewTooLarge && forceFormattedPreview;
   const canRenderRichTextView =
     Boolean(currentEditorState) &&
     currentVersionRow?.editorFormat === LEXICAL_EDITOR_FORMAT &&
@@ -639,6 +640,10 @@ export default function DocumentsPage() {
   useEffect(() => {
     if (!loading && !user) router.push("/login");
   }, [loading, user, router]);
+
+  useEffect(() => {
+    setForceFormattedPreview(false);
+  }, [selectedDocId, selectedDocVersion]);
 
   useEffect(() => {
     setWorkspaceMode(requestedMode);
@@ -2002,19 +2007,37 @@ export default function DocumentsPage() {
                   </div>
 
                   <div className="min-h-[60vh] border border-slate-200 bg-white p-4">
-                    {richPreviewBlockedBySize ? (
+                    {richPreviewTooLarge ? (
                       <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                        <p>
-                          Rich preview is paused for this large document to keep the page responsive.
-                          You can still open formatted preview if you want an exact visual match.
-                        </p>
-                        <button
-                          type="button"
-                          onClick={() => setForceFormattedPreview(true)}
-                          className="mt-2 rounded-md border border-amber-300 bg-amber-100 px-2 py-1 text-[11px] font-semibold text-amber-900 transition hover:bg-amber-200"
-                        >
-                          Show formatted preview
-                        </button>
+                        {richPreviewBlockedBySize ? (
+                          <>
+                            <p>
+                              Rich preview is paused for this large document to keep the page responsive.
+                              You can still open formatted preview if you want an exact visual match.
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => setForceFormattedPreview(true)}
+                              className="mt-2 rounded-md border border-amber-300 bg-amber-100 px-2 py-1 text-[11px] font-semibold text-amber-900 transition hover:bg-amber-200"
+                            >
+                              Show formatted preview
+                            </button>
+                          </>
+                        ) : richPreviewForcedByUser ? (
+                          <>
+                            <p>
+                              Formatted preview is enabled for this large document and may be slower.
+                              Switch back to plain preview anytime.
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => setForceFormattedPreview(false)}
+                              className="mt-2 rounded-md border border-amber-300 bg-amber-100 px-2 py-1 text-[11px] font-semibold text-amber-900 transition hover:bg-amber-200"
+                            >
+                              Switch to plain preview
+                            </button>
+                          </>
+                        ) : null}
                       </div>
                     ) : null}
                     {canRenderRichTextView && currentEditorState ? (
