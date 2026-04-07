@@ -146,7 +146,6 @@ const FOLDER_FILTER_OPTIONS = [
 const RAG_SNIPPET_MAX_LENGTH = 200;
 const CHAT_MESSAGE_MAX_LENGTH = 4_000;
 const DOC_WINDOW_LIMIT = 50_000;
-const CHUNK_VIEW_OFFSET_PADDING = 8_000;
 const RECENT_DOCS_DEFAULT_LIMIT = 10;
 const MAX_DOWNLOAD_FILENAME_LENGTH = 220;
 const MAX_RICH_PREVIEW_PLAIN_TEXT_CHARS = 80_000;
@@ -986,56 +985,18 @@ export default function DocumentsPage() {
     }
   }
 
-  const resolveHighlightToAnchor = useCallback(
-    async (docId: string, chunkId: string) => {
-      try {
-        const res = await authedFetch(
-          `/api/documents/${encodeURIComponent(docId)}/chunk-context?chunkId=${encodeURIComponent(chunkId)}`,
-        );
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) return;
-        const anchor = typeof data?.anchorQuery === "string" ? data.anchorQuery.trim() : "";
-        const highlightText =
-          typeof data?.highlightText === "string" ? data.highlightText.trim() : "";
-        const chunkStartOffset =
-          typeof data?.startOffset === "number" && Number.isFinite(data.startOffset)
-            ? Math.max(0, Math.floor(data.startOffset))
-            : null;
-
-        setDetailAnchorQuery(anchor || null);
-        setViewerHighlightQuery(highlightText || anchor || null);
-        setDetailOffset(
-          chunkStartOffset !== null
-            ? Math.max(0, chunkStartOffset - CHUNK_VIEW_OFFSET_PADDING)
-            : null,
-        );
-      } catch {
-        setDetailAnchorQuery(null);
-        setViewerHighlightQuery(null);
-        setDetailOffset(null);
-      }
-    },
-    [authedFetch],
-  );
-
   useEffect(() => {
-    if (!deepLinkDocId) {
-      handledDeepLinkRef.current = null;
-      return;
-    }
+    if (loading || !user || !deepLinkDocId) return;
     const key = `${deepLinkDocId}:${deepLinkHighlight ?? ""}`;
     if (handledDeepLinkRef.current === key) return;
     handledDeepLinkRef.current = key;
-    switchToDocumentsMode();
-    setSelectedDocId(deepLinkDocId);
-    if (deepLinkHighlight) {
-      void resolveHighlightToAnchor(deepLinkDocId, deepLinkHighlight);
-      return;
-    }
-    setDetailOffset(null);
-    setDetailAnchorQuery(null);
-    setViewerHighlightQuery(null);
-  }, [deepLinkDocId, deepLinkHighlight, resolveHighlightToAnchor, switchToDocumentsMode]);
+    const next = new URLSearchParams();
+    if (deepLinkHighlight) next.set("highlight", deepLinkHighlight);
+    const nextQuery = next.toString();
+    router.replace(
+      `/documents/${encodeURIComponent(deepLinkDocId)}/edit${nextQuery ? `?${nextQuery}` : ""}`,
+    );
+  }, [deepLinkDocId, deepLinkHighlight, loading, router, user]);
 
   useEffect(() => {
     setStatusInfoOpen(false);
@@ -1276,12 +1237,16 @@ export default function DocumentsPage() {
     }
   }
 
-  function openDocument(docId: string) {
-    switchToDocumentsMode();
-    setDetailOffset(null);
-    setDetailAnchorQuery(null);
-    setViewerHighlightQuery(null);
-    setSelectedDocId(docId);
+  function openDocument(docId: string, highlightChunkId?: string | null) {
+    const cleanedDocId = docId.trim();
+    if (!cleanedDocId) return;
+    const next = new URLSearchParams();
+    const chunkId = (highlightChunkId || "").trim();
+    if (chunkId) next.set("highlight", chunkId);
+    const nextQuery = next.toString();
+    router.push(
+      `/documents/${encodeURIComponent(cleanedDocId)}/edit${nextQuery ? `?${nextQuery}` : ""}`,
+    );
   }
 
   function closeDocument() {
@@ -1302,26 +1267,7 @@ export default function DocumentsPage() {
   }
 
   function openCitationInDocument(citation: RagCitation) {
-    openDocument(citation.docId);
-    setDetailOffset(null);
-    setDetailAnchorQuery(null);
-    setViewerHighlightQuery(null);
-
-    if (citation.chunkId) {
-      void resolveHighlightToAnchor(citation.docId, citation.chunkId);
-      return;
-    }
-
-    const querySource = `${citation.snippet || ""} ${citation.moreContext || ""}`
-      .replace(/\s+/g, " ")
-      .trim();
-    if (querySource) {
-      setDetailAnchorQuery(querySource.slice(0, 120));
-      setViewerHighlightQuery(querySource.slice(0, 200));
-      return;
-    }
-    setDetailAnchorQuery(null);
-    setViewerHighlightQuery(null);
+    openDocument(citation.docId, citation.chunkId || null);
   }
 
   async function copyAssistantMessage(messageId: string, content: string) {

@@ -26,6 +26,8 @@ import {
 } from "@lexical/selection";
 import {
   $createParagraphNode,
+  type ElementNode,
+  $getRoot,
   $findMatchingParent,
   $getSelection,
   $isElementNode,
@@ -71,6 +73,7 @@ type ToolbarState = {
   isLink: boolean;
   fontSize: string;
   fontFamily: string;
+  lineSpacing: string;
   textColor: string;
   highlight: string;
 };
@@ -83,8 +86,15 @@ const DEFAULT_FONT_SIZE = "11pt";
 const DEFAULT_FONT_FAMILY = "Calibri";
 const DEFAULT_TEXT_COLOR = "#111827";
 const DEFAULT_HIGHLIGHT = "transparent";
+const DEFAULT_LINE_SPACING = "1.15";
 const WORD_POINT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72];
 const FONT_SIZE_OPTIONS = WORD_POINT_SIZES.map((size) => `${size}pt`);
+const LINE_SPACING_OPTIONS = [
+  { label: "Single", value: "1" },
+  { label: "1.15", value: "1.15" },
+  { label: "1.5", value: "1.5" },
+  { label: "Double", value: "2" },
+] as const;
 const FONT_FAMILY_OPTIONS = [
   { label: "Calibri", value: "Calibri" },
   { label: "Arial", value: "Arial" },
@@ -128,6 +138,7 @@ const INITIAL_TOOLBAR_STATE: ToolbarState = {
   isLink: false,
   fontSize: DEFAULT_FONT_SIZE,
   fontFamily: DEFAULT_FONT_FAMILY,
+  lineSpacing: DEFAULT_LINE_SPACING,
   textColor: DEFAULT_TEXT_COLOR,
   highlight: DEFAULT_HIGHLIGHT,
 };
@@ -162,6 +173,18 @@ function normalizeFontFamily(value: string) {
     return candidate === normalized;
   });
   return matched?.value || DEFAULT_FONT_FAMILY;
+}
+
+function normalizeLineSpacing(value: string) {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return DEFAULT_LINE_SPACING;
+  const parsed = Number.parseFloat(normalized);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_LINE_SPACING;
+  const nearest = LINE_SPACING_OPTIONS.reduce((best, option) => {
+    const current = Number.parseFloat(option.value);
+    return Math.abs(current - parsed) < Math.abs(best - parsed) ? current : best;
+  }, Number.parseFloat(DEFAULT_LINE_SPACING));
+  return String(nearest);
 }
 
 function normalizeTextColor(value: string) {
@@ -213,6 +236,42 @@ function normalizeUrl(raw: string) {
   return `https://${value}`;
 }
 
+function readStyleProperty(style: string, property: string) {
+  const target = property.trim().toLowerCase();
+  if (!target) return "";
+  const declarations = style
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  for (const declaration of declarations) {
+    const idx = declaration.indexOf(":");
+    if (idx <= 0) continue;
+    const key = declaration.slice(0, idx).trim().toLowerCase();
+    if (key !== target) continue;
+    return declaration.slice(idx + 1).trim();
+  }
+  return "";
+}
+
+function writeStyleProperty(style: string, property: string, value: string | null) {
+  const target = property.trim().toLowerCase();
+  const map = new Map<string, string>();
+  const declarations = style
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  for (const declaration of declarations) {
+    const idx = declaration.indexOf(":");
+    if (idx <= 0) continue;
+    const key = declaration.slice(0, idx).trim().toLowerCase();
+    const val = declaration.slice(idx + 1).trim();
+    if (key && val) map.set(key, val);
+  }
+  if (value === null || value.trim().length === 0) map.delete(target);
+  else map.set(target, value.trim());
+  return [...map.entries()].map(([key, val]) => `${key}: ${val}`).join("; ");
+}
+
 function isSameToolbarState(a: ToolbarState, b: ToolbarState) {
   return (
     a.canUndo === b.canUndo &&
@@ -228,6 +287,7 @@ function isSameToolbarState(a: ToolbarState, b: ToolbarState) {
     a.isLink === b.isLink &&
     a.fontSize === b.fontSize &&
     a.fontFamily === b.fontFamily &&
+    a.lineSpacing === b.lineSpacing &&
     a.textColor === b.textColor &&
     a.highlight === b.highlight
   );
@@ -262,6 +322,10 @@ function readToolbarState(editor: LexicalEditor): ToolbarState {
       blockType = "code";
     }
 
+    const lineSpacingFromBlock = $isElementNode(topLevel)
+      ? readStyleProperty(topLevel.getStyle(), "line-height")
+      : "";
+
     return {
       ...INITIAL_TOOLBAR_STATE,
       blockType,
@@ -281,6 +345,10 @@ function readToolbarState(editor: LexicalEditor): ToolbarState {
       fontFamily: normalizeFontFamily(
         $getSelectionStyleValueForProperty(selection, "font-family", DEFAULT_FONT_FAMILY),
       ),
+      lineSpacing: normalizeLineSpacing(
+        lineSpacingFromBlock ||
+          $getSelectionStyleValueForProperty(selection, "line-height", DEFAULT_LINE_SPACING),
+      ),
       textColor: normalizeTextColor(
         $getSelectionStyleValueForProperty(selection, "color", DEFAULT_TEXT_COLOR),
       ),
@@ -292,6 +360,43 @@ function readToolbarState(editor: LexicalEditor): ToolbarState {
         ),
       ),
     };
+  });
+}
+
+function getSelectedTopLevelElements(includeAllWhenSelectionMissing = false) {
+  const selection = $getSelection();
+  if (!$isRangeSelection(selection)) {
+    if (!includeAllWhenSelectionMissing) return [] as ElementNode[];
+    return $getRoot()
+      .getChildren()
+      .filter((node): node is ElementNode => $isElementNode(node));
+  }
+  const elements = new Map<string, ElementNode>();
+  for (const node of selection.getNodes()) {
+    const topLevel = node.getTopLevelElementOrThrow();
+    if ($isElementNode(topLevel)) elements.set(topLevel.getKey(), topLevel);
+  }
+  if (elements.size === 0) {
+    const anchorTopLevel = selection.anchor.getNode().getTopLevelElementOrThrow();
+    if ($isElementNode(anchorTopLevel)) elements.set(anchorTopLevel.getKey(), anchorTopLevel);
+  }
+  return [...elements.values()];
+}
+
+function applyLineSpacing(editor: LexicalEditor, value: string) {
+  const normalized = normalizeLineSpacing(value);
+  editor.focus(() => {
+    editor.update(() => {
+      const selection = $getSelection();
+      if ($isRangeSelection(selection)) {
+        $patchStyleText(selection, { "line-height": normalized });
+      }
+      const elements = getSelectedTopLevelElements(true);
+      for (const element of elements) {
+        const nextStyle = writeStyleProperty(element.getStyle(), "line-height", normalized);
+        element.setStyle(nextStyle);
+      }
+    });
   });
 }
 
@@ -373,6 +478,11 @@ function clearFormatting(editor: LexicalEditor) {
     });
 
     const nodes = selection.getNodes();
+    const blockElements = getSelectedTopLevelElements();
+    for (const element of blockElements) {
+      const nextStyle = writeStyleProperty(element.getStyle(), "line-height", null);
+      element.setStyle(nextStyle);
+    }
     for (const node of nodes) {
       if (!$isTextNode(node)) continue;
       node.setFormat(0);
@@ -543,6 +653,21 @@ export function LexicalEditorToolbarPlugin(props: ToolbarPluginProps) {
             className="max-w-[170px] rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-700"
           >
             {FONT_FAMILY_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="flex items-center gap-1 text-xs text-slate-600">
+          Spacing
+          <select
+            value={toolbar.lineSpacing}
+            onChange={(event) => applyLineSpacing(editor, event.target.value)}
+            className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-700"
+          >
+            {LINE_SPACING_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
               </option>
