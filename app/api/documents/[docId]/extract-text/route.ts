@@ -57,6 +57,43 @@ type VersionRecord = {
   importFidelityProfile?: unknown;
 };
 
+function safeErrorMessage(err: unknown, maxLength = 320) {
+  if (err instanceof Error && typeof err.message === "string") {
+    return err.message.slice(0, maxLength) || "Unknown error";
+  }
+  return "Unknown error";
+}
+
+function safeErrorStack(err: unknown, maxLength = 2_000) {
+  if (err instanceof Error && typeof err.stack === "string") {
+    return err.stack.slice(0, maxLength);
+  }
+  return null;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function stripUndefinedDeep<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => stripUndefinedDeep(item))
+      .filter((item) => item !== undefined) as unknown as T;
+  }
+  if (isPlainObject(value)) {
+    const next: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value)) {
+      if (child === undefined) continue;
+      next[key] = stripUndefinedDeep(child);
+    }
+    return next as T;
+  }
+  return value;
+}
+
 function toIso(value: FirestoreDateLike) {
   if (!value) return null;
   if (value instanceof Date) return value.toISOString();
@@ -394,6 +431,7 @@ export async function POST(
     const extractSource: ExtractTextSource = shouldUseLexicalPlainText
       ? TEXT_SOURCE_LEXICAL_PLAIN_TEXT
       : TEXT_SOURCE_FILE_EXTRACT;
+    let extractStage = "requested";
 
     await writeOrgAuditLog({
       orgId,
@@ -409,7 +447,20 @@ export async function POST(
         docxImportPipeline: versionDocxImportPipeline,
       },
     });
+    console.info(
+      "[documents.extract-text] requested",
+      JSON.stringify({
+        orgId,
+        docId,
+        uid,
+        version,
+        fileType: fileType || null,
+        extractSource,
+        usePhaseADocxImport,
+      }),
+    );
 
+    extractStage = "validate_upload_status";
     if (uploadStatus !== "ready") {
       return NextResponse.json(
         { error: "Document upload is not finalized yet" },
@@ -417,6 +468,7 @@ export async function POST(
       );
     }
 
+    extractStage = "validate_storage_metadata";
     if (!shouldUseLexicalPlainText && (!storagePath || !fileType)) {
       await docRef.set(
         {
@@ -436,6 +488,7 @@ export async function POST(
       );
     }
 
+    extractStage = "validate_file_type";
     if (!shouldUseLexicalPlainText && !SUPPORTED_EXTRACT_FILE_TYPES.has(fileType)) {
       await docRef.set(
         {
@@ -455,6 +508,7 @@ export async function POST(
       );
     }
 
+    extractStage = "validate_storage_object_exists";
     if (!shouldUseLexicalPlainText) {
       const bucket = adminStorage.bucket();
       const fileRef = bucket.file(storagePath);
@@ -479,6 +533,7 @@ export async function POST(
       }
     }
 
+    extractStage = "set_processing_status";
     await docRef.set(
       {
         textStatus: "processing",
@@ -495,40 +550,50 @@ export async function POST(
     );
 
     try {
+      extractStage = "extract_text";
       let extractedText = "";
       let importedEditorState: Record<string, unknown> | null = null;
       let importedFidelityProfile: ImportFidelityProfile | null = null;
+      let chunkCount = 0;
 
       if (shouldUseLexicalPlainText) {
+        extractStage = "extract_from_lexical_plain_text";
         extractedText = normalizeText(lexicalPlainText);
       } else {
+        extractStage = "download_storage_file";
         const fileRef = adminStorage.bucket().file(storagePath);
         const [buffer] = await fileRef.download();
 
         if (fileType === DOCX_MIME) {
           if (usePhaseADocxImport) {
+            extractStage = "docx_phase_a_import";
             const imported = await importDocxAsLexicalPhaseA({ buffer });
             importedFidelityProfile = imported.profile;
             if (imported.editorState && imported.plainText) {
               importedEditorState = imported.editorState;
               extractedText = imported.plainText;
             } else {
+              extractStage = "docx_phase_a_raw_text_fallback";
               extractedText = normalizeText(await extractText(buffer, fileType));
             }
           } else {
+            extractStage = "docx_legacy_import";
             const imported = await importDocxAsLexicalLegacy({ buffer });
             if (imported?.editorState) {
               importedEditorState = imported.editorState;
               extractedText = imported.plainText;
             } else {
+              extractStage = "docx_legacy_raw_text_fallback";
               extractedText = normalizeText(await extractText(buffer, fileType));
             }
           }
         } else {
+          extractStage = "extract_supported_non_docx";
           extractedText = normalizeText(await extractText(buffer, fileType));
         }
       }
 
+      extractStage = "persist_extracted_text_ready";
       await docRef.set(
         {
           extractedText: extractedText || null,
@@ -543,11 +608,13 @@ export async function POST(
       );
 
       if (importedEditorState) {
+        extractStage = "persist_editor_state";
+        const sanitizedEditorState = stripUndefinedDeep(importedEditorState);
         const versionRef = docRef.collection("versions").doc(`v${version}`);
         await versionRef.set(
           {
             editorFormat: LEXICAL_EDITOR_FORMAT,
-            editorState: importedEditorState,
+            editorState: sanitizedEditorState,
             plainText: extractedText || null,
             importFidelityProfile: importedFidelityProfile,
             updatedAt: new Date(),
@@ -566,6 +633,7 @@ export async function POST(
           { merge: true },
         );
       } else if (importedFidelityProfile) {
+        extractStage = "persist_import_fidelity_profile";
         const versionRef = docRef.collection("versions").doc(`v${version}`);
         await versionRef.set(
           {
@@ -586,6 +654,7 @@ export async function POST(
       }
 
       try {
+        extractStage = "chunk_ingestion";
         const ingested = await ingestDocumentChunks({
           orgId,
           docId,
@@ -593,7 +662,9 @@ export async function POST(
           extractedText,
           actorUid: uid,
         });
+        chunkCount = ingested.chunkCount;
 
+        extractStage = "persist_chunk_ready";
         await docRef.set(
           {
             chunkStatus: "ready",
@@ -623,6 +694,19 @@ export async function POST(
             textSource: extractSource,
           },
         });
+        console.info(
+          "[documents.extract-text] success",
+          JSON.stringify({
+            orgId,
+            docId,
+            version,
+            fileType: fileType || null,
+            extractSource,
+            usePhaseADocxImport,
+            extractedChars: extractedText.length,
+            chunkCount,
+          }),
+        );
       } catch (chunkErr: unknown) {
         if (chunkErr instanceof StaleDocumentVersionError) {
           await writeOrgAuditLog({
@@ -650,6 +734,21 @@ export async function POST(
           );
         }
 
+        const chunkErrorReason = safeErrorMessage(chunkErr);
+        const chunkErrorStack = safeErrorStack(chunkErr);
+        console.error(
+          "[documents.extract-text] chunk_ingestion_failed",
+          JSON.stringify({
+            orgId,
+            docId,
+            version,
+            fileType: fileType || null,
+            extractSource,
+            stage: extractStage,
+            errorReason: chunkErrorReason,
+            errorStack: chunkErrorStack,
+          }),
+        );
         await docRef.set(
           {
             chunkStatus: "failed",
@@ -670,6 +769,8 @@ export async function POST(
             metadata: {
               version,
               textSource: extractSource,
+              stage: extractStage,
+              errorReason: chunkErrorReason,
             },
           });
 
@@ -677,21 +778,34 @@ export async function POST(
           chunkErr instanceof Error &&
           (chunkErr.message.includes("code=PGRST202") ||
             chunkErr.message.includes("relation \"document_chunks\" does not exist"));
-        const errorReason =
-          chunkErr instanceof Error
-            ? chunkErr.message.slice(0, 320)
-            : "Unknown ingestion error";
+        const errorReason = chunkErrorReason;
 
         return NextResponse.json(
           {
             error: missingSchema
-              ? "Chunk ingestion failed: Supabase RAG schema is missing. Run supabase/sql/rag_setup.sql."
+            ? "Chunk ingestion failed: Supabase RAG schema is missing. Run supabase/sql/rag_setup.sql."
               : `Chunk ingestion failed: ${errorReason}`,
           },
           { status: 500 },
         );
       }
-    } catch {
+    } catch (err: unknown) {
+      const errorReason = safeErrorMessage(err);
+      const errorStack = safeErrorStack(err);
+      console.error(
+        "[documents.extract-text] failed",
+        JSON.stringify({
+          orgId,
+          docId,
+          version,
+          fileType: fileType || null,
+          extractSource,
+          usePhaseADocxImport,
+          stage: extractStage,
+          errorReason,
+          errorStack,
+        }),
+      );
       await docRef.set(
         {
           extractedText: null,
@@ -705,7 +819,25 @@ export async function POST(
         },
         { merge: true },
       );
-      return NextResponse.json({ error: "Text extraction failed" }, { status: 500 });
+      await writeOrgAuditLog({
+        orgId,
+        eventType: "documents.extract_text_failed",
+        actorUid: uid,
+        actorEmail: email,
+        docId,
+        metadata: {
+          version,
+          fileType: fileType || null,
+          textSource: extractSource,
+          usePhaseADocxImport,
+          stage: extractStage,
+          errorReason,
+        },
+      });
+      return NextResponse.json(
+        { error: `Text extraction failed during ${extractStage}` },
+        { status: 500 },
+      );
     }
 
     const updated = await docRef.get();

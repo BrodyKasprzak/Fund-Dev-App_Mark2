@@ -632,8 +632,7 @@ function parseTableNode(node: unknown, ctx: ParseContext): SerializedTableNode |
       const backgroundColor = declarations["background-color"] || null;
       const verticalAlign = declarations["vertical-align"] || undefined;
       const cellBlocks = collectMixedContentAsBlocks(cell, ctx);
-
-      return {
+      const serializedCell: SerializedTableCellNode = {
         children: ensureBlockChildren(cellBlocks),
         direction: null,
         format: "",
@@ -641,12 +640,14 @@ function parseTableNode(node: unknown, ctx: ParseContext): SerializedTableNode |
         type: "tablecell",
         version: 1,
         headerState: cellTag === "th" ? 1 : 0,
-        colSpan,
-        rowSpan,
-        width,
         backgroundColor: backgroundColor ? backgroundColor.slice(0, 64) : null,
-        verticalAlign: verticalAlign ? verticalAlign.slice(0, 24) : undefined,
       };
+      if (typeof colSpan === "number") serializedCell.colSpan = colSpan;
+      if (typeof rowSpan === "number") serializedCell.rowSpan = rowSpan;
+      if (typeof width === "number") serializedCell.width = width;
+      if (verticalAlign) serializedCell.verticalAlign = verticalAlign.slice(0, 24);
+
+      return serializedCell;
     });
 
     if (rowIndex === 0) {
@@ -690,15 +691,16 @@ function parseTableNode(node: unknown, ctx: ParseContext): SerializedTableNode |
   }
 
   markMappedFeature(ctx, "tables");
-  return {
+  const serializedTable: SerializedTableNode = {
     children: serializedRows,
     direction: null,
     format: "",
     indent: 0,
     type: "table",
     version: 1,
-    colWidths: colWidths.length ? colWidths : undefined,
   };
+  if (colWidths.length) serializedTable.colWidths = colWidths;
+  return serializedTable;
 }
 
 function parseBlockNodes(node: unknown, ctx: ParseContext): SerializedRootChildNode[] {
