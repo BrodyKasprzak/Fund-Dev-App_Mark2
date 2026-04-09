@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ref, uploadBytesResumable } from "firebase/storage";
 import { useAuth } from "@/lib/AuthContext";
@@ -110,6 +110,26 @@ type ChatMessage = {
   contextSummary: string | null;
 };
 
+type UploadQueueStatus =
+  | "queued"
+  | "initializing"
+  | "uploading"
+  | "finalizing"
+  | "extracting"
+  | "completed"
+  | "failed";
+
+type UploadQueueItem = {
+  id: string;
+  fileName: string;
+  title: string;
+  size: number;
+  status: UploadQueueStatus;
+  progress: number | null;
+  detail: string | null;
+  error: string | null;
+};
+
 const FOLDER_FILTERS: Record<string, (doc: DocumentListItem) => boolean> = {
   all: () => true,
   ready: (doc) => doc.textStatus === "ready",
@@ -149,6 +169,11 @@ const DOC_WINDOW_LIMIT = 50_000;
 const RECENT_DOCS_DEFAULT_LIMIT = 10;
 const MAX_DOWNLOAD_FILENAME_LENGTH = 220;
 const MAX_RICH_PREVIEW_PLAIN_TEXT_CHARS = 80_000;
+const FILE_UPLOAD_TIMEOUT_MS = 5 * 60 * 1000;
+const NETWORK_REQUEST_TIMEOUT_MS = 60_000;
+const MAX_RATE_LIMIT_RETRIES = 4;
+const MAX_RETRYABLE_REQUEST_RETRIES = 2;
+const MAX_VISIBLE_UPLOAD_TOASTS = 5;
 
 function parseWorkspaceMode(raw: string | null): WorkspaceMode {
   if (raw === "chat-private") return "chat-private";
@@ -400,6 +425,77 @@ function formatFileTypeLabel(fileType: string) {
   return normalized.replace(/[+.-]/g, " ").trim().slice(0, 16).toUpperCase();
 }
 
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function parseRetryAfterMs(rawHeader: string | null) {
+  if (!rawHeader) return null;
+  const asNumber = Number(rawHeader);
+  if (Number.isFinite(asNumber) && asNumber >= 0) return asNumber * 1000;
+
+  const asDate = Date.parse(rawHeader);
+  if (Number.isFinite(asDate)) {
+    const diff = asDate - Date.now();
+    if (diff > 0) return diff;
+  }
+  return null;
+}
+
+function isRetryableHttpStatus(status: number) {
+  if (status === 408 || status === 425 || status === 429) return true;
+  return status >= 500;
+}
+
+function createUploadQueueId(file: File, index: number) {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${index}-${file.name}-${file.lastModified}`;
+}
+
+function fileIdentity(file: File) {
+  return `${file.name}::${file.size}::${file.lastModified}`;
+}
+
+function mergeUniqueFiles(currentFiles: File[], incomingFiles: File[]) {
+  if (incomingFiles.length === 0) return currentFiles;
+  const seen = new Set(currentFiles.map(fileIdentity));
+  const merged = [...currentFiles];
+  for (const incoming of incomingFiles) {
+    const key = fileIdentity(incoming);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(incoming);
+  }
+  return merged;
+}
+
+function isTerminalUploadStatus(status: UploadQueueStatus) {
+  return status === "completed" || status === "failed";
+}
+
+function uploadStatusLabel(status: UploadQueueStatus) {
+  if (status === "queued") return "Queued";
+  if (status === "initializing") return "Preparing";
+  if (status === "uploading") return "Uploading";
+  if (status === "finalizing") return "Finalizing";
+  if (status === "extracting") return "Extracting";
+  if (status === "completed") return "Done";
+  return "Failed";
+}
+
+function uploadStatusClasses(status: UploadQueueStatus) {
+  if (status === "completed") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (status === "failed") return "border-rose-200 bg-rose-50 text-rose-700";
+  if (status === "uploading" || status === "extracting" || status === "finalizing") {
+    return "border-sky-200 bg-sky-50 text-sky-700";
+  }
+  return "border-slate-200 bg-slate-100 text-slate-700";
+}
+
 function ListSkeleton() {
   return (
     <div className="space-y-3">
@@ -500,10 +596,10 @@ export default function DocumentsPage() {
   const [forceFormattedPreview, setForceFormattedPreview] = useState(false);
   const [statusInfoOpen, setStatusInfoOpen] = useState(false);
 
-  const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [uploadTitle, setUploadTitle] = useState("");
+  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
+  const [isMainDropzoneActive, setIsMainDropzoneActive] = useState(false);
   const [downloadingDocId, setDownloadingDocId] = useState<string | null>(null);
   const [versionHistoryOpen, setVersionHistoryOpen] = useState(false);
   const [versionHistoryLoading, setVersionHistoryLoading] = useState(false);
@@ -529,6 +625,8 @@ export default function DocumentsPage() {
 
   const firstMatchRef = useRef<HTMLElement | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  const uploadFileInputRef = useRef<HTMLInputElement | null>(null);
+  const mainDropDepthRef = useRef(0);
   const handledDeepLinkRef = useRef<string | null>(null);
   const chatAutoScrollRef = useRef(true);
   const chatSendInFlightRef = useRef(false);
@@ -547,6 +645,15 @@ export default function DocumentsPage() {
 
   const effectiveHighlightQuery = (viewerHighlightQuery || "").trim();
   const normalizedLeftFilter = leftFilter.trim();
+  const selectedUploadPreview = useMemo(() => uploadFiles.slice(0, 3), [uploadFiles]);
+  const visibleUploadToasts = useMemo(
+    () => uploadQueue.slice(-MAX_VISIBLE_UPLOAD_TOASTS),
+    [uploadQueue],
+  );
+  const hasActiveUploadQueueItems = useMemo(
+    () => uploadQueue.some((item) => !isTerminalUploadStatus(item.status)),
+    [uploadQueue],
+  );
 
   const visibleDocs = useMemo(() => {
     const q = normalizedLeftFilter.toLowerCase();
@@ -1036,101 +1143,449 @@ export default function DocumentsPage() {
     return () => window.clearTimeout(timer);
   }, [message]);
 
-  async function handleUpload() {
-    if (!user || !uploadFile || !uploadTitle.trim()) return;
-    setUploading(true);
-    setUploadProgress(0);
-    setError(null);
-    setMessage(null);
+  const addUploadFiles = useCallback((incomingFiles: File[]) => {
+    if (incomingFiles.length === 0) return;
+    setUploadFiles((current) => mergeUniqueFiles(current, incomingFiles));
+  }, []);
 
-    let docId: string | null = null;
-    let uploadFinalized = false;
-    try {
-      const initRes = await authedFetch("/api/documents/init-upload", {
-        method: "POST",
-        body: JSON.stringify({
-          filename: uploadFile.name,
-          title: uploadTitle.trim(),
-          fileType: uploadFile.type || "application/octet-stream",
-          size: uploadFile.size,
+  const isDraggingFiles = useCallback((event: DragEvent<HTMLElement>) => {
+    const types = event.dataTransfer?.types;
+    if (!types) return false;
+    return Array.from(types).includes("Files");
+  }, []);
+
+  const handleMainDragEnter = useCallback(
+    (event: DragEvent<HTMLElement>) => {
+      if (workspaceMode !== "documents" || uploading) return;
+      if (!isDraggingFiles(event)) return;
+      event.preventDefault();
+      mainDropDepthRef.current += 1;
+      setIsMainDropzoneActive(true);
+    },
+    [isDraggingFiles, uploading, workspaceMode],
+  );
+
+  const handleMainDragOver = useCallback(
+    (event: DragEvent<HTMLElement>) => {
+      if (workspaceMode !== "documents" || uploading) return;
+      if (!isDraggingFiles(event)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+      setIsMainDropzoneActive(true);
+    },
+    [isDraggingFiles, uploading, workspaceMode],
+  );
+
+  const handleMainDragLeave = useCallback(
+    (event: DragEvent<HTMLElement>) => {
+      if (workspaceMode !== "documents") return;
+      if (!isDraggingFiles(event)) return;
+      event.preventDefault();
+      mainDropDepthRef.current = Math.max(0, mainDropDepthRef.current - 1);
+      if (mainDropDepthRef.current === 0) setIsMainDropzoneActive(false);
+    },
+    [isDraggingFiles, workspaceMode],
+  );
+
+  const handleMainDrop = useCallback(
+    (event: DragEvent<HTMLElement>) => {
+      if (workspaceMode !== "documents") return;
+      if (!isDraggingFiles(event)) return;
+      event.preventDefault();
+      mainDropDepthRef.current = 0;
+      setIsMainDropzoneActive(false);
+      if (uploading) return;
+
+      const droppedFiles = Array.from(event.dataTransfer.files ?? []);
+      if (droppedFiles.length === 0) return;
+      addUploadFiles(droppedFiles);
+      setError(null);
+      setMessage(
+        `${droppedFiles.length} file${droppedFiles.length === 1 ? "" : "s"} added. Click Upload to start.`,
+      );
+    },
+    [addUploadFiles, isDraggingFiles, uploading, workspaceMode],
+  );
+
+  useEffect(() => {
+    if (workspaceMode === "documents" && !uploading) return;
+    mainDropDepthRef.current = 0;
+    setIsMainDropzoneActive(false);
+  }, [uploading, workspaceMode]);
+
+  const updateUploadQueueItem = useCallback(
+    (
+      id: string,
+      patch: Partial<UploadQueueItem> | ((current: UploadQueueItem) => Partial<UploadQueueItem>),
+    ) => {
+      setUploadQueue((current) =>
+        current.map((item) => {
+          if (item.id !== id) return item;
+          const resolvedPatch = typeof patch === "function" ? patch(item) : patch;
+          return {
+            ...item,
+            ...resolvedPatch,
+          };
         }),
-      });
-      const initData = await initRes.json().catch(() => ({}));
-      if (!initRes.ok) throw new Error(initData?.error || "Failed to initialize upload");
+      );
+    },
+    [],
+  );
 
-      docId = String(initData.docId || "");
-      const storagePath = String(initData.storagePath || "");
-      if (!docId || !storagePath) throw new Error("Invalid upload initialization response");
+  const clearCompletedUploads = useCallback(() => {
+    setUploadQueue((current) =>
+      current.filter((item) => !isTerminalUploadStatus(item.status)),
+    );
+  }, []);
 
+  const runAuthedRequestWithRetry = useCallback(
+    async (args: {
+      url: string;
+      init?: RequestInit;
+      deadlineAt: number;
+      timeoutErrorMessage: string;
+      onRetryWait?: (waitMs: number, reason: "rate_limit" | "transient") => void;
+    }) => {
+      const { url, init, deadlineAt, timeoutErrorMessage, onRetryWait } = args;
+      let retryCount = 0;
+      let rateLimitRetryCount = 0;
+
+      while (true) {
+        const remainingMs = deadlineAt - Date.now();
+        if (remainingMs <= 0) throw new Error(timeoutErrorMessage);
+
+        const controller = new AbortController();
+        const requestTimeoutMs = Math.max(1, Math.min(NETWORK_REQUEST_TIMEOUT_MS, remainingMs));
+        const requestTimeoutId = window.setTimeout(() => controller.abort(), requestTimeoutMs);
+
+        try {
+          const response = await authedFetch(url, {
+            ...(init || {}),
+            signal: controller.signal,
+          });
+
+          if (response.status === 429 && rateLimitRetryCount < MAX_RATE_LIMIT_RETRIES) {
+            const retryAfterMs =
+              parseRetryAfterMs(response.headers.get("Retry-After")) ??
+              Math.min(30_000, 1_000 * 2 ** (rateLimitRetryCount + 1));
+            if (Date.now() + retryAfterMs < deadlineAt) {
+              onRetryWait?.(retryAfterMs, "rate_limit");
+              rateLimitRetryCount += 1;
+              await sleep(retryAfterMs);
+              continue;
+            }
+          }
+
+          if (
+            !response.ok &&
+            isRetryableHttpStatus(response.status) &&
+            retryCount < MAX_RETRYABLE_REQUEST_RETRIES
+          ) {
+            const waitMs = Math.min(10_000, 800 * 2 ** (retryCount + 1));
+            if (Date.now() + waitMs < deadlineAt) {
+              onRetryWait?.(waitMs, "transient");
+              retryCount += 1;
+              await sleep(waitMs);
+              continue;
+            }
+          }
+
+          return response;
+        } catch (err: unknown) {
+          const asError = err instanceof Error ? err : new Error("Network request failed");
+          if (Date.now() >= deadlineAt) {
+            throw new Error(timeoutErrorMessage);
+          }
+          if (retryCount < MAX_RETRYABLE_REQUEST_RETRIES) {
+            const waitMs = Math.min(10_000, 800 * 2 ** (retryCount + 1));
+            if (Date.now() + waitMs < deadlineAt) {
+              onRetryWait?.(waitMs, "transient");
+              retryCount += 1;
+              await sleep(waitMs);
+              continue;
+            }
+          }
+          if (asError.name === "AbortError") {
+            throw new Error(timeoutErrorMessage);
+          }
+          throw asError;
+        } finally {
+          window.clearTimeout(requestTimeoutId);
+        }
+      }
+    },
+    [authedFetch],
+  );
+
+  const uploadFileToStorageWithDeadline = useCallback(
+    async (args: {
+      file: File;
+      storagePath: string;
+      deadlineAt: number;
+      onProgress?: (progress: number) => void;
+      timeoutErrorMessage: string;
+    }) => {
+      const { file, storagePath, deadlineAt, onProgress, timeoutErrorMessage } = args;
       const storageRef = ref(storage, storagePath);
       await new Promise<void>((resolve, reject) => {
-        const task = uploadBytesResumable(storageRef, uploadFile, {
-          contentType: uploadFile.type || undefined,
+        const task = uploadBytesResumable(storageRef, file, {
+          contentType: file.type || undefined,
         });
+
+        let settled = false;
+        const remainingMs = deadlineAt - Date.now();
+        if (remainingMs <= 0) {
+          task.cancel();
+          reject(new Error(timeoutErrorMessage));
+          return;
+        }
+
+        const timeoutId = window.setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          task.cancel();
+          reject(new Error(timeoutErrorMessage));
+        }, remainingMs);
 
         task.on(
           "state_changed",
           (snapshot) => {
-            const pct = Math.round(
+            const progress = Math.round(
               (snapshot.bytesTransferred / Math.max(snapshot.totalBytes, 1)) * 100,
             );
-            setUploadProgress(pct);
+            onProgress?.(progress);
           },
-          (uploadErr) => reject(uploadErr),
-          () => resolve(),
+          (uploadErr) => {
+            if (settled) return;
+            settled = true;
+            window.clearTimeout(timeoutId);
+            reject(uploadErr);
+          },
+          () => {
+            if (settled) return;
+            settled = true;
+            window.clearTimeout(timeoutId);
+            resolve();
+          },
         );
       });
+    },
+    [],
+  );
 
-      const finalizeRes = await authedFetch(`/api/documents/${docId}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          status: "ready",
-          title: uploadTitle.trim(),
-          fileType: uploadFile.type || "application/octet-stream",
-          size: uploadFile.size,
-        }),
-      });
-      const finalizeData = await finalizeRes.json().catch(() => ({}));
-      if (!finalizeRes.ok) throw new Error(finalizeData?.error || "Failed to finalize upload");
-      uploadFinalized = true;
+  async function handleUpload() {
+    if (!user || uploading || uploadFiles.length === 0) return;
 
-      const extractRes = await authedFetch(`/api/documents/${docId}/extract-text`, {
-        method: "POST",
-      });
-      const extractData = await extractRes.json().catch(() => ({}));
-      if (!extractRes.ok) {
-        throw new Error(
-          extractData?.error ||
-            "Upload completed, but text extraction failed. Please re-run extraction.",
-        );
+    const queuedUploads = uploadFiles.map((file, index) => {
+      const id = createUploadQueueId(file, index);
+      return {
+        id,
+        file,
+        title: deriveTitle(file.name),
+      };
+    });
+
+    setUploading(true);
+    setError(null);
+    setMessage(null);
+    setUploadQueue(
+      queuedUploads.map(({ id, file, title }) => ({
+        id,
+        fileName: file.name,
+        title,
+        size: file.size,
+        status: "queued",
+        progress: 0,
+        detail: null,
+        error: null,
+      })),
+    );
+
+    let completedCount = 0;
+    let failedCount = 0;
+    const failedDetails: string[] = [];
+
+    try {
+      for (const queuedUpload of queuedUploads) {
+        const { id, file, title } = queuedUpload;
+        const deadlineAt = Date.now() + FILE_UPLOAD_TIMEOUT_MS;
+        const timeoutErrorPrefix = `Timed out after 5 minutes while processing "${file.name}"`;
+        let docId: string | null = null;
+        let uploadFinalized = false;
+
+        updateUploadQueueItem(id, {
+          status: "initializing",
+          progress: 0,
+          detail: null,
+          error: null,
+        });
+
+        try {
+          const initRes = await runAuthedRequestWithRetry({
+            url: "/api/documents/init-upload",
+            init: {
+              method: "POST",
+              body: JSON.stringify({
+                filename: file.name,
+                title,
+                fileType: file.type || "application/octet-stream",
+                size: file.size,
+              }),
+            },
+            deadlineAt,
+            timeoutErrorMessage: `${timeoutErrorPrefix} (initialization).`,
+            onRetryWait: (waitMs, reason) => {
+              updateUploadQueueItem(id, {
+                detail:
+                  reason === "rate_limit"
+                    ? `Rate limit hit. Retrying in ${Math.ceil(waitMs / 1000)}s...`
+                    : `Temporary issue. Retrying in ${Math.ceil(waitMs / 1000)}s...`,
+              });
+            },
+          });
+          const initData = await initRes.json().catch(() => ({}));
+          if (!initRes.ok) throw new Error(initData?.error || "Failed to initialize upload");
+
+          docId = String(initData.docId || "");
+          const storagePath = String(initData.storagePath || "");
+          if (!docId || !storagePath) throw new Error("Invalid upload initialization response");
+
+          updateUploadQueueItem(id, {
+            status: "uploading",
+            progress: 0,
+            detail: null,
+            error: null,
+          });
+
+          await uploadFileToStorageWithDeadline({
+            file,
+            storagePath,
+            deadlineAt,
+            timeoutErrorMessage: `${timeoutErrorPrefix} (upload).`,
+            onProgress: (progress) => {
+              updateUploadQueueItem(id, {
+                status: "uploading",
+                progress,
+              });
+            },
+          });
+
+          updateUploadQueueItem(id, {
+            status: "finalizing",
+            progress: 100,
+            detail: null,
+          });
+
+          const finalizeRes = await runAuthedRequestWithRetry({
+            url: `/api/documents/${docId}`,
+            init: {
+              method: "PATCH",
+              body: JSON.stringify({
+                status: "ready",
+                title,
+                fileType: file.type || "application/octet-stream",
+                size: file.size,
+              }),
+            },
+            deadlineAt,
+            timeoutErrorMessage: `${timeoutErrorPrefix} (finalization).`,
+            onRetryWait: (waitMs, reason) => {
+              updateUploadQueueItem(id, {
+                detail:
+                  reason === "rate_limit"
+                    ? `Rate limit hit. Retrying in ${Math.ceil(waitMs / 1000)}s...`
+                    : `Temporary issue. Retrying in ${Math.ceil(waitMs / 1000)}s...`,
+              });
+            },
+          });
+          const finalizeData = await finalizeRes.json().catch(() => ({}));
+          if (!finalizeRes.ok) throw new Error(finalizeData?.error || "Failed to finalize upload");
+          uploadFinalized = true;
+
+          updateUploadQueueItem(id, {
+            status: "extracting",
+            progress: 100,
+            detail: null,
+          });
+
+          const extractRes = await runAuthedRequestWithRetry({
+            url: `/api/documents/${docId}/extract-text`,
+            init: { method: "POST" },
+            deadlineAt,
+            timeoutErrorMessage: `${timeoutErrorPrefix} (text extraction).`,
+            onRetryWait: (waitMs, reason) => {
+              updateUploadQueueItem(id, {
+                detail:
+                  reason === "rate_limit"
+                    ? `Rate limit hit. Retrying in ${Math.ceil(waitMs / 1000)}s...`
+                    : `Temporary issue. Retrying in ${Math.ceil(waitMs / 1000)}s...`,
+              });
+            },
+          });
+          const extractData = await extractRes.json().catch(() => ({}));
+          if (!extractRes.ok) {
+            throw new Error(
+              extractData?.error ||
+                "Upload completed, but text extraction failed. Please re-run extraction.",
+            );
+          }
+
+          updateUploadQueueItem(id, {
+            status: "completed",
+            progress: 100,
+            detail: null,
+            error: null,
+          });
+          completedCount += 1;
+        } catch (err: unknown) {
+          if (docId && !uploadFinalized) {
+            try {
+              await runAuthedRequestWithRetry({
+                url: `/api/documents/${docId}`,
+                init: {
+                  method: "PATCH",
+                  body: JSON.stringify({ status: "failed" }),
+                },
+                deadlineAt: Date.now() + 30_000,
+                timeoutErrorMessage: "Timed out while marking failed upload.",
+              });
+            } catch {
+              // no-op
+            }
+          }
+
+          const messageText =
+            err instanceof Error && err.message ? err.message : "Upload failed";
+          updateUploadQueueItem(id, {
+            status: "failed",
+            detail: null,
+            error: messageText,
+          });
+          failedDetails.push(`${file.name}: ${messageText}`);
+          failedCount += 1;
+        }
       }
 
       await loadDocuments();
-      setUploadFile(null);
-      setUploadTitle("");
-      setUploadProgress(null);
-      setMessage("Upload complete. Select the document from the list to open it.");
+      setUploadFiles([]);
+      if (uploadFileInputRef.current) uploadFileInputRef.current.value = "";
       switchToDocumentsMode();
-    } catch (err: unknown) {
-      if (docId && !uploadFinalized) {
-        try {
-          await authedFetch(`/api/documents/${docId}`, {
-            method: "PATCH",
-            body: JSON.stringify({ status: "failed" }),
-          });
-        } catch {
-          // no-op
-        }
+
+      if (completedCount > 0) {
+        setMessage(
+          failedCount > 0
+            ? `${completedCount} documents uploaded. ${failedCount} failed.`
+            : `${completedCount} documents uploaded successfully.`,
+        );
       }
-      if (uploadFinalized) {
-        await loadDocuments();
-        setUploadFile(null);
-        setUploadTitle("");
-        setUploadProgress(null);
-        switchToDocumentsMode();
+      if (failedCount > 0) {
+        const preview = failedDetails.slice(0, 2).join(" | ");
+        setError(
+          failedCount > 2
+            ? `${failedCount} uploads failed. ${preview} | ...`
+            : `${failedCount} uploads failed. ${preview}`,
+        );
       }
-      if (err instanceof Error) setError(err.message);
-      else setError("Upload failed");
     } finally {
       setUploading(false);
     }
@@ -1421,34 +1876,63 @@ export default function DocumentsPage() {
               <div className="mt-4 space-y-3">
                 <section className="rounded-xl border border-slate-200 bg-slate-100 p-3">
                   <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Upload New File
+                    Upload Files
                   </h2>
                   <div className="mt-2 space-y-2">
                     <input
                       type="file"
+                      ref={uploadFileInputRef}
+                      multiple
+                      disabled={uploading}
                       onChange={(e) => {
-                        const file = e.target.files?.[0] ?? null;
-                        setUploadFile(file);
-                        setUploadTitle(file ? deriveTitle(file.name) : "");
+                        const nextFiles = Array.from(e.target.files ?? []);
+                        addUploadFiles(nextFiles);
+                        if (uploadFileInputRef.current) uploadFileInputRef.current.value = "";
+                        setError(null);
+                        setMessage(
+                          nextFiles.length > 0
+                            ? `${nextFiles.length} file${nextFiles.length === 1 ? "" : "s"} added. Click Upload to start.`
+                            : null,
+                        );
                       }}
                       className="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs"
                     />
-                    <input
-                      value={uploadTitle}
-                      onChange={(e) => setUploadTitle(e.target.value)}
-                      placeholder="Document title"
-                      className="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs"
-                    />
+                    {uploadFiles.length > 0 ? (
+                      <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-[11px] text-slate-600">
+                        <p className="font-medium text-slate-700">
+                          {uploadFiles.length} file{uploadFiles.length === 1 ? "" : "s"} selected
+                        </p>
+                        <p className="mt-1 truncate">
+                          {selectedUploadPreview.map((file) => file.name).join(", ")}
+                        </p>
+                        {uploadFiles.length > selectedUploadPreview.length ? (
+                          <p className="mt-1 text-slate-500">
+                            +{uploadFiles.length - selectedUploadPreview.length} more
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <div className="space-y-1 text-[11px] text-slate-500">
+                        <p>Titles are auto-derived from each filename.</p>
+                        <p>Tip: hold Ctrl/Cmd or Shift in the picker to select multiple files.</p>
+                      </div>
+                    )}
                     <button
                       type="button"
-                      disabled={!uploadFile || !uploadTitle.trim() || uploading}
+                      disabled={uploadFiles.length === 0 || uploading}
                       onClick={() => void handleUpload()}
                       className="w-full cursor-pointer rounded-lg bg-sky-700 px-3 py-2 text-xs font-semibold text-white transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {uploading ? "Uploading..." : "Upload"}
+                      {uploading
+                        ? `Uploading ${uploadFiles.length} file${uploadFiles.length === 1 ? "" : "s"}...`
+                        : uploadFiles.length > 0
+                          ? `Upload ${uploadFiles.length} file${uploadFiles.length === 1 ? "" : "s"}`
+                          : "Upload files"}
                     </button>
-                    {uploadProgress !== null ? (
-                      <p className="text-[11px] text-slate-500">Upload progress: {uploadProgress}%</p>
+                    {uploading ? (
+                      <p className="text-[11px] text-slate-500">
+                        Files are processed one at a time to preserve current extraction behavior.
+                      </p>
                     ) : null}
                   </div>
                 </section>
@@ -1654,8 +2138,21 @@ export default function DocumentsPage() {
 
           <section
             id="documents-main-content"
-            className="min-w-0 bg-[#e9eef3] p-5 lg:order-1 lg:min-h-[100dvh] lg:border-r lg:border-slate-300/70"
+            className={`relative min-w-0 bg-[#e9eef3] p-5 lg:order-1 lg:min-h-[100dvh] lg:border-r lg:border-slate-300/70 ${
+              isMainDropzoneActive ? "ring-2 ring-inset ring-sky-400/80" : ""
+            }`}
+            onDragEnter={handleMainDragEnter}
+            onDragOver={handleMainDragOver}
+            onDragLeave={handleMainDragLeave}
+            onDrop={handleMainDrop}
           >
+            {workspaceMode === "documents" && isMainDropzoneActive ? (
+              <div className="pointer-events-none absolute inset-5 z-20 flex items-center justify-center rounded-2xl border-2 border-dashed border-sky-500 bg-sky-100/80">
+                <p className="rounded-lg border border-sky-300 bg-white/80 px-4 py-2 text-sm font-semibold text-sky-800 shadow-sm">
+                  Drop files here to add them for upload
+                </p>
+              </div>
+            ) : null}
             {workspaceMode === "documents" ? (
               !selectedDocId ? (
                 docsLoading ? (
@@ -2247,6 +2744,63 @@ export default function DocumentsPage() {
           </section>
         </div>
       </div>
+      {visibleUploadToasts.length > 0 ? (
+        <aside className="pointer-events-none fixed bottom-4 right-4 z-50 w-[min(92vw,360px)] space-y-2">
+          <div className="pointer-events-auto flex items-center justify-between rounded-xl border border-slate-300 bg-white px-3 py-2 shadow-lg">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-700">Uploads</p>
+            {!hasActiveUploadQueueItems ? (
+              <button
+                type="button"
+                onClick={clearCompletedUploads}
+                className="rounded border border-slate-300 px-2 py-0.5 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Clear
+              </button>
+            ) : null}
+          </div>
+          {visibleUploadToasts
+            .slice()
+            .reverse()
+            .map((uploadRow) => (
+              <article
+                key={uploadRow.id}
+                className="pointer-events-auto rounded-xl border border-slate-300 bg-white p-3 shadow-lg"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <p className="min-w-0 truncate text-xs font-semibold text-slate-800">
+                    {uploadRow.title}
+                  </p>
+                  <span
+                    className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${uploadStatusClasses(uploadRow.status)}`}
+                  >
+                    {uploadStatusLabel(uploadRow.status)}
+                  </span>
+                </div>
+                <p className="mt-1 truncate text-[11px] text-slate-500">{uploadRow.fileName}</p>
+                {uploadRow.error ? (
+                  <p className="mt-2 text-[11px] text-rose-700">{uploadRow.error}</p>
+                ) : uploadRow.detail ? (
+                  <p className="mt-2 text-[11px] text-slate-600">{uploadRow.detail}</p>
+                ) : null}
+                {uploadRow.progress !== null && uploadRow.status !== "failed" ? (
+                  <div className="mt-2">
+                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200">
+                      <div
+                        className={`h-full rounded-full transition-all ${
+                          uploadRow.status === "completed" ? "bg-emerald-500" : "bg-sky-600"
+                        }`}
+                        style={{ width: `${Math.max(0, Math.min(uploadRow.progress, 100))}%` }}
+                      />
+                    </div>
+                    <p className="mt-1 text-right text-[10px] text-slate-500">
+                      {Math.max(0, Math.min(uploadRow.progress, 100))}%
+                    </p>
+                  </div>
+                ) : null}
+              </article>
+            ))}
+        </aside>
+      ) : null}
     </main>
   );
 }
