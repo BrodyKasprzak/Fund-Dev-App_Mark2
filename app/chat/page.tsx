@@ -1041,7 +1041,7 @@ export default function DocumentsPage() {
 
   if (loading || !user) {
     return (
-      <main className="workspace-page-fill min-h-screen bg-white [font-family:var(--font-geist-sans)]">
+      <main className="workspace-page-fill workspace-page-no-top-gap min-h-screen bg-white [font-family:var(--font-geist-sans)]">
         <div className="w-full min-h-screen bg-white p-3 sm:p-4">
           <div className="h-12 animate-pulse rounded-2xl border border-slate-200 bg-white/90" />
           <div className="grid grid-cols-1 gap-0 lg:grid-cols-[320px_minmax(0,1fr)]">
@@ -1060,7 +1060,7 @@ export default function DocumentsPage() {
   let firstMatchAssigned = false;
 
   return (
-    <main className="workspace-page-fill min-h-screen bg-white [font-family:var(--font-geist-sans)]">
+    <main className="workspace-page-fill workspace-page-no-top-gap min-h-screen bg-white [font-family:var(--font-geist-sans)]">
       <a
         href="#chat-main-content"
         className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-white focus:px-3 focus:py-2 focus:text-sm focus:font-semibold focus:text-slate-900"

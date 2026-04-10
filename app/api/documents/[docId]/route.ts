@@ -50,6 +50,7 @@ type DocumentRecord = {
   storagePath?: unknown;
   fileType?: unknown;
   size?: unknown;
+  folderId?: unknown;
   status?: unknown;
   editStatus?: unknown;
   textStatus?: unknown;
@@ -211,6 +212,7 @@ function serializeDocument(id: string, data: DocumentRecord | undefined) {
     fileType:
       typeof data?.fileType === "string" ? data.fileType : "application/octet-stream",
     size: typeof data?.size === "number" ? data.size : 0,
+    folderId: typeof data?.folderId === "string" ? data.folderId : null,
     status: typeof data?.status === "string" ? data.status : "processing",
     textStatus: typeof data?.textStatus === "string" ? data.textStatus : "pending",
     chunkStatus: typeof data?.chunkStatus === "string" ? data.chunkStatus : "pending",

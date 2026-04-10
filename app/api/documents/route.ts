@@ -6,6 +6,7 @@ import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit"
 export const runtime = "nodejs";
 
 const LIST_LIMIT = 50;
+const LIST_SCAN_LIMIT = 300;
 const DOC_LIST_LIMIT_PER_5_MIN = 200;
 
 type FirestoreDateLike =
@@ -26,6 +27,17 @@ function toIso(value: FirestoreDateLike) {
   }
 }
 
+function normalizeFolderFilter(raw: string | null) {
+  if (raw === null) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (trimmed === "root") return "root";
+  if (trimmed === "all") return null;
+  if (trimmed.length > 128) return null;
+  if (trimmed.includes("/") || trimmed.includes("\\")) return null;
+  return trimmed;
+}
+
 export async function GET(req: Request) {
   try {
     const { orgId, uid } = await requireDocumentReadAccess(req);
@@ -44,15 +56,23 @@ export async function GET(req: Request) {
       windowMs: 5 * 60 * 1000,
     });
 
+    const { searchParams } = new URL(req.url);
+    const folderFilter = normalizeFolderFilter(searchParams.get("folderId"));
+    if (searchParams.get("folderId") && !folderFilter && searchParams.get("folderId") !== "all") {
+      return NextResponse.json({ error: "Invalid folderId filter" }, { status: 400 });
+    }
+
+    const scanLimit = folderFilter ? LIST_SCAN_LIMIT : LIST_LIMIT;
     const snap = await adminDb
       .collection("organizations")
       .doc(orgId)
       .collection("documents")
       .orderBy("createdAt", "desc")
-      .limit(LIST_LIMIT)
+      .limit(scanLimit)
       .get();
 
-    const documents = snap.docs.map((d) => {
+    const documents = snap.docs
+      .map((d) => {
       const data = d.data() as {
         title?: unknown;
         storagePath?: unknown;
@@ -72,6 +92,7 @@ export async function GET(req: Request) {
         chunkUpdatedAt?: FirestoreDateLike;
         updatedAt?: FirestoreDateLike;
         updatedBy?: unknown;
+        folderId?: unknown;
       };
 
       const resolvedVersion =
@@ -107,8 +128,15 @@ export async function GET(req: Request) {
         chunkUpdatedAt: toIso(data.chunkUpdatedAt),
         updatedAt: toIso(data.updatedAt),
         updatedBy: typeof data.updatedBy === "string" ? data.updatedBy : null,
+        folderId: typeof data.folderId === "string" ? data.folderId : null,
       };
-    });
+      })
+      .filter((document) => {
+        if (folderFilter === "root") return !document.folderId;
+        if (folderFilter) return document.folderId === folderFilter;
+        return true;
+      })
+      .slice(0, LIST_LIMIT);
 
     return NextResponse.json({ ok: true, documents });
   } catch (err: unknown) {

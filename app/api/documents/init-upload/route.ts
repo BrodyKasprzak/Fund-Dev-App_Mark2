@@ -35,6 +35,7 @@ type InitUploadBody = {
   title?: unknown;
   fileType?: unknown;
   size?: unknown;
+  folderId?: unknown;
 };
 
 type VersionMetadata = {
@@ -82,6 +83,15 @@ function safeOriginalFilename(input: string) {
   return input.trim().slice(0, MAX_FILENAME_LENGTH) || "file";
 }
 
+function normalizeFolderId(raw: unknown) {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (trimmed.length > 128) return null;
+  if (trimmed.includes("/") || trimmed.includes("\\")) return null;
+  return trimmed;
+}
+
 export async function POST(req: Request) {
   try {
     const { orgId, uid, email } = await requireDocumentWriteAccess(req);
@@ -109,6 +119,15 @@ export async function POST(req: Request) {
     const rawSize = Number(body.size);
     const rawTitle = typeof body.title === "string" ? body.title : "";
 
+    if (
+      typeof body.folderId !== "undefined" &&
+      body.folderId !== null &&
+      typeof body.folderId !== "string"
+    ) {
+      return NextResponse.json({ error: "Invalid folderId" }, { status: 400 });
+    }
+    const folderId = normalizeFolderId(body.folderId);
+
     if (!rawFilename.trim()) {
       return NextResponse.json({ error: "filename is required" }, { status: 400 });
     }
@@ -132,6 +151,22 @@ export async function POST(req: Request) {
     const title = rawTitle.trim()
       ? rawTitle.trim().slice(0, MAX_TITLE_LENGTH)
       : deriveTitle(safeFilename);
+
+    if (typeof body.folderId === "string" && body.folderId.trim() && !folderId) {
+      return NextResponse.json({ error: "Invalid folderId" }, { status: 400 });
+    }
+
+    if (folderId) {
+      const folderSnap = await adminDb
+        .collection("organizations")
+        .doc(orgId)
+        .collection("documentFolders")
+        .doc(folderId)
+        .get();
+      if (!folderSnap.exists) {
+        return NextResponse.json({ error: "Folder not found" }, { status: 404 });
+      }
+    }
 
     const docRef = adminDb
       .collection("organizations")
@@ -184,6 +219,7 @@ export async function POST(req: Request) {
       originalFileType: rawFileType,
       originalFilename,
       filename: safeFilename,
+      folderId,
       editStatus: "processing",
       pendingVersion: null,
       lastVersionChangeAt: now,
@@ -237,6 +273,7 @@ export async function POST(req: Request) {
         chunkCount: 0,
         chunkVersion: CHUNKER_VERSION,
         version: currentVersion,
+        folderId,
         createdAt: now.toISOString(),
         createdBy: uid,
         textUpdatedAt: now.toISOString(),

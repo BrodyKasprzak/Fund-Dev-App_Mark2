@@ -1,6 +1,6 @@
 "use client";
 
-import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type DragEvent, type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ref, uploadBytesResumable } from "firebase/storage";
 import { useAuth } from "@/lib/AuthContext";
@@ -14,7 +14,6 @@ type DocStatus = "ready" | "processing" | "failed";
 type TextStatus = "pending" | "processing" | "ready" | "failed";
 type ChatVisibility = "private";
 type WorkspaceMode = "documents" | "chat-private";
-type SidebarPanel = "documents" | "history";
 type VersionLoadMode = "current" | "all";
 
 type DocumentListItem = {
@@ -23,6 +22,7 @@ type DocumentListItem = {
   storagePath: string;
   fileType: string;
   size: number;
+  folderId?: string | null;
   status: DocStatus;
   editStatus?: string | null;
   textStatus: TextStatus;
@@ -130,6 +130,13 @@ type UploadQueueItem = {
   error: string | null;
 };
 
+type DesktopFolderItem = {
+  id: string;
+  name: string;
+  createdAt: string | null;
+  createdAtMs: number;
+};
+
 const FOLDER_FILTERS: Record<string, (doc: DocumentListItem) => boolean> = {
   all: () => true,
   ready: (doc) => doc.textStatus === "ready",
@@ -150,18 +157,6 @@ const FILTER_LABELS: Record<string, string> = {
   operations: "Folder: Operations",
   fundraising: "Folder: Fundraising",
 };
-
-const STATUS_FILTER_OPTIONS = [
-  { id: "ready", label: "Text Ready" },
-  { id: "processing", label: "Processing" },
-  { id: "failed", label: "Needs Attention" },
-] as const;
-
-const FOLDER_FILTER_OPTIONS = [
-  { id: "governance", label: "Governance" },
-  { id: "operations", label: "Operations" },
-  { id: "fundraising", label: "Fundraising" },
-] as const;
 
 const RAG_SNIPPET_MAX_LENGTH = 200;
 const CHAT_MESSAGE_MAX_LENGTH = 4_000;
@@ -185,6 +180,13 @@ function asOptionalString(value: unknown) {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length ? trimmed : null;
+}
+
+function normalizeFolderIdValue(value: unknown) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return trimmed;
 }
 
 function asEditorStateObject(value: unknown) {
@@ -431,6 +433,10 @@ function sleep(ms: number) {
   });
 }
 
+function documentSortTimestamp(doc: DocumentListItem) {
+  return Date.parse(doc.updatedAt || doc.textUpdatedAt || doc.createdAt || "") || 0;
+}
+
 function parseRetryAfterMs(rawHeader: string | null) {
   if (!rawHeader) return null;
   const asNumber = Number(rawHeader);
@@ -496,16 +502,6 @@ function uploadStatusClasses(status: UploadQueueStatus) {
   return "border-slate-200 bg-slate-100 text-slate-700";
 }
 
-function ListSkeleton() {
-  return (
-    <div className="space-y-3">
-      {[...Array.from({ length: 6 })].map((_, i) => (
-        <div key={i} className="h-14 animate-pulse rounded-xl bg-slate-100" />
-      ))}
-    </div>
-  );
-}
-
 function ViewerSkeleton() {
   return (
     <div className="space-y-4">
@@ -547,15 +543,16 @@ function DocumentIcon() {
   );
 }
 
-function FolderIcon() {
+function DesktopFolderIcon() {
   return (
     <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4">
       <path
-        d="M2.75 5.75A1.75 1.75 0 0 1 4.5 4h3l1.5 1.5h6a1.75 1.75 0 0 1 1.75 1.75v6.5A1.75 1.75 0 0 1 15 15.5H4.5a1.75 1.75 0 0 1-1.75-1.75v-8Z"
+        d="M2.75 6A1.75 1.75 0 0 1 4.5 4.25h3.25l1.25 1.5H15.5A1.75 1.75 0 0 1 17.25 7.5v6A2.25 2.25 0 0 1 15 15.75H5A2.25 2.25 0 0 1 2.75 13.5V6Z"
         stroke="currentColor"
         strokeWidth="1.5"
         strokeLinejoin="round"
       />
+      <path d="M2.75 8h14.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
   );
 }
@@ -577,8 +574,6 @@ export default function DocumentsPage() {
   const deepLinkHighlight = searchParams.get("highlight");
 
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>(requestedMode);
-  const [sidebarPanel, setSidebarPanel] = useState<SidebarPanel>("documents");
-  const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false);
 
   const [docs, setDocs] = useState<DocumentListItem[]>([]);
   const [docsLoading, setDocsLoading] = useState(true);
@@ -588,7 +583,6 @@ export default function DocumentsPage() {
   const [loadingMoreText, setLoadingMoreText] = useState(false);
   const [leftFilter, setLeftFilter] = useState("");
   const [activeFolderId, setActiveFolderId] = useState("all");
-  const [docFiltersOpen, setDocFiltersOpen] = useState(true);
   const [showAllDocs, setShowAllDocs] = useState(true);
   const [detailAnchorQuery, setDetailAnchorQuery] = useState<string | null>(null);
   const [detailOffset, setDetailOffset] = useState<number | null>(null);
@@ -599,8 +593,20 @@ export default function DocumentsPage() {
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
+  const [desktopFolders, setDesktopFolders] = useState<DesktopFolderItem[]>([]);
+  const [desktopFoldersLoading, setDesktopFoldersLoading] = useState(false);
+  const [activeDesktopFolderId, setActiveDesktopFolderId] = useState<string | null>(null);
+  const [newMenuOpen, setNewMenuOpen] = useState(false);
+  const [createFolderOpen, setCreateFolderOpen] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+  const [movingDocId, setMovingDocId] = useState<string | null>(null);
+  const [draggingDocId, setDraggingDocId] = useState<string | null>(null);
+  const [folderDropTargetId, setFolderDropTargetId] = useState<string | null>(null);
+  const [rootDropTargetActive, setRootDropTargetActive] = useState(false);
   const [isMainDropzoneActive, setIsMainDropzoneActive] = useState(false);
   const [downloadingDocId, setDownloadingDocId] = useState<string | null>(null);
+  const [downloadAllConfirmOpen, setDownloadAllConfirmOpen] = useState(false);
+  const [downloadingAllDocs, setDownloadingAllDocs] = useState(false);
   const [versionHistoryOpen, setVersionHistoryOpen] = useState(false);
   const [versionHistoryLoading, setVersionHistoryLoading] = useState(false);
   const [versionHistoryError, setVersionHistoryError] = useState<string | null>(null);
@@ -609,7 +615,6 @@ export default function DocumentsPage() {
   const [regeneratingVersion, setRegeneratingVersion] = useState<number | null>(null);
 
   const [chatList, setChatList] = useState<ChatSummary[]>([]);
-  const [chatListLoading, setChatListLoading] = useState(false);
   const [activeChatId, setActiveChatId] = useState<string | null>(
     requestedMode === "chat-private" ? requestedChatId : null,
   );
@@ -626,6 +631,7 @@ export default function DocumentsPage() {
   const firstMatchRef = useRef<HTMLElement | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const uploadFileInputRef = useRef<HTMLInputElement | null>(null);
+  const newMenuRef = useRef<HTMLDivElement | null>(null);
   const mainDropDepthRef = useRef(0);
   const handledDeepLinkRef = useRef<string | null>(null);
   const chatAutoScrollRef = useRef(true);
@@ -639,9 +645,11 @@ export default function DocumentsPage() {
     return "You";
   }, [me?.name, user?.email]);
 
-  const activeChats = chatList;
-  const chatsLoading = chatListLoading;
   const isChatMode = workspaceMode === "chat-private";
+  const activeDesktopFolder = useMemo(
+    () => desktopFolders.find((folder) => folder.id === activeDesktopFolderId) || null,
+    [activeDesktopFolderId, desktopFolders],
+  );
 
   const effectiveHighlightQuery = (viewerHighlightQuery || "").trim();
   const normalizedLeftFilter = leftFilter.trim();
@@ -663,19 +671,39 @@ export default function DocumentsPage() {
       if (!q) return true;
       return doc.title.toLowerCase().includes(q);
     });
-    return filtered.sort((a, b) => {
-      const aTime = Date.parse(a.updatedAt || a.textUpdatedAt || a.createdAt || "") || 0;
-      const bTime = Date.parse(b.updatedAt || b.textUpdatedAt || b.createdAt || "") || 0;
-      return bTime - aTime;
-    });
+    return filtered.sort((a, b) => documentSortTimestamp(b) - documentSortTimestamp(a));
   }, [docs, normalizedLeftFilter, activeFolderId]);
   const showingRecentOnly = activeFolderId === "all" && !normalizedLeftFilter && !showAllDocs;
-  const displayedDocs = useMemo(
-    () => (showingRecentOnly ? visibleDocs.slice(0, RECENT_DOCS_DEFAULT_LIMIT) : visibleDocs),
-    [showingRecentOnly, visibleDocs],
-  );
-  const activeFilterLabel = FILTER_LABELS[activeFolderId] || FILTER_LABELS.all;
+  const visibleDesktopItems = useMemo(() => {
+    const q = normalizedLeftFilter.toLowerCase();
+    const folderEntries =
+      !activeDesktopFolderId && activeFolderId === "all"
+        ? desktopFolders
+            .filter((folder) => (!q ? true : folder.name.toLowerCase().includes(q)))
+            .map((folder) => ({
+              kind: "folder" as const,
+              id: folder.id,
+              sortTime: folder.createdAtMs,
+              folder,
+            }))
+        : [];
 
+    const documentEntries = visibleDocs.map((doc) => ({
+      kind: "document" as const,
+      id: doc.id,
+      sortTime: documentSortTimestamp(doc),
+      doc,
+    }));
+
+    return [...folderEntries, ...documentEntries].sort((a, b) => b.sortTime - a.sortTime);
+  }, [activeDesktopFolderId, activeFolderId, desktopFolders, normalizedLeftFilter, visibleDocs]);
+  const displayedDesktopItems = useMemo(
+    () =>
+      showingRecentOnly
+        ? visibleDesktopItems.slice(0, RECENT_DOCS_DEFAULT_LIMIT)
+        : visibleDesktopItems,
+    [showingRecentOnly, visibleDesktopItems],
+  );
   const selectedMeta = useMemo(
     () => docs.find((d) => d.id === selectedDocId) || null,
     [docs, selectedDocId],
@@ -732,7 +760,6 @@ export default function DocumentsPage() {
 
   const switchToDocumentsMode = useCallback(() => {
     setWorkspaceMode("documents");
-    setSidebarPanel("documents");
     updateWorkspaceUrl("documents", null);
   }, [updateWorkspaceUrl]);
 
@@ -758,7 +785,6 @@ export default function DocumentsPage() {
 
   useEffect(() => {
     setWorkspaceMode(requestedMode);
-    setSidebarPanel("documents");
     if (requestedMode === "chat-private" && requestedChatId) {
       setActiveChatId(requestedChatId);
     }
@@ -773,38 +799,89 @@ export default function DocumentsPage() {
     router.replace("/chat");
   }, [requestedChatId, requestedMode, router]);
 
-  async function loadDocuments() {
+  const loadFolders = useCallback(async () => {
     if (!user) return;
-    setDocsLoading(true);
-    setError(null);
-
+    setDesktopFoldersLoading(true);
     try {
-      const res = await authedFetch("/api/documents");
+      const res = await authedFetch("/api/document-folders");
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || "Failed to load documents");
-
-      const documents = Array.isArray(data?.documents)
-        ? (data.documents as DocumentListItem[])
+      if (!res.ok) throw new Error(data?.error || "Failed to load folders");
+      const folders = Array.isArray(data?.folders)
+        ? (data.folders as Array<{ id?: unknown; name?: unknown; createdAt?: unknown }>)
+            .map((item) => {
+              const id = asOptionalString(item.id);
+              const name = asOptionalString(item.name) || "Untitled Folder";
+              const createdAt =
+                typeof item.createdAt === "string" && item.createdAt.trim()
+                  ? item.createdAt
+                  : null;
+              if (!id) return null;
+              return {
+                id,
+                name,
+                createdAt,
+                createdAtMs: createdAt ? Date.parse(createdAt) || 0 : 0,
+              } as DesktopFolderItem;
+            })
+            .filter((item): item is DesktopFolderItem => Boolean(item))
         : [];
-
-      setDocs(documents);
-      setSelectedDocId((current) => {
-        if (documents.length === 0) return null;
-        if (current && documents.some((d) => d.id === current)) return current;
-        return null;
-      });
+      setDesktopFolders(folders);
+      setActiveDesktopFolderId((current) =>
+        current && folders.some((folder) => folder.id === current) ? current : null,
+      );
     } catch (err: unknown) {
       if (err instanceof Error) setError(err.message);
-      else setError("Failed to load documents");
+      else setError("Failed to load folders");
     } finally {
-      setDocsLoading(false);
+      setDesktopFoldersLoading(false);
     }
-  }
+  }, [authedFetch, user]);
+
+  const loadDocuments = useCallback(
+    async (folderId: string | null) => {
+      if (!user) return;
+      setDocsLoading(true);
+      setError(null);
+
+      try {
+        const params = new URLSearchParams();
+        params.set("folderId", folderId || "root");
+        const res = await authedFetch(`/api/documents?${params.toString()}`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.error || "Failed to load documents");
+
+        const documents = Array.isArray(data?.documents)
+          ? (data.documents as Array<DocumentListItem & { folderId?: unknown }>).map((doc) => ({
+              ...doc,
+              folderId: normalizeFolderIdValue(doc.folderId),
+            }))
+          : [];
+
+        setDocs(documents);
+        setSelectedDocId((current) => {
+          if (documents.length === 0) return null;
+          if (current && documents.some((d) => d.id === current)) return current;
+          return null;
+        });
+      } catch (err: unknown) {
+        if (err instanceof Error) setError(err.message);
+        else setError("Failed to load documents");
+      } finally {
+        setDocsLoading(false);
+      }
+    },
+    [authedFetch, user],
+  );
 
   useEffect(() => {
-    if (!loading && user) void loadDocuments();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, user]);
+    if (loading || !user) return;
+    void loadFolders();
+  }, [loadFolders, loading, user]);
+
+  useEffect(() => {
+    if (loading || !user) return;
+    void loadDocuments(activeDesktopFolderId);
+  }, [activeDesktopFolderId, loadDocuments, loading, user]);
 
   const fetchDocumentDetail = useCallback(
     async (args: { docId: string; offset?: number; anchorQuery?: string | null }) => {
@@ -943,7 +1020,6 @@ export default function DocumentsPage() {
 
   const loadChats = useCallback(async () => {
     if (!user) return;
-    setChatListLoading(true);
     setChatError(null);
     try {
       const res = await authedFetch("/api/chats?limit=25&visibility=private");
@@ -960,8 +1036,6 @@ export default function DocumentsPage() {
     } catch (err: unknown) {
       if (err instanceof Error) setChatError(err.message);
       else setChatError("Failed to load chats");
-    } finally {
-      setChatListLoading(false);
     }
   }, [authedFetch, user]);
 
@@ -1029,20 +1103,6 @@ export default function DocumentsPage() {
     },
     [authedFetch],
   );
-
-  async function handleNewChat() {
-    setChatError(null);
-    try {
-      const nextChat = await createChat("New chat");
-      setChatList((current) => [nextChat, ...current.filter((chat) => chat.id !== nextChat.id)]);
-      setActiveChatId(nextChat.id);
-      setChatMessages([]);
-      switchToChatMode(nextChat.id);
-    } catch (err: unknown) {
-      if (err instanceof Error) setChatError(err.message);
-      else setChatError("Failed to create chat");
-    }
-  }
 
   async function ensureActiveChatId(seedTitle: string) {
     if (activeChatId) return activeChatId;
@@ -1143,10 +1203,186 @@ export default function DocumentsPage() {
     return () => window.clearTimeout(timer);
   }, [message]);
 
+  useEffect(() => {
+    if (!newMenuOpen) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!newMenuRef.current) return;
+      if (newMenuRef.current.contains(event.target as Node)) return;
+      setNewMenuOpen(false);
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [newMenuOpen]);
+
+  useEffect(() => {
+    if (!createFolderOpen) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setCreateFolderOpen(false);
+        setNewFolderName("");
+      }
+    };
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [createFolderOpen]);
+
   const addUploadFiles = useCallback((incomingFiles: File[]) => {
     if (incomingFiles.length === 0) return;
     setUploadFiles((current) => mergeUniqueFiles(current, incomingFiles));
   }, []);
+
+  function openFilePickerFromNewMenu() {
+    setNewMenuOpen(false);
+    uploadFileInputRef.current?.click();
+  }
+
+  function openCreateFolderModal() {
+    setNewMenuOpen(false);
+    setError(null);
+    setNewFolderName("");
+    setCreateFolderOpen(true);
+  }
+
+  async function createDesktopFolder(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const trimmedName = newFolderName.trim();
+    if (!trimmedName) {
+      setError("Please enter a folder name.");
+      return;
+    }
+    try {
+      const res = await authedFetch("/api/document-folders", {
+        method: "POST",
+        body: JSON.stringify({ name: trimmedName }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Failed to create folder");
+
+      const created = data?.folder as { id?: unknown; name?: unknown; createdAt?: unknown } | undefined;
+      const createdId = asOptionalString(created?.id);
+      const createdName = asOptionalString(created?.name) || trimmedName;
+      const createdAt =
+        typeof created?.createdAt === "string" && created.createdAt.trim()
+          ? created.createdAt
+          : new Date().toISOString();
+      if (!createdId) throw new Error("Invalid folder response");
+
+      setDesktopFolders((current) =>
+        [
+          {
+            id: createdId,
+            name: createdName,
+            createdAt,
+            createdAtMs: Date.parse(createdAt) || Date.now(),
+          },
+          ...current.filter((folder) => folder.id !== createdId),
+        ].sort((a, b) => b.createdAtMs - a.createdAtMs),
+      );
+      setCreateFolderOpen(false);
+      setNewFolderName("");
+      setError(null);
+      setMessage(`Folder "${createdName}" created.`);
+    } catch (err: unknown) {
+      if (err instanceof Error) setError(err.message);
+      else setError("Failed to create folder");
+    }
+  }
+
+  function openDesktopFolder(folderId: string) {
+    setNewMenuOpen(false);
+    setActiveDesktopFolderId(folderId);
+    setSelectedDocId(null);
+    setSelectedDoc(null);
+    setDetailOffset(null);
+    setDetailAnchorQuery(null);
+    setViewerHighlightQuery(null);
+    setStatusInfoOpen(false);
+  }
+
+  function returnToDesktopRoot() {
+    setNewMenuOpen(false);
+    setActiveDesktopFolderId(null);
+    setSelectedDocId(null);
+    setSelectedDoc(null);
+    setDetailOffset(null);
+    setDetailAnchorQuery(null);
+    setViewerHighlightQuery(null);
+    setStatusInfoOpen(false);
+  }
+
+  async function moveDocumentToFolder(docId: string, folderId: string | null) {
+    if (!docId.trim()) return;
+    setMovingDocId(docId);
+    setFolderDropTargetId(null);
+    setRootDropTargetActive(false);
+    try {
+      const res = await authedFetch(`/api/documents/${encodeURIComponent(docId)}/move`, {
+        method: "POST",
+        body: JSON.stringify({ folderId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Failed to move document");
+      setMessage(folderId ? "Document moved to folder." : "Document moved to desktop.");
+      await loadDocuments(activeDesktopFolderId);
+    } catch (err: unknown) {
+      if (err instanceof Error) setError(err.message);
+      else setError("Failed to move document");
+    } finally {
+      setMovingDocId(null);
+      setDraggingDocId(null);
+    }
+  }
+
+  function handleDocumentDragStart(event: DragEvent<HTMLElement>, docId: string) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/document-id", docId);
+    setDraggingDocId(docId);
+  }
+
+  function handleDocumentDragEnd() {
+    setDraggingDocId(null);
+    setFolderDropTargetId(null);
+    setRootDropTargetActive(false);
+  }
+
+  function handleFolderDragOver(event: DragEvent<HTMLElement>, folderId: string) {
+    if (!draggingDocId) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setFolderDropTargetId(folderId);
+  }
+
+  function handleFolderDragLeave(folderId: string) {
+    setFolderDropTargetId((current) => (current === folderId ? null : current));
+  }
+
+  function handleFolderDrop(event: DragEvent<HTMLElement>, folderId: string) {
+    event.preventDefault();
+    event.stopPropagation();
+    const droppedDocId = event.dataTransfer.getData("text/document-id") || draggingDocId;
+    if (!droppedDocId) return;
+    void moveDocumentToFolder(droppedDocId, folderId);
+  }
+
+  function handleRootDragOver(event: DragEvent<HTMLElement>) {
+    if (!draggingDocId) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setRootDropTargetActive(true);
+  }
+
+  function handleRootDragLeave() {
+    setRootDropTargetActive(false);
+  }
+
+  function handleRootDrop(event: DragEvent<HTMLElement>) {
+    if (!draggingDocId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const droppedDocId = event.dataTransfer.getData("text/document-id") || draggingDocId;
+    if (!droppedDocId) return;
+    void moveDocumentToFolder(droppedDocId, null);
+  }
 
   const isDraggingFiles = useCallback((event: DragEvent<HTMLElement>) => {
     const types = event.dataTransfer?.types;
@@ -1201,7 +1437,7 @@ export default function DocumentsPage() {
       addUploadFiles(droppedFiles);
       setError(null);
       setMessage(
-        `${droppedFiles.length} file${droppedFiles.length === 1 ? "" : "s"} added. Click Upload to start.`,
+        `${droppedFiles.length} file${droppedFiles.length === 1 ? "" : "s"} added. Click Start Upload.`,
       );
     },
     [addUploadFiles, isDraggingFiles, uploading, workspaceMode],
@@ -1430,6 +1666,7 @@ export default function DocumentsPage() {
                 title,
                 fileType: file.type || "application/octet-stream",
                 size: file.size,
+                folderId: activeDesktopFolderId,
               }),
             },
             deadlineAt,
@@ -1566,7 +1803,7 @@ export default function DocumentsPage() {
         }
       }
 
-      await loadDocuments();
+      await loadDocuments(activeDesktopFolderId);
       setUploadFiles([]);
       if (uploadFileInputRef.current) uploadFileInputRef.current.value = "";
       switchToDocumentsMode();
@@ -1646,6 +1883,45 @@ export default function DocumentsPage() {
       else setError("Failed to download document");
     } finally {
       setDownloadingDocId(null);
+    }
+  }
+
+  async function handleDownloadAllDocuments() {
+    setError(null);
+    setMessage(null);
+    setDownloadingAllDocs(true);
+    try {
+      const res = await authedFetch("/api/documents/download-all", {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.error || "Failed to download all documents");
+      }
+
+      const blob = await res.blob();
+      const parsedFilename = parseFilenameFromContentDisposition(
+        res.headers.get("Content-Disposition"),
+      );
+      const fallbackName = `documents-offboard-${new Date().toISOString().slice(0, 10)}.zip`;
+      const filename = sanitizeDownloadFilename(parsedFilename || fallbackName);
+      const objectUrl = URL.createObjectURL(blob);
+
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
+      setMessage("Download all started.");
+    } catch (err: unknown) {
+      if (err instanceof Error) setError(err.message);
+      else setError("Failed to download all documents");
+    } finally {
+      setDownloadingAllDocs(false);
+      setDownloadAllConfirmOpen(false);
     }
   }
 
@@ -1754,17 +2030,12 @@ export default function DocumentsPage() {
 
   if (loading || !user) {
     return (
-      <main className="workspace-page-fill min-h-screen bg-[#e3e8ee] [font-family:var(--font-geist-sans)]">
-        <div className="w-full min-h-screen bg-[#e6ebf1] p-3 sm:p-4">
+      <main className="workspace-page-fill workspace-page-no-top-gap min-h-screen bg-[#e3e8ee] [font-family:var(--font-geist-sans)]">
+        <div className="w-full min-h-screen bg-[#e9eef3] p-3 sm:p-4">
           <div className="h-12 animate-pulse rounded-2xl border border-slate-200 bg-white/90" />
-          <div className="grid grid-cols-1 gap-0 lg:grid-cols-[320px_minmax(0,1fr)]">
-            <aside className="rounded-2xl border border-slate-200 bg-white/90 p-4">
-              <ListSkeleton />
-            </aside>
-            <section className="rounded-2xl border border-slate-200 bg-white/90 p-6">
-              <ViewerSkeleton />
-            </section>
-          </div>
+          <section className="mt-3 rounded-2xl border border-slate-200 bg-white/90 p-6">
+            <ViewerSkeleton />
+          </section>
         </div>
       </main>
     );
@@ -1773,7 +2044,7 @@ export default function DocumentsPage() {
   let firstMatchAssigned = false;
 
   return (
-    <main className="workspace-page-fill min-h-screen bg-[#e3e8ee] [font-family:var(--font-geist-sans)]">
+    <main className="workspace-page-fill workspace-page-no-top-gap min-h-screen bg-[#e3e8ee] [font-family:var(--font-geist-sans)]">
       <a
         href="#documents-main-content"
         className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-white focus:px-3 focus:py-2 focus:text-sm focus:font-semibold focus:text-slate-900"
@@ -1781,7 +2052,7 @@ export default function DocumentsPage() {
         Skip to main content
       </a>
       <WorkspaceTopNav active="documents" />
-      <div className="w-full min-h-screen bg-[#e6ebf1] pt-0">
+      <div className="w-full min-h-screen bg-[#e9eef3] pt-0">
         {error || message ? (
           <div className="space-y-2 px-3 pb-2 sm:px-4">
             {error ? (
@@ -1804,341 +2075,10 @@ export default function DocumentsPage() {
           </div>
         ) : null}
 
-        <div
-          className={`grid min-h-[100dvh] grid-cols-1 gap-0 ${
-            leftSidebarCollapsed
-              ? "lg:grid-cols-[minmax(0,1fr)_56px]"
-              : "lg:grid-cols-[minmax(0,1fr)_320px]"
-          }`}
-        >
-          <aside
-            className={`sticky top-0 self-start border-l border-slate-300/80 bg-[#edf1f5] lg:order-2 ${
-              leftSidebarCollapsed
-                ? "h-[100dvh] p-2"
-                : "h-[100dvh] overflow-y-auto p-4"
-            }`}
-            onClick={leftSidebarCollapsed ? () => setLeftSidebarCollapsed(false) : undefined}
-            role={leftSidebarCollapsed ? "button" : undefined}
-            tabIndex={leftSidebarCollapsed ? 0 : undefined}
-            aria-label={leftSidebarCollapsed ? "Expand right sidebar" : "Right sidebar"}
-            onKeyDown={
-              leftSidebarCollapsed
-                ? (event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      setLeftSidebarCollapsed(false);
-                    }
-                  }
-                : undefined
-            }
-          >
-            {leftSidebarCollapsed ? (
-              <div className="flex h-full min-h-0 flex-col justify-start gap-2 rounded-xl border border-slate-200 bg-slate-100 p-2">
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setSidebarPanel("documents");
-                    setLeftSidebarCollapsed(false);
-                  }}
-                  className={`inline-flex h-10 items-center justify-center rounded-lg border transition ${
-                    sidebarPanel === "documents"
-                      ? "border-sky-200 bg-sky-100 text-sky-700"
-                      : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                  }`}
-                  aria-label="Open documents panel"
-                >
-                  <DocumentIcon />
-                </button>
-              </div>
-            ) : (
-              <>
-            <div className="mb-2 flex items-center justify-end">
-              <button
-                type="button"
-                onClick={() => setLeftSidebarCollapsed(true)}
-                className="rounded border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
-                aria-label="Collapse sidebar"
-                aria-expanded={!leftSidebarCollapsed}
-                title="Collapse sidebar"
-              >
-                {">"}
-              </button>
-            </div>
-            <div className="flex w-full items-center gap-2 border-b border-slate-200 pb-2">
-              <DocumentIcon />
-              <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-700">
-                Documents
-              </h2>
-            </div>
-
-            {sidebarPanel === "documents" ? (
-              <div className="mt-4 space-y-3">
-                <section className="rounded-xl border border-slate-200 bg-slate-100 p-3">
-                  <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Upload Files
-                  </h2>
-                  <div className="mt-2 space-y-2">
-                    <input
-                      type="file"
-                      ref={uploadFileInputRef}
-                      multiple
-                      disabled={uploading}
-                      onChange={(e) => {
-                        const nextFiles = Array.from(e.target.files ?? []);
-                        addUploadFiles(nextFiles);
-                        if (uploadFileInputRef.current) uploadFileInputRef.current.value = "";
-                        setError(null);
-                        setMessage(
-                          nextFiles.length > 0
-                            ? `${nextFiles.length} file${nextFiles.length === 1 ? "" : "s"} added. Click Upload to start.`
-                            : null,
-                        );
-                      }}
-                      className="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs"
-                    />
-                    {uploadFiles.length > 0 ? (
-                      <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-[11px] text-slate-600">
-                        <p className="font-medium text-slate-700">
-                          {uploadFiles.length} file{uploadFiles.length === 1 ? "" : "s"} selected
-                        </p>
-                        <p className="mt-1 truncate">
-                          {selectedUploadPreview.map((file) => file.name).join(", ")}
-                        </p>
-                        {uploadFiles.length > selectedUploadPreview.length ? (
-                          <p className="mt-1 text-slate-500">
-                            +{uploadFiles.length - selectedUploadPreview.length} more
-                          </p>
-                        ) : null}
-                      </div>
-                    ) : (
-                      <div className="space-y-1 text-[11px] text-slate-500">
-                        <p>Titles are auto-derived from each filename.</p>
-                        <p>Tip: hold Ctrl/Cmd or Shift in the picker to select multiple files.</p>
-                      </div>
-                    )}
-                    <button
-                      type="button"
-                      disabled={uploadFiles.length === 0 || uploading}
-                      onClick={() => void handleUpload()}
-                      className="w-full cursor-pointer rounded-lg bg-sky-700 px-3 py-2 text-xs font-semibold text-white transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {uploading
-                        ? `Uploading ${uploadFiles.length} file${uploadFiles.length === 1 ? "" : "s"}...`
-                        : uploadFiles.length > 0
-                          ? `Upload ${uploadFiles.length} file${uploadFiles.length === 1 ? "" : "s"}`
-                          : "Upload files"}
-                    </button>
-                    {uploading ? (
-                      <p className="text-[11px] text-slate-500">
-                        Files are processed one at a time to preserve current extraction behavior.
-                      </p>
-                    ) : null}
-                  </div>
-                </section>
-
-                <button
-                  type="button"
-                  onClick={() => void loadDocuments()}
-                  className="w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-                >
-                  Refresh Documents
-                </button>
-
-                <section className="rounded-xl border border-slate-200 bg-slate-100 p-3">
-                  <button
-                    type="button"
-                    onClick={() => setDocFiltersOpen((current) => !current)}
-                    className="flex w-full items-center justify-between text-left"
-                    aria-expanded={docFiltersOpen}
-                    aria-controls="documents-filter-panel"
-                  >
-                    <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      <FolderIcon />
-                      <span>Folder Options</span>
-                    </div>
-                    <span className="text-xs font-semibold text-slate-600">
-                      {docFiltersOpen ? "Hide" : "Show"}
-                    </span>
-                  </button>
-                  <p className="mt-1 text-[11px] text-slate-500">
-                    Active: <span className="font-medium text-slate-700">{activeFilterLabel}</span>
-                  </p>
-                  {docFiltersOpen ? (
-                    <div id="documents-filter-panel" className="mt-3 space-y-3">
-                      <input
-                        value={leftFilter}
-                        onChange={(e) => {
-                          const nextValue = e.target.value;
-                          setLeftFilter(nextValue);
-                          if (nextValue.trim()) setShowAllDocs(true);
-                          else if (activeFolderId === "all") setShowAllDocs(true);
-                        }}
-                        placeholder="Search document titles..."
-                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs"
-                      />
-                      <div>
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                          Most recent
-                        </p>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setActiveFolderId("all");
-                            if (!normalizedLeftFilter) setShowAllDocs(true);
-                          }}
-                          className={`mt-1 w-full rounded-lg border px-2.5 py-1.5 text-left text-xs font-medium transition ${
-                            activeFolderId === "all"
-                              ? "border-slate-900 bg-slate-900 text-white"
-                              : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-                          }`}
-                        >
-                          <span className="flex items-center justify-between gap-2">
-                            <span>Recent uploads</span>
-                            <span className="text-[11px] opacity-80">{docs.length}</span>
-                          </span>
-                        </button>
-                      </div>
-                      <div>
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                          By status
-                        </p>
-                        <div className="mt-1 grid grid-cols-1 gap-1">
-                          {STATUS_FILTER_OPTIONS.map((option) => (
-                            <button
-                              key={option.id}
-                              type="button"
-                              onClick={() => {
-                                setActiveFolderId(option.id);
-                                setShowAllDocs(true);
-                              }}
-                              className={`rounded-lg border px-2.5 py-1.5 text-left text-xs font-medium transition ${
-                                activeFolderId === option.id
-                                  ? "border-slate-900 bg-slate-900 text-white"
-                                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-                              }`}
-                            >
-                              <span className="flex items-center justify-between gap-2">
-                                <span>{option.label}</span>
-                                <span className="text-[11px] opacity-80">
-                                  {docs.filter((doc) => FOLDER_FILTERS[option.id](doc)).length}
-                                </span>
-                              </span>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                      <div>
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                          By folders
-                        </p>
-                        <div className="mt-1 grid grid-cols-1 gap-1">
-                          {FOLDER_FILTER_OPTIONS.map((option) => (
-                            <button
-                              key={option.id}
-                              type="button"
-                              onClick={() => {
-                                setActiveFolderId(option.id);
-                                setShowAllDocs(true);
-                              }}
-                              className={`rounded-lg border px-2.5 py-1.5 text-left text-xs font-medium transition ${
-                                activeFolderId === option.id
-                                  ? "border-slate-900 bg-slate-900 text-white"
-                                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-                              }`}
-                            >
-                              <span className="flex items-center justify-between gap-2">
-                                <span>{option.label}</span>
-                                <span className="text-[11px] opacity-80">
-                                  {docs.filter((doc) => FOLDER_FILTERS[option.id](doc)).length}
-                                </span>
-                              </span>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  ) : null}
-                </section>
-
-                <section className="rounded-xl border border-slate-200 bg-slate-100 p-3">
-                  <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Current View
-                  </h3>
-                  <p className="mt-2 text-sm font-medium text-slate-800">{activeFilterLabel}</p>
-                  <p className="mt-1 text-[11px] text-slate-500">
-                    {showingRecentOnly
-                      ? `Showing top ${Math.min(RECENT_DOCS_DEFAULT_LIMIT, displayedDocs.length)} most recent uploads`
-                      : `Showing ${displayedDocs.length} matching document(s)`}
-                  </p>
-                  {docsLoading ? (
-                    <div className="mt-2 h-8 animate-pulse rounded-lg bg-white" />
-                  ) : null}
-                </section>
-              </div>
-            ) : (
-              <div className="mt-4 space-y-3">
-                <div className="flex items-center justify-between gap-2">
-                  <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Chat History
-                  </h2>
-                  <button
-                    type="button"
-                    onClick={() => void loadChats()}
-                    className="rounded-md border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
-                  >
-                    Refresh
-                  </button>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => void handleNewChat()}
-                  className="w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
-                >
-                  New chat
-                </button>
-                <div className="max-h-[64vh] space-y-2 overflow-y-auto pr-1">
-                  {chatsLoading ? (
-                    <ListSkeleton />
-                  ) : activeChats.length === 0 ? (
-                    <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-500">
-                      No chats yet. Start a new chat.
-                    </p>
-                  ) : (
-                    activeChats.map((chat) => {
-                      const selected = activeChatId === chat.id;
-                      return (
-                        <button
-                          key={chat.id}
-                          type="button"
-                          onClick={() => {
-                            setActiveChatId(chat.id);
-                            switchToChatMode(chat.id);
-                          }}
-                          className={`w-full rounded-lg border px-3 py-2 text-left transition ${
-                            selected
-                              ? "border-slate-900 bg-slate-900 text-white"
-                              : "border-slate-200 bg-white text-slate-800 hover:border-slate-300 hover:bg-slate-50"
-                          }`}
-                        >
-                          <p className="truncate text-sm font-semibold">{chat.title}</p>
-                          <p className={`mt-1 text-[11px] ${selected ? "text-white/80" : "text-slate-500"}`}>
-                            Updated {formatDate(chat.updatedAt || chat.lastMessageAt || chat.createdAt)}
-                          </p>
-                        </button>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-            )}
-              </>
-            )}
-          </aside>
-
+        <div className="min-h-[100dvh]">
           <section
             id="documents-main-content"
-            className={`relative min-w-0 bg-[#e9eef3] p-5 lg:order-1 lg:min-h-[100dvh] lg:border-r lg:border-slate-300/70 ${
+            className={`relative min-w-0 bg-[#e9eef3] p-4 sm:p-5 lg:min-h-[100dvh] ${
               isMainDropzoneActive ? "ring-2 ring-inset ring-sky-400/80" : ""
             }`}
             onDragEnter={handleMainDragEnter}
@@ -2146,6 +2086,25 @@ export default function DocumentsPage() {
             onDragLeave={handleMainDragLeave}
             onDrop={handleMainDrop}
           >
+            <input
+              type="file"
+              ref={uploadFileInputRef}
+              multiple
+              disabled={uploading}
+              onChange={(event) => {
+                const nextFiles = Array.from(event.target.files ?? []);
+                addUploadFiles(nextFiles);
+                if (uploadFileInputRef.current) uploadFileInputRef.current.value = "";
+                setError(null);
+                setMessage(
+                  nextFiles.length > 0
+                    ? `${nextFiles.length} file${nextFiles.length === 1 ? "" : "s"} added. Click Start Upload.`
+                    : null,
+                );
+              }}
+              className="sr-only"
+              aria-label="Upload documents"
+            />
             {workspaceMode === "documents" && isMainDropzoneActive ? (
               <div className="pointer-events-none absolute inset-5 z-20 flex items-center justify-center rounded-2xl border-2 border-dashed border-sky-500 bg-sky-100/80">
                 <p className="rounded-lg border border-sky-300 bg-white/80 px-4 py-2 text-sm font-semibold text-sky-800 shadow-sm">
@@ -2159,7 +2118,70 @@ export default function DocumentsPage() {
                   <ViewerSkeleton />
                 ) : (
                   <div className="min-h-[74vh]">
-                    <div className="mb-4 flex flex-wrap items-center justify-end gap-2 text-xs">
+                    <div
+                      className={`mb-2 inline-flex items-center gap-2 rounded-full px-2 py-1 ${
+                        rootDropTargetActive ? "ring-2 ring-sky-400/80" : ""
+                      }`}
+                      onDragOver={handleRootDragOver}
+                      onDragLeave={handleRootDragLeave}
+                      onDrop={handleRootDrop}
+                    >
+                      <button
+                        type="button"
+                        onClick={returnToDesktopRoot}
+                        className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-600 transition hover:text-slate-900"
+                      >
+                        Document Desktop
+                      </button>
+                      {activeDesktopFolder ? (
+                        <>
+                          <span className="text-[11px] font-semibold text-slate-400">/</span>
+                          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+                            {activeDesktopFolder.name}
+                          </span>
+                        </>
+                      ) : null}
+                      {desktopFoldersLoading ? (
+                        <span className="text-[10px] text-slate-500">Loading folders...</span>
+                      ) : null}
+                    </div>
+
+                    <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
+                      <div ref={newMenuRef} className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setNewMenuOpen((current) => !current)}
+                          className="inline-flex items-center rounded-full border border-slate-900 bg-slate-900 px-3 py-1.5 font-semibold text-white transition hover:bg-slate-700"
+                          aria-expanded={newMenuOpen}
+                          aria-haspopup="menu"
+                        >
+                          New +
+                        </button>
+                        {newMenuOpen ? (
+                          <div
+                            role="menu"
+                            className="absolute left-0 top-full z-30 mt-1.5 min-w-[172px] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_16px_32px_rgba(15,23,42,0.14)]"
+                          >
+                            <button
+                              type="button"
+                              role="menuitem"
+                              onClick={openFilePickerFromNewMenu}
+                              className="block w-full px-3 py-2 text-left text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                            >
+                              Upload documents
+                            </button>
+                            <button
+                              type="button"
+                              role="menuitem"
+                              onClick={openCreateFolderModal}
+                              className="block w-full border-t border-slate-100 px-3 py-2 text-left text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                            >
+                              Create folder
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+
                       <button
                         type="button"
                         onClick={() => {
@@ -2201,32 +2223,140 @@ export default function DocumentsPage() {
                       >
                         Show all
                       </button>
-                      <span className="rounded-full border border-slate-300/90 bg-white/90 px-2.5 py-1 font-medium text-slate-700">
-                        {activeFilterLabel}
-                      </span>
+                      <button
+                        type="button"
+                        onClick={() => void loadDocuments(activeDesktopFolderId)}
+                        className="rounded-full border border-slate-400/80 bg-white px-2.5 py-1 font-semibold text-slate-700 transition hover:bg-slate-100"
+                      >
+                        Refresh
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDownloadAllConfirmOpen(true)}
+                        disabled={downloadingAllDocs}
+                        className="rounded-full border border-violet-300 bg-violet-50 px-2.5 py-1 font-semibold text-violet-700 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {downloadingAllDocs ? "Preparing..." : "Download all"}
+                      </button>
+                      {uploadFiles.length > 0 ? (
+                        <button
+                          type="button"
+                          disabled={uploading}
+                          onClick={() => void handleUpload()}
+                          className="rounded-full border border-sky-300 bg-sky-50 px-2.5 py-1 font-semibold text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {uploading
+                            ? `Uploading ${uploadFiles.length}...`
+                            : `Start ${uploadFiles.length} upload${uploadFiles.length === 1 ? "" : "s"}`}
+                        </button>
+                      ) : null}
+                      <input
+                        value={leftFilter}
+                        onChange={(event) => {
+                          const nextValue = event.target.value;
+                          setLeftFilter(nextValue);
+                          if (nextValue.trim()) setShowAllDocs(true);
+                          else if (activeFolderId === "all") setShowAllDocs(true);
+                        }}
+                        placeholder="Search desktop..."
+                        className="min-w-[170px] flex-1 rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-700 sm:max-w-[280px]"
+                      />
+                      <select
+                        value={activeFolderId}
+                        onChange={(event) => {
+                          const nextFilterId = event.target.value;
+                          setActiveFolderId(nextFilterId);
+                          if (nextFilterId !== "all") setShowAllDocs(true);
+                          else if (!normalizedLeftFilter) setShowAllDocs(true);
+                        }}
+                        className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700"
+                        aria-label="Filter documents"
+                      >
+                        {Object.entries(FILTER_LABELS).map(([id, label]) => (
+                          <option key={id} value={id}>
+                            {label}
+                          </option>
+                        ))}
+                      </select>
                       <span className="rounded-full border border-slate-300/90 bg-white/90 px-2.5 py-1 font-medium text-slate-700">
                         {showingRecentOnly
-                          ? `Top ${Math.min(RECENT_DOCS_DEFAULT_LIMIT, displayedDocs.length)}`
-                          : `${displayedDocs.length} shown`}
+                          ? `Top ${Math.min(RECENT_DOCS_DEFAULT_LIMIT, displayedDesktopItems.length)}`
+                          : `${displayedDesktopItems.length} shown`}
                       </span>
                     </div>
-                    {visibleDocs.length === 0 ? (
+                    {uploadFiles.length > 0 ? (
+                      <div className="mb-4 rounded-lg border border-slate-200 bg-white/90 px-3 py-2 text-[11px] text-slate-600">
+                        <p className="font-medium text-slate-700">
+                          {uploadFiles.length} file{uploadFiles.length === 1 ? "" : "s"} selected
+                        </p>
+                        <p className="mt-1 truncate">
+                          {selectedUploadPreview.map((file) => file.name).join(", ")}
+                        </p>
+                        {uploadFiles.length > selectedUploadPreview.length ? (
+                          <p className="mt-1 text-slate-500">
+                            +{uploadFiles.length - selectedUploadPreview.length} more
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {visibleDesktopItems.length === 0 ? (
                       <div className="flex min-h-[62vh] items-center justify-center border border-dashed border-slate-400/70 bg-white/85 p-8 text-center">
                         <div className="space-y-2">
                           <p className="text-base font-semibold text-slate-900">No documents match this view</p>
                           <p className="text-sm text-slate-600">
-                            Adjust folder options on the right, or upload a new file.
+                            Try changing the filter, add a folder, or upload a file.
                           </p>
                         </div>
                       </div>
                     ) : (
                       <div className="grid grid-cols-2 gap-3 pb-2 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4 xl:grid-cols-5">
-                        {displayedDocs.map((doc) => {
+                        {displayedDesktopItems.map((item) => {
+                          if (item.kind === "folder") {
+                            return (
+                              <button
+                                key={`folder-${item.folder.id}`}
+                                type="button"
+                                onClick={() => openDesktopFolder(item.folder.id)}
+                                onDragOver={(event) => handleFolderDragOver(event, item.folder.id)}
+                                onDragLeave={() => handleFolderDragLeave(item.folder.id)}
+                                onDrop={(event) => handleFolderDrop(event, item.folder.id)}
+                                className={`group min-h-[136px] rounded-2xl border bg-gradient-to-br from-amber-50 to-yellow-50 p-3 text-left shadow-[0_10px_25px_rgba(15,23,42,0.09)] transition hover:border-amber-400 hover:shadow-[0_14px_30px_rgba(15,23,42,0.14)] sm:min-h-[150px] sm:p-4 ${
+                                  folderDropTargetId === item.folder.id
+                                    ? "border-sky-400 ring-2 ring-sky-300/90"
+                                    : "border-amber-300/90"
+                                }`}
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-amber-200 bg-amber-100 text-amber-700">
+                                    <DesktopFolderIcon />
+                                  </span>
+                                  <span className="inline-flex rounded-full border border-amber-200 bg-white/70 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+                                    Folder
+                                  </span>
+                                </div>
+                                <p className="mt-3 line-clamp-2 text-sm font-semibold leading-snug text-slate-900">
+                                  {item.folder.name}
+                                </p>
+                                <div className="mt-3 flex items-center justify-between gap-2 text-[11px] text-slate-500">
+                                  <span className="truncate">
+                                    Created {formatDate(item.folder.createdAt)}
+                                  </span>
+                                  <span className="truncate font-semibold text-amber-700">Desktop</span>
+                                </div>
+                              </button>
+                            );
+                          }
+
+                          const doc = item.doc;
                           return (
                             <button
                               key={doc.id}
                               type="button"
                               onClick={() => openDocument(doc.id)}
+                              draggable={movingDocId !== doc.id}
+                              onDragStart={(event) => handleDocumentDragStart(event, doc.id)}
+                              onDragEnd={handleDocumentDragEnd}
+                              disabled={movingDocId === doc.id}
                               className="group min-h-[136px] rounded-2xl border border-slate-300/90 bg-white/95 p-3 text-left shadow-[0_10px_25px_rgba(15,23,42,0.09)] transition hover:border-slate-400 hover:shadow-[0_14px_30px_rgba(15,23,42,0.14)] sm:min-h-[150px] sm:p-4"
                             >
                               <div className="flex items-start justify-between gap-2">
@@ -2236,7 +2366,7 @@ export default function DocumentsPage() {
                                 <span
                                   className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${documentTextStatusClasses(doc.textStatus)}`}
                                 >
-                                  {doc.textStatus}
+                                  {movingDocId === doc.id ? "moving" : doc.textStatus}
                                 </span>
                               </div>
                               <p className="mt-3 line-clamp-2 text-sm font-semibold leading-snug text-slate-900">
@@ -2744,6 +2874,71 @@ export default function DocumentsPage() {
           </section>
         </div>
       </div>
+      {downloadAllConfirmOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/35 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_30px_60px_rgba(15,23,42,0.28)]">
+            <p className="text-sm font-semibold text-slate-900">Download All Documents</p>
+            <p className="mt-2 text-sm text-slate-600">
+              This will download the newest versions of all documents and their appropriate folders.
+              Are you sure you want to download?
+            </p>
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={downloadingAllDocs}
+                onClick={() => setDownloadAllConfirmOpen(false)}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={downloadingAllDocs}
+                onClick={() => void handleDownloadAllDocuments()}
+                className="rounded-lg bg-violet-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-violet-600 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {downloadingAllDocs ? "Preparing..." : "Yes, download"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {createFolderOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/35 p-4">
+          <form
+            onSubmit={createDesktopFolder}
+            className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_30px_60px_rgba(15,23,42,0.28)]"
+          >
+            <p className="text-sm font-semibold text-slate-900">Create Folder</p>
+            <p className="mt-1 text-xs text-slate-600">Choose a folder name for your document desktop.</p>
+            <input
+              autoFocus
+              value={newFolderName}
+              onChange={(event) => setNewFolderName(event.target.value)}
+              placeholder="Folder name"
+              className="mt-3 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
+            />
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setCreateFolderOpen(false);
+                  setNewFolderName("");
+                }}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-700"
+              >
+                Create Folder
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
       {visibleUploadToasts.length > 0 ? (
         <aside className="pointer-events-none fixed bottom-4 right-4 z-50 w-[min(92vw,360px)] space-y-2">
           <div className="pointer-events-auto flex items-center justify-between rounded-xl border border-slate-300 bg-white px-3 py-2 shadow-lg">

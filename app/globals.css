@@ -268,6 +268,10 @@ html.workspace-compact .workspace-page > * {
   padding-bottom: 1rem !important;
 }
 
+html.workspace-compact .workspace-page > .workspace-page-fill.workspace-page-no-top-gap {
+  padding-top: 0 !important;
+}
+
 html.workspace-muted .workspace-page-title {
   background: linear-gradient(90deg, #334155 0%, #64748b 100%);
   background-clip: text;

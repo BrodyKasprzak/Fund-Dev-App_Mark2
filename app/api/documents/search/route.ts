@@ -93,6 +93,7 @@ export async function GET(req: Request) {
           storagePath?: unknown;
           fileType?: unknown;
           size?: unknown;
+          folderId?: unknown;
           status?: unknown;
           textStatus?: unknown;
           extractedText?: unknown;
@@ -116,6 +117,7 @@ export async function GET(req: Request) {
           storagePath: toSafeString(data.storagePath),
           fileType: toSafeString(data.fileType) || "application/octet-stream",
           size: typeof data.size === "number" ? data.size : 0,
+          folderId: typeof data.folderId === "string" ? data.folderId : null,
           status: toSafeString(data.status) || "processing",
           textStatus: toSafeString(data.textStatus) || "pending",
           version: typeof data.version === "number" ? data.version : 1,
