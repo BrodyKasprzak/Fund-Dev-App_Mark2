@@ -25,6 +25,11 @@ import { useAuth } from "@/lib/AuthContext";
 import { LexicalEditorToolbarPlugin } from "@/components/editor/plugins/LexicalEditorToolbarPlugin";
 import { LexicalPasteCleanupPlugin } from "@/components/editor/plugins/LexicalPasteCleanupPlugin";
 import { LEXICAL_EDITOR_FORMAT } from "@/lib/documents/versionMetadata";
+import {
+  DOCUMENT_EDITOR_CONTENT_HEIGHT_PX,
+  DOCUMENT_EDITOR_PAGE_LAYOUT,
+  DOCUMENT_EDITOR_PAGE_STRIDE_PX,
+} from "@/lib/documents/layout";
 
 type DocStatus = "ready" | "processing" | "failed";
 type TextStatus = "pending" | "processing" | "ready" | "failed";
@@ -98,14 +103,22 @@ type SaveEditorResponse = {
 const MAX_CHANGE_SUMMARY_LENGTH = 500;
 const MAX_DOWNLOAD_FILENAME_LENGTH = 220;
 const DEFAULT_FONT_SIZE = "14px";
-const DOCX_PAGE_MAX_WIDTH_PX = 816;
-const DOCX_PAGE_HEIGHT_PX = 1056;
-const DOCX_PAGE_GAP_PX = 14;
-const DOCX_PAGE_BOTTOM_MARGIN_PX = 72;
+const DOCX_PAGE_MAX_WIDTH_PX = DOCUMENT_EDITOR_PAGE_LAYOUT.pageWidthPx;
+const DOCX_PAGE_HEIGHT_PX = DOCUMENT_EDITOR_PAGE_LAYOUT.pageHeightPx;
+const DOCX_PAGE_GAP_PX = DOCUMENT_EDITOR_PAGE_LAYOUT.pageGapPx;
+const DOCX_PAGE_TOP_MARGIN_PX = DOCUMENT_EDITOR_PAGE_LAYOUT.marginTopPx;
+const DOCX_PAGE_RIGHT_MARGIN_PX = DOCUMENT_EDITOR_PAGE_LAYOUT.marginRightPx;
+const DOCX_PAGE_BOTTOM_MARGIN_PX = DOCUMENT_EDITOR_PAGE_LAYOUT.marginBottomPx;
+const DOCX_PAGE_LEFT_MARGIN_PX = DOCUMENT_EDITOR_PAGE_LAYOUT.marginLeftPx;
+const DOCX_PAGE_MOBILE_PADDING_X_PX = DOCUMENT_EDITOR_PAGE_LAYOUT.mobilePaddingXPx;
+const DOCX_PAGE_MOBILE_PADDING_Y_PX = DOCUMENT_EDITOR_PAGE_LAYOUT.mobilePaddingYPx;
 const DOCX_BODY_FONT_SIZE_PT = 11;
 const DOCX_BODY_LINE_HEIGHT = 1.15;
 const DOCX_BODY_FONT_FAMILY = "Calibri, Carlito, 'Segoe UI', Arial, sans-serif";
 const CHUNK_VIEW_OFFSET_PADDING = 8_000;
+const DOCX_MIN_DESKTOP_MEDIA_QUERY = "(min-width: 640px)";
+const DOC_PAGE_BREAK_CLASSNAME = "doc-page-break-before";
+const DOC_PAGE_BREAK_OFFSET_CSS_VAR = "--doc-page-break-offset";
 
 const lexicalTheme: InitialConfigType["theme"] = {
   paragraph: "mb-2",
@@ -309,6 +322,156 @@ function EditorEditablePlugin(props: { editable: boolean }) {
   useEffect(() => {
     editor.setEditable(editable);
   }, [editable, editor]);
+
+  return null;
+}
+
+function clearVisualPageBreaks(rootElement: HTMLElement) {
+  for (const child of Array.from(rootElement.children)) {
+    if (!(child instanceof HTMLElement)) continue;
+    child.classList.remove(DOC_PAGE_BREAK_CLASSNAME);
+    child.style.removeProperty(DOC_PAGE_BREAK_OFFSET_CSS_VAR);
+  }
+}
+
+function applyVisualPageBreaks(rootElement: HTMLElement) {
+  clearVisualPageBreaks(rootElement);
+
+  const blocks = Array.from(rootElement.children).filter(
+    (child): child is HTMLElement => child instanceof HTMLElement,
+  );
+  if (blocks.length === 0) return;
+
+  let injectedOffsetPx = 0;
+
+  for (const block of blocks) {
+    if (block.offsetHeight <= 0) continue;
+
+    const naturalTopPx = Math.max(0, block.offsetTop - DOCX_PAGE_TOP_MARGIN_PX);
+    const naturalBottomPx = naturalTopPx + block.offsetHeight;
+    const effectiveTopPx = naturalTopPx + injectedOffsetPx;
+    const effectiveBottomPx = naturalBottomPx + injectedOffsetPx;
+
+    const pageIndex = Math.floor(effectiveTopPx / DOCUMENT_EDITOR_PAGE_STRIDE_PX);
+    const currentPageContentStartPx = pageIndex * DOCUMENT_EDITOR_PAGE_STRIDE_PX;
+    const currentPageContentEndPx = currentPageContentStartPx + DOCUMENT_EDITOR_CONTENT_HEIGHT_PX;
+
+    if (effectiveBottomPx <= currentPageContentEndPx + 0.5) continue;
+
+    const blockTooTallForSinglePage = block.offsetHeight > DOCUMENT_EDITOR_CONTENT_HEIGHT_PX - 2;
+    const startsNearPageTop = effectiveTopPx <= currentPageContentStartPx + 1;
+    if (blockTooTallForSinglePage && startsNearPageTop) continue;
+
+    const nextPageContentStartPx = (pageIndex + 1) * DOCUMENT_EDITOR_PAGE_STRIDE_PX;
+    const breakOffsetPx = Math.ceil(nextPageContentStartPx - effectiveTopPx);
+    if (breakOffsetPx <= 0) continue;
+
+    block.classList.add(DOC_PAGE_BREAK_CLASSNAME);
+    block.style.setProperty(DOC_PAGE_BREAK_OFFSET_CSS_VAR, `${breakOffsetPx}px`);
+    injectedOffsetPx += breakOffsetPx;
+  }
+}
+
+function VisualPaginationPlugin(props: { enabled: boolean }) {
+  const { enabled } = props;
+  const [editor] = useLexicalComposerContext();
+  const frameRef = useRef<number | null>(null);
+  const rootRef = useRef<HTMLElement | null>(null);
+  const resizeObserverRef = useRef<ResizeObserver | null>(null);
+
+  const cancelScheduledLayout = useCallback(() => {
+    if (typeof window === "undefined") return;
+    if (frameRef.current !== null) {
+      window.cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+    }
+  }, []);
+
+  const computeLayout = useCallback(
+    (rootElement: HTMLElement | null) => {
+      if (!rootElement) return;
+      if (
+        !enabled ||
+        typeof window === "undefined" ||
+        !window.matchMedia(DOCX_MIN_DESKTOP_MEDIA_QUERY).matches
+      ) {
+        clearVisualPageBreaks(rootElement);
+        return;
+      }
+      applyVisualPageBreaks(rootElement);
+    },
+    [enabled],
+  );
+
+  const scheduleLayout = useCallback(
+    (rootOverride?: HTMLElement | null) => {
+      if (typeof window === "undefined") return;
+      const rootElement = rootOverride ?? editor.getRootElement();
+      cancelScheduledLayout();
+      frameRef.current = window.requestAnimationFrame(() => {
+        frameRef.current = null;
+        computeLayout(rootElement);
+      });
+    },
+    [cancelScheduledLayout, computeLayout, editor],
+  );
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const disconnectResizeObserver = () => {
+      if (!resizeObserverRef.current) return;
+      resizeObserverRef.current.disconnect();
+      resizeObserverRef.current = null;
+    };
+
+    const setObservedRoot = (nextRoot: HTMLElement | null) => {
+      if (rootRef.current === nextRoot) return;
+      if (rootRef.current) {
+        clearVisualPageBreaks(rootRef.current);
+      }
+      rootRef.current = nextRoot;
+      disconnectResizeObserver();
+      if (!nextRoot) return;
+      if (typeof ResizeObserver === "undefined") return;
+
+      const observer = new ResizeObserver(() => {
+        scheduleLayout(nextRoot);
+      });
+      observer.observe(nextRoot);
+      resizeObserverRef.current = observer;
+    };
+
+    const handleWindowResize = () => {
+      scheduleLayout();
+    };
+
+    const unregisterRootListener = editor.registerRootListener((nextRoot) => {
+      setObservedRoot(nextRoot);
+      scheduleLayout(nextRoot);
+    });
+
+    const unregisterUpdateListener = editor.registerUpdateListener(() => {
+      scheduleLayout();
+    });
+
+    window.addEventListener("resize", handleWindowResize);
+    setObservedRoot(editor.getRootElement());
+    scheduleLayout();
+
+    return () => {
+      unregisterRootListener();
+      unregisterUpdateListener();
+      window.removeEventListener("resize", handleWindowResize);
+      disconnectResizeObserver();
+      cancelScheduledLayout();
+      if (rootRef.current) clearVisualPageBreaks(rootRef.current);
+    };
+  }, [cancelScheduledLayout, editor, scheduleLayout]);
+
+  useEffect(() => {
+    scheduleLayout();
+  }, [enabled, scheduleLayout]);
 
   return null;
 }
@@ -747,6 +910,7 @@ export default function DocumentEditorPage() {
       <div className="pt-0">
         <LexicalComposer key={`composer-${docId}-${editorSessionKey}`} initialConfig={initialConfig}>
           <EditorEditablePlugin editable={Boolean(canEdit) && isEditMode && !savingVersion} />
+          <VisualPaginationPlugin enabled />
           <header className="sticky top-0 z-30 border-b border-slate-300 bg-white shadow-sm">
             <div className="space-y-3 px-4 py-3">
               <div className="flex min-h-[40px] flex-wrap items-center justify-between gap-3">
@@ -1016,7 +1180,7 @@ export default function DocumentEditorPage() {
                 <div className="doc-page-canvas relative min-h-[720px] sm:min-h-[1056px]">
                   {!isEditMode && effectiveHighlightQuery && highlightParagraphs.length > 0 ? (
                     <article
-                      className="min-h-[720px] space-y-4 overflow-auto px-[clamp(24px,8vw,96px)] py-[clamp(24px,8vw,96px)] text-slate-700 sm:min-h-[1056px]"
+                      className="doc-highlight-surface min-h-[720px] space-y-4 overflow-auto text-slate-700 sm:min-h-[1056px]"
                       style={{
                         fontFamily: DOCX_BODY_FONT_FAMILY,
                         fontSize: `${DOCX_BODY_FONT_SIZE_PT}pt`,
@@ -1053,7 +1217,7 @@ export default function DocumentEditorPage() {
                       <RichTextPlugin
                         contentEditable={
                           <ContentEditable
-                            className="min-h-[720px] w-full overflow-auto px-[clamp(24px,8vw,96px)] py-[clamp(24px,8vw,96px)] text-slate-800 outline-none sm:min-h-[1056px]"
+                            className="doc-editor-content min-h-[720px] w-full text-slate-800 outline-none sm:min-h-[1056px]"
                             style={{
                               fontFamily: DOCX_BODY_FONT_FAMILY,
                               fontSize: `${DOCX_BODY_FONT_SIZE_PT}pt`,
@@ -1063,7 +1227,7 @@ export default function DocumentEditorPage() {
                         }
                         placeholder={
                           <div
-                            className="pointer-events-none absolute px-[clamp(24px,8vw,96px)] py-[clamp(24px,8vw,96px)] text-sm text-slate-400"
+                            className="doc-editor-placeholder pointer-events-none absolute inset-0 text-sm text-slate-400"
                             style={{
                               fontFamily: DOCX_BODY_FONT_FAMILY,
                               fontSize: `${DOCX_BODY_FONT_SIZE_PT}pt`,
@@ -1105,46 +1269,60 @@ export default function DocumentEditorPage() {
       `}</style>
       <style jsx>{`
         .doc-page-canvas {
+          --doc-page-height: ${DOCX_PAGE_HEIGHT_PX}px;
+          --doc-page-gap: ${DOCX_PAGE_GAP_PX}px;
+          --doc-page-margin-top: ${DOCX_PAGE_TOP_MARGIN_PX}px;
+          --doc-page-margin-right: ${DOCX_PAGE_RIGHT_MARGIN_PX}px;
+          --doc-page-margin-bottom: ${DOCX_PAGE_BOTTOM_MARGIN_PX}px;
+          --doc-page-margin-left: ${DOCX_PAGE_LEFT_MARGIN_PX}px;
+          --doc-mobile-padding-x: ${DOCX_PAGE_MOBILE_PADDING_X_PX}px;
+          --doc-mobile-padding-y: ${DOCX_PAGE_MOBILE_PADDING_Y_PX}px;
           background-color: #ffffff;
+        }
+
+        .doc-page-canvas :global(.doc-editor-content),
+        .doc-page-canvas :global(.doc-editor-placeholder),
+        .doc-page-canvas :global(.doc-highlight-surface) {
+          padding-left: var(--doc-mobile-padding-x);
+          padding-right: var(--doc-mobile-padding-x);
+          padding-top: var(--doc-mobile-padding-y);
+          padding-bottom: var(--doc-mobile-padding-y);
+        }
+
+        .doc-page-canvas :global(.doc-editor-content) {
+          overflow: visible;
         }
 
         @media (min-width: 640px) {
           .doc-page-canvas {
             background-color: #e8edf3;
-            background-image:
-              repeating-linear-gradient(
-                to bottom,
-                transparent 0,
-                transparent ${DOCX_PAGE_HEIGHT_PX - DOCX_PAGE_BOTTOM_MARGIN_PX}px,
-                rgba(148, 163, 184, 0.2) ${DOCX_PAGE_HEIGHT_PX - DOCX_PAGE_BOTTOM_MARGIN_PX}px,
-                rgba(148, 163, 184, 0.08) ${DOCX_PAGE_HEIGHT_PX - DOCX_PAGE_BOTTOM_MARGIN_PX + 1}px,
-                rgba(148, 163, 184, 0.08) ${DOCX_PAGE_HEIGHT_PX}px,
-                transparent ${DOCX_PAGE_HEIGHT_PX}px,
-                transparent ${DOCX_PAGE_HEIGHT_PX + DOCX_PAGE_GAP_PX}px
-              ),
-              repeating-linear-gradient(
-                to bottom,
-                #ffffff 0,
-                #ffffff ${DOCX_PAGE_HEIGHT_PX}px,
-                transparent ${DOCX_PAGE_HEIGHT_PX}px,
-                transparent ${DOCX_PAGE_HEIGHT_PX + DOCX_PAGE_GAP_PX}px
-              ),
-              repeating-linear-gradient(
-                to bottom,
-                rgba(148, 163, 184, 0.35) 0,
-                rgba(148, 163, 184, 0.35) 1px,
-                transparent 1px,
-                transparent ${DOCX_PAGE_HEIGHT_PX + DOCX_PAGE_GAP_PX}px
-              ),
-              repeating-linear-gradient(
-                to bottom,
-                transparent 0,
-                transparent ${DOCX_PAGE_HEIGHT_PX - 2}px,
-                rgba(15, 23, 42, 0.11) ${DOCX_PAGE_HEIGHT_PX - 1}px,
-                rgba(15, 23, 42, 0.05) ${DOCX_PAGE_HEIGHT_PX + 2}px,
-                transparent ${DOCX_PAGE_HEIGHT_PX + DOCX_PAGE_GAP_PX}px
-              );
+            background-image: repeating-linear-gradient(
+              to bottom,
+              #ffffff 0,
+              #ffffff ${DOCX_PAGE_HEIGHT_PX}px,
+              #e8edf3 ${DOCX_PAGE_HEIGHT_PX}px,
+              #e8edf3 ${DOCX_PAGE_HEIGHT_PX + DOCX_PAGE_GAP_PX}px
+            );
             background-size: 100% ${DOCX_PAGE_HEIGHT_PX + DOCX_PAGE_GAP_PX}px;
+          }
+
+          .doc-page-canvas :global(.doc-editor-content),
+          .doc-page-canvas :global(.doc-editor-placeholder),
+          .doc-page-canvas :global(.doc-highlight-surface) {
+            padding-left: var(--doc-page-margin-left);
+            padding-right: var(--doc-page-margin-right);
+            padding-top: var(--doc-page-margin-top);
+            padding-bottom: var(--doc-page-margin-bottom);
+          }
+
+          .doc-page-canvas :global(.doc-editor-content > .${DOC_PAGE_BREAK_CLASSNAME}) {
+            position: relative;
+          }
+
+          .doc-page-canvas :global(.doc-editor-content > .${DOC_PAGE_BREAK_CLASSNAME})::before {
+            content: "";
+            display: block;
+            height: var(${DOC_PAGE_BREAK_OFFSET_CSS_VAR}, 0px);
           }
 
           .doc-page-canvas :global([contenteditable="true"]) {
