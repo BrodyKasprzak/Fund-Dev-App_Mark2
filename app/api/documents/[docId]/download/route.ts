@@ -455,7 +455,8 @@ export async function GET(
       },
     });
 
-    return new NextResponse(Buffer.from(buffer), {
+    const fileBytes = Uint8Array.from(buffer);
+    return new NextResponse(fileBytes, {
       headers: {
         "Content-Type": contentType,
         "Content-Length": String(buffer.length),

@@ -232,7 +232,8 @@ export async function POST(req: Request) {
     });
 
     const filename = `documents-offboard-${nowDateStamp()}.zip`;
-    return new NextResponse(zipBuffer, {
+    const zipBytes = Uint8Array.from(zipBuffer);
+    return new NextResponse(zipBytes, {
       status: 200,
       headers: {
         "Content-Type": "application/zip",

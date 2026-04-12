@@ -390,8 +390,9 @@ export async function POST(
 
     const buffer = await Packer.toBuffer(doc);
     const filename = `${safeFilenameBase(orgName)}_Fund_Development_Handbook.docx`;
+    const docxBytes = Uint8Array.from(buffer);
 
-    return new NextResponse(Buffer.from(buffer), {
+    return new NextResponse(docxBytes, {
       headers: {
         "Content-Type":
           "application/vnd.openxmlformats-officedocument.wordprocessingml.document",

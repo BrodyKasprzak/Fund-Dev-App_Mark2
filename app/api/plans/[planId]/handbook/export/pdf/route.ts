@@ -113,8 +113,9 @@ export async function POST(
 
     const bytes = await pdfDoc.save();
     const filename = `${orgName.replace(/[^\w\-]+/g, "_")}_handbook.pdf`;
+    const pdfBytes = Uint8Array.from(bytes);
 
-    return new NextResponse(Buffer.from(bytes), {
+    return new NextResponse(pdfBytes, {
       headers: {
         "Content-Type": "application/pdf",
         "Content-Disposition": `attachment; filename="${filename}"`,
