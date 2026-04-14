@@ -45,7 +45,6 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   const searchParams = useSearchParams();
   const { user, loading, meLoading, orgs, me, activeOrgId, setActiveOrgId, authedFetch } = useAuth();
   const workspaceRoute = Boolean(pathname && isWorkspaceRoute(pathname));
-  const isDashboardRoute = Boolean(pathname && (pathname === "/dashboard" || pathname.startsWith("/dashboard/")));
   const isDocumentsRoute = Boolean(pathname && (pathname === "/documents" || pathname.startsWith("/documents/")));
   const isChatRoute = Boolean(pathname && (pathname === "/chat" || pathname.startsWith("/chat/")));
   const pageTitle = useMemo(() => pageTitleFromPath(pathname ?? ""), [pathname]);
@@ -205,28 +204,20 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
           }`}
         >
           <div
-            className={`workspace-brand-strip border-b border-slate-200 bg-white/85 px-5 backdrop-blur-md md:px-7 ${
-              isDashboardRoute ? "py-3.5" : "py-2"
-            }`}
+            className="workspace-brand-strip border-b border-slate-200 bg-white/85 px-5 py-2 backdrop-blur-md md:px-7"
           >
             <p
-              className={`font-semibold uppercase tracking-[0.16em] text-primary-600 ${
-                isDashboardRoute ? "text-[11px]" : "text-[10px]"
-              }`}
+              className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary-600"
             >
               PurposeFramework
             </p>
             <p
-              className={`font-medium text-slate-600 ${
-                isDashboardRoute ? "mt-0.5 text-xs" : "mt-0 text-[11px]"
-              }`}
+              className="mt-0 text-[11px] font-medium text-slate-600"
             >
               {headerOrgName}
             </p>
             <h1
-              className={`workspace-page-title font-semibold tracking-tight ${
-                isDashboardRoute ? "mt-1 text-2xl md:text-[2rem]" : "mt-0 text-sm md:text-base"
-              }`}
+              className="workspace-page-title mt-0 text-sm font-semibold tracking-tight md:text-base"
             >
               {pageTitle}
             </h1>
