@@ -228,24 +228,25 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
 
   return (
     <aside
-      className={`relative sticky top-0 self-start h-screen flex-shrink-0 border-r border-slate-300/60 bg-gradient-to-b from-slate-900 via-slate-800 to-primary-900 text-slate-100 shadow-xl transition-all duration-300 ${
+      className={`relative sticky top-0 self-start h-screen flex-shrink-0 border-r border-white/15 bg-gradient-to-b from-slate-900 via-slate-800 to-primary-900 text-slate-100 shadow-xl transition-all duration-300 ${
         collapsed ? "w-16" : "w-[312px]"
       }`}
     >
       <button
         type="button"
         onClick={toggleCollapsed}
-        className="absolute -right-3 top-6 z-10 flex h-7 w-7 items-center justify-center rounded-full border border-slate-700/70 bg-slate-900/90 shadow-[0_8px_18px_rgba(2,6,23,0.35)] backdrop-blur-md transition hover:bg-slate-800"
+        className="group absolute -right-1 top-0 z-20 h-full w-3 cursor-col-resize bg-transparent"
         aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+        title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
       >
-        <svg
-          className={`h-4 w-4 text-slate-200 transition-transform ${collapsed ? "rotate-180" : ""}`}
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-        </svg>
+        <span
+          aria-hidden="true"
+          className="absolute left-1/2 top-0 h-full w-px -translate-x-1/2 bg-white/25 transition group-hover:w-[2px] group-hover:bg-white/55"
+        />
+        <span
+          aria-hidden="true"
+          className="absolute left-1/2 top-1/2 h-12 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/0 transition group-hover:bg-white/25"
+        />
       </button>
 
       <div className={`h-full overflow-hidden ${collapsed ? "p-3" : "p-5"}`}>

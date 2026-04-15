@@ -204,20 +204,20 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
           }`}
         >
           <div
-            className="workspace-brand-strip border-b border-slate-200 bg-white/85 px-5 py-2 backdrop-blur-md md:px-7"
+            className="workspace-brand-strip bg-gradient-to-b from-slate-900 via-slate-800 to-primary-900 px-5 py-2.5 shadow-[0_10px_24px_rgba(2,6,23,0.22)] md:px-7"
           >
             <p
-              className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary-600"
+              className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-200/95"
             >
               PurposeFramework
             </p>
             <p
-              className="mt-0 text-[11px] font-medium text-slate-600"
+              className="mt-0 text-[11px] font-medium text-slate-300/90"
             >
               {headerOrgName}
             </p>
             <h1
-              className="workspace-page-title mt-0 text-sm font-semibold tracking-tight md:text-base"
+              className="mt-0 text-sm font-semibold tracking-tight text-slate-50 md:text-base"
             >
               {pageTitle}
             </h1>
