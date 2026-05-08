@@ -3,8 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { WorkspaceSidebar } from "@/components/workspace/WorkspaceSidebar";
+import Image from "next/image";
+import { signOut } from "firebase/auth";
 import { useAuth } from "@/lib/AuthContext";
+import { auth } from "@/lib/firebaseClient";
 
 const WORKSPACE_ROUTE_PREFIXES = [
   "/dashboard",
@@ -24,20 +26,115 @@ function isWorkspaceRoute(pathname: string) {
   );
 }
 
-function pageTitleFromPath(pathname: string) {
-  if (pathname === "/dashboard" || pathname.startsWith("/dashboard/")) return "Workspace Overview";
-  if (pathname === "/documents" || pathname.startsWith("/documents/")) return "Document Workspace";
-  if (pathname === "/chat" || pathname.startsWith("/chat/")) return "Chat Workspace";
-  if (pathname === "/products" || pathname.startsWith("/products/")) return "Strategic Builders";
-  if (pathname === "/activity" || pathname.startsWith("/activity/")) return "Activity";
-  if (pathname === "/members" || pathname.startsWith("/members/")) return "Team Members";
-  if (pathname === "/fund-development" || pathname.startsWith("/fund-development/")) {
-    return "Fund Development";
-  }
-  if (pathname === "/handbook" || pathname.startsWith("/handbook/")) return "Handbook Builder";
-  if (pathname === "/plans" || pathname.startsWith("/plans/")) return "Plans";
-  return "Workspace";
-}
+type TopNavItem = {
+  href: string;
+  label: string;
+  shortLabel: string;
+  matchPathPrefix: string;
+  icon: (className?: string) => ReactNode;
+};
+
+const TOP_NAV_ITEMS: TopNavItem[] = [
+  {
+    href: "/dashboard",
+    label: "Home",
+    shortLabel: "Home",
+    matchPathPrefix: "/dashboard",
+    icon: (className = "h-4 w-4") => (
+      <svg viewBox="0 0 20 20" fill="none" className={className} aria-hidden="true">
+        <path
+          d="M3.75 8.75 10 3.75l6.25 5v7a.5.5 0 0 1-.5.5h-3.5a.5.5 0 0 1-.5-.5v-3.5h-3.5v3.5a.5.5 0 0 1-.5.5h-3.5a.5.5 0 0 1-.5-.5v-7Z"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinejoin="round"
+        />
+      </svg>
+    ),
+  },
+  {
+    href: "/documents",
+    label: "Documents",
+    shortLabel: "Docs",
+    matchPathPrefix: "/documents",
+    icon: (className = "h-4 w-4") => (
+      <svg viewBox="0 0 20 20" fill="none" className={className} aria-hidden="true">
+        <path
+          d="M6 3.5h5l3 3v10H6v-13Z"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinejoin="round"
+        />
+        <path d="M11 3.5v3h3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      </svg>
+    ),
+  },
+  {
+    href: "/chat",
+    label: "Ask AI",
+    shortLabel: "Ask",
+    matchPathPrefix: "/chat",
+    icon: (className = "h-4 w-4") => (
+      <svg viewBox="0 0 20 20" fill="none" className={className} aria-hidden="true">
+        <path
+          d="M4 4.5h12v8H9l-3.5 3v-3H4v-8Z"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinejoin="round"
+        />
+      </svg>
+    ),
+  },
+  {
+    href: "/products",
+    label: "Create",
+    shortLabel: "Create",
+    matchPathPrefix: "/products",
+    icon: (className = "h-4 w-4") => (
+      <svg viewBox="0 0 20 20" fill="none" className={className} aria-hidden="true">
+        <path
+          d="M10 3.75 4.75 6.5v7L10 16.25l5.25-2.75v-7L10 3.75Z"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinejoin="round"
+        />
+        <path d="M10 9v7.25M4.75 6.5 10 9l5.25-2.5" stroke="currentColor" strokeWidth="1.5" />
+      </svg>
+    ),
+  },
+  {
+    href: "/activity",
+    label: "Activity",
+    shortLabel: "Activity",
+    matchPathPrefix: "/activity",
+    icon: (className = "h-4 w-4") => (
+      <svg viewBox="0 0 20 20" fill="none" className={className} aria-hidden="true">
+        <path
+          d="M3.5 10h3l1.5-3 2.5 6 2-4h3.5"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    ),
+  },
+  {
+    href: "/members",
+    label: "Members",
+    shortLabel: "Members",
+    matchPathPrefix: "/members",
+    icon: (className = "h-4 w-4") => (
+      <svg viewBox="0 0 20 20" fill="none" className={className} aria-hidden="true">
+        <path
+          d="M13.75 15.5a3.75 3.75 0 1 0-7.5 0M12.25 7a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0ZM15.5 14.75a2.75 2.75 0 0 0-2.39-2.73M14.25 7.75a2 2 0 1 0 0-4"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+        />
+      </svg>
+    ),
+  },
+];
 
 export function WorkspaceShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -45,15 +142,26 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   const searchParams = useSearchParams();
   const { user, loading, meLoading, orgs, me, activeOrgId, setActiveOrgId, authedFetch } = useAuth();
   const workspaceRoute = Boolean(pathname && isWorkspaceRoute(pathname));
-  const isDocumentsRoute = Boolean(pathname && (pathname === "/documents" || pathname.startsWith("/documents/")));
-  const isChatRoute = Boolean(pathname && (pathname === "/chat" || pathname.startsWith("/chat/")));
-  const pageTitle = useMemo(() => pageTitleFromPath(pathname ?? ""), [pathname]);
+  const signedInIdentity = useMemo(() => {
+    const signedInEmail = user?.email ?? "Unknown";
+    const signedInName = typeof me?.name === "string" ? me.name.trim() : "";
+    if (signedInName && signedInName.toLowerCase() !== signedInEmail.toLowerCase()) {
+      return `${signedInName} (${signedInEmail})`;
+    }
+    return signedInName || signedInEmail;
+  }, [me?.name, user?.email]);
   const inviteQueryHandledRef = useRef(false);
 
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmails, setInviteEmails] = useState<string[]>([""]);
   const [inviteSending, setInviteSending] = useState(false);
   const [inviteMsg, setInviteMsg] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [compactNav, setCompactNav] = useState(true);
+  const [reducedMotion, setReducedMotion] = useState(false);
+  const [mutedAccent, setMutedAccent] = useState(false);
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
+  const [logoutPending, setLogoutPending] = useState(false);
 
   const headerOrgName =
     !activeOrgId
@@ -113,6 +221,19 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
       inviteQueryHandledRef.current = false;
     }
   }, [pathname, router, searchParams]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.toggle("workspace-compact", compactNav);
+    root.classList.toggle("workspace-reduced-motion", reducedMotion);
+    root.classList.toggle("workspace-muted", mutedAccent);
+
+    return () => {
+      root.classList.remove("workspace-compact");
+      root.classList.remove("workspace-reduced-motion");
+      root.classList.remove("workspace-muted");
+    };
+  }, [compactNav, reducedMotion, mutedAccent]);
 
   useEffect(() => {
     if (!inviteOpen) return;
@@ -175,6 +296,21 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
     }
   }
 
+  function closeSettingsPanel() {
+    setSettingsOpen(false);
+  }
+
+  async function handleConfirmLogout() {
+    setLogoutPending(true);
+    try {
+      await signOut(auth);
+      setLogoutConfirmOpen(false);
+      window.location.replace("/");
+    } finally {
+      setLogoutPending(false);
+    }
+  }
+
   if (!pathname || !workspaceRoute) {
     return <>{children}</>;
   }
@@ -196,36 +332,93 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="workspace-shell min-h-screen">
-      <div className="flex min-h-screen">
-        <WorkspaceSidebar onInviteClick={openInviteModal} />
-        <section
-          className={`workspace-main min-w-0 flex-1 ${
-            isDocumentsRoute || isChatRoute ? "overflow-visible" : "overflow-y-auto"
-          }`}
+      <section className="workspace-main min-w-0 overflow-visible">
+        <div
+          className="workspace-brand-strip sticky top-0 z-50 border-b border-slate-200 bg-white/95 px-4 py-2 shadow-[0_8px_24px_rgba(15,23,42,0.08)] backdrop-blur-sm md:px-6"
         >
-          <div
-            className="workspace-brand-strip bg-gradient-to-b from-slate-900 via-slate-800 to-primary-900 px-5 py-2.5 shadow-[0_10px_24px_rgba(2,6,23,0.22)] md:px-7"
-          >
-            <p
-              className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-200/95"
-            >
-              PurposeFramework
-            </p>
-            <p
-              className="mt-0 text-[11px] font-medium text-slate-300/90"
-            >
-              {headerOrgName}
-            </p>
-            <h1
-              className="mt-0 text-sm font-semibold tracking-tight text-slate-50 md:text-base"
-            >
-              {pageTitle}
-            </h1>
-          </div>
+          <div className="grid grid-cols-[auto_1fr_auto] items-center gap-4">
+            <div className="flex items-center">
+              <div className="h-8 w-8 overflow-hidden rounded border border-slate-200 bg-white">
+                <Image
+                  src="/favicon.ico?v=20260325"
+                  alt="PurposeFramework logo"
+                  width={32}
+                  height={32}
+                  unoptimized
+                  priority
+                  className="h-full w-full object-cover"
+                />
+              </div>
+            </div>
 
-          <div className="workspace-page">{children}</div>
-        </section>
-      </div>
+            <nav className="flex items-center justify-center" aria-label="Workspace">
+              <ul className="flex items-center gap-1.5">
+                {TOP_NAV_ITEMS.map((item) => {
+                  const isActive =
+                    pathname === item.matchPathPrefix ||
+                    pathname?.startsWith(`${item.matchPathPrefix}/`);
+                  return (
+                    <li key={item.href}>
+                      <button
+                        type="button"
+                        onClick={() => router.push(item.href)}
+                        aria-current={isActive ? "page" : undefined}
+                        className={`group relative inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold transition ${
+                          isActive
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-700 shadow-sm"
+                            : "border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50"
+                        }`}
+                      >
+                        <span className={isActive ? "text-emerald-700" : "text-slate-600"}>
+                          {item.icon("h-3.5 w-3.5")}
+                        </span>
+                        <span className="hidden md:inline">{item.shortLabel}</span>
+                        <span
+                          role="tooltip"
+                          className="pointer-events-none absolute left-1/2 top-full z-30 mt-2 -translate-x-1/2 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-sm font-semibold tracking-tight whitespace-nowrap text-slate-900 opacity-0 shadow-lg transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+                        >
+                          {item.label}
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </nav>
+
+            <div className="flex min-w-0 flex-col items-end gap-1">
+              <div className="max-w-[300px] truncate text-[11px] font-semibold text-emerald-700">
+                {signedInIdentity}
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={openInviteModal}
+                  className="rounded-md bg-slate-900 px-2.5 py-1 text-[11px] font-semibold text-white transition hover:bg-slate-800"
+                >
+                  Invite
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSettingsOpen(true)}
+                  className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
+                >
+                  Settings
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLogoutConfirmOpen(true)}
+                  className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
+                >
+                  Sign out
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="workspace-page">{children}</div>
+      </section>
 
       {inviteOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
@@ -302,6 +495,105 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
                   {inviteSending ? "Sending..." : "Send invites"}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {settingsOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+          <div className="absolute inset-0 bg-black/35 backdrop-blur-sm" onClick={closeSettingsPanel} />
+
+          <div className="auth-card relative w-full max-w-lg p-7">
+            <div className="mb-6 flex items-start justify-between gap-4">
+              <div>
+                <div className="mb-2 flex items-center gap-2">
+                  <div className="h-2.5 w-2.5 rounded-full bg-gradient-to-r from-sky-300 to-primary-500" />
+                  <h2 className="text-xl font-semibold text-slate-900">Workspace settings</h2>
+                </div>
+                <p className="text-sm text-slate-600">Customize workspace appearance and motion.</p>
+              </div>
+
+              <button
+                className="btn-secondary px-3 py-1.5 text-sm"
+                onClick={closeSettingsPanel}
+                type="button"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <label className="flex cursor-pointer items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-800">
+                Compact navigation density
+                <input
+                  type="checkbox"
+                  checked={compactNav}
+                  onChange={(event) => setCompactNav(event.target.checked)}
+                />
+              </label>
+
+              <label className="flex cursor-pointer items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-800">
+                Reduce motion
+                <input
+                  type="checkbox"
+                  checked={reducedMotion}
+                  onChange={(event) => setReducedMotion(event.target.checked)}
+                />
+              </label>
+
+              <label className="flex cursor-pointer items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-800">
+                Muted accent style
+                <input
+                  type="checkbox"
+                  checked={mutedAccent}
+                  onChange={(event) => setMutedAccent(event.target.checked)}
+                />
+              </label>
+
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                <p className="font-semibold text-slate-900">Active org</p>
+                <p className="mt-1">{headerOrgName}</p>
+                <p className="mt-3 font-semibold text-slate-900">Org ID</p>
+                <p className="mt-1 break-all">{activeOrgId}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {logoutConfirmOpen ? (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4" role="dialog" aria-modal="true">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/45 backdrop-blur-sm"
+            aria-label="Close logout confirmation"
+            onClick={() => {
+              if (!logoutPending) setLogoutConfirmOpen(false);
+            }}
+          />
+          <div className="relative w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-8 text-slate-900 shadow-2xl">
+            <h3 className="text-xl font-semibold">Are you sure you want to log out?</h3>
+            <p className="mt-2 text-sm text-slate-600">
+              You will be signed out and returned to the main page.
+            </p>
+            <div className="mt-6 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setLogoutConfirmOpen(false)}
+                disabled={logoutPending}
+                className="btn-secondary px-4 py-2 text-sm disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleConfirmLogout()}
+                disabled={logoutPending}
+                className="btn-primary px-4 py-2 text-sm disabled:opacity-60"
+              >
+                {logoutPending ? "Logging out..." : "Yes - log out"}
+              </button>
             </div>
           </div>
         </div>

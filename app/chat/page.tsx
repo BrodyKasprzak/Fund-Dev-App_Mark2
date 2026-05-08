@@ -6,7 +6,6 @@ import { ref, uploadBytesResumable } from "firebase/storage";
 import { useAuth } from "@/lib/AuthContext";
 import { storage } from "@/lib/firebaseClient";
 import type { RagCitation } from "@/lib/rag/types";
-import { WorkspaceTopNav } from "@/components/workspace/WorkspaceTopNav";
 
 type DocStatus = "ready" | "processing" | "failed";
 type TextStatus = "pending" | "processing" | "ready" | "failed";
@@ -1067,7 +1066,6 @@ export default function DocumentsPage() {
       >
         Skip to main content
       </a>
-      <WorkspaceTopNav active="chat" />
       <div className="w-full min-h-screen bg-white pt-0">
         {error || message ? (
           <div className="space-y-2 px-3 pb-2 sm:px-4">

@@ -6,7 +6,6 @@ import { ref, uploadBytesResumable } from "firebase/storage";
 import { useAuth } from "@/lib/AuthContext";
 import { storage } from "@/lib/firebaseClient";
 import type { RagCitation } from "@/lib/rag/types";
-import { WorkspaceTopNav } from "@/components/workspace/WorkspaceTopNav";
 import { LexicalReadOnlyViewer } from "@/components/editor/LexicalReadOnlyViewer";
 import { LEXICAL_EDITOR_FORMAT } from "@/lib/documents/versionMetadata";
 
@@ -2051,7 +2050,6 @@ export default function DocumentsPage() {
       >
         Skip to main content
       </a>
-      <WorkspaceTopNav active="documents" />
       <div className="w-full min-h-screen bg-[#e9eef3] pt-0">
         {error || message ? (
           <div className="space-y-2 px-3 pb-2 sm:px-4">
