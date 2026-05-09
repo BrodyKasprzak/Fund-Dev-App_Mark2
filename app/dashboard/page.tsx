@@ -2,31 +2,21 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { collection, doc, getCountFromServer, getDoc } from "firebase/firestore";
+import { doc, getDoc } from "firebase/firestore";
 import { db } from "@/lib/firebaseClient";
 import { useAuth } from "@/lib/AuthContext";
+import {
+  fetchDashboardWorkspaceData,
+  getDashboardWorkspaceFromCache,
+  loadDashboardWorkspaceWithCache,
+  makeDashboardWorkspaceCacheKey,
+  type DashboardWorkspaceData,
+} from "@/lib/dashboardWorkspace";
 
 type OrgProfile = {
   id: string;
   name: string;
   mission?: string | null;
-};
-
-type DocumentSummary = {
-  id: string;
-  title: string;
-  createdAt: string | null;
-  updatedAt: string | null;
-  size: number | null;
-};
-
-type ActivityRow = {
-  id: string;
-  type: "document";
-  label: string;
-  title: string;
-  when: string | null;
-  changeSummary: string | null;
 };
 
 type QuickAction = {
@@ -97,18 +87,14 @@ export default function DashboardPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const inviteQueryHandledRef = useRef(false);
+  const backgroundRefreshInFlightRef = useRef(false);
 
   const { user, loading, activeOrgId, orgs, me, authedFetch } = useAuth();
 
   const [checkingOrg, setCheckingOrg] = useState(true);
   const [workspaceLoading, setWorkspaceLoading] = useState(true);
+  const [workspaceData, setWorkspaceData] = useState<DashboardWorkspaceData | null>(null);
   const [org, setOrg] = useState<OrgProfile | null>(null);
-
-  const [documentsCount, setDocumentsCount] = useState<number | null>(null);
-  const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
-  const [teamMembersCount, setTeamMembersCount] = useState<number | null>(null);
-  const [activity, setActivity] = useState<ActivityRow[]>([]);
-  const [usageDocs, setUsageDocs] = useState<DocumentSummary[]>([]);
 
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmails, setInviteEmails] = useState<string[]>([""]);
@@ -120,6 +106,12 @@ export default function DashboardPage() {
     const cleaned = inviteEmails.map((e) => e.trim()).filter(Boolean);
     return cleaned.length > 0 && !inviteSending;
   }, [inviteEmails, inviteSending]);
+
+  const documentsCount = workspaceData?.documentsCount ?? null;
+  const lastUpdatedAt = workspaceData?.lastUpdatedAt ?? null;
+  const teamMembersCount = workspaceData?.teamMembersCount ?? null;
+  const activity = useMemo(() => workspaceData?.activity ?? [], [workspaceData]);
+  const usageDocs = useMemo(() => workspaceData?.usageDocs ?? [], [workspaceData]);
 
   const usageTotals = useMemo(() => {
     const docTotal = usageDocs.length;
@@ -225,103 +217,91 @@ export default function DashboardPage() {
   }, [activeOrgId, fallbackOrgName, loading, router, user]);
 
   useEffect(() => {
+    let cancelled = false;
+
     async function loadWorkspaceData() {
       if (!user || !activeOrgId) {
+        setWorkspaceData(null);
         setWorkspaceLoading(false);
         return;
       }
 
+      const cacheKey = makeDashboardWorkspaceCacheKey(user.uid, activeOrgId);
+      const cached = getDashboardWorkspaceFromCache(cacheKey);
+      if (cached) {
+        setWorkspaceData(cached);
+        setWorkspaceLoading(false);
+        return;
+      }
+
+      setWorkspaceData(null);
       setWorkspaceLoading(true);
 
       try {
-        const [documentsRes, activityRes, membersCountSnap] = await Promise.all([
-          authedFetch("/api/documents"),
-          authedFetch("/api/activity/recent?limit=20"),
-          getCountFromServer(collection(db, "organizations", activeOrgId, "members")),
-        ]);
-
-        const documentPayload = await documentsRes.json().catch(() => ({}));
-        const activityPayload = await activityRes.json().catch(() => ({}));
-        const rawDocuments: unknown[] = Array.isArray(documentPayload?.documents) ? documentPayload.documents : [];
-        const documents: DocumentSummary[] = rawDocuments
-          .map((item) => {
-            if (typeof item !== "object" || item === null) return null;
-            const rec = item as Record<string, unknown>;
-            if (typeof rec.id !== "string") return null;
-            return {
-              id: rec.id,
-              title: typeof rec.title === "string" ? rec.title : "Untitled document",
-              createdAt: typeof rec.createdAt === "string" ? rec.createdAt : null,
-              updatedAt: typeof rec.updatedAt === "string" ? rec.updatedAt : null,
-              size: typeof rec.size === "number" ? rec.size : null,
-            } satisfies DocumentSummary;
-          })
-          .filter((docRow): docRow is DocumentSummary => Boolean(docRow));
-
-        const sortedDocuments = [...documents].sort((a, b) => {
-          const aTs = new Date(a.updatedAt || a.createdAt || 0).getTime();
-          const bTs = new Date(b.updatedAt || b.createdAt || 0).getTime();
-          return bTs - aTs;
+        const data = await loadDashboardWorkspaceWithCache({
+          cacheKey,
+          load: () => fetchDashboardWorkspaceData({ authedFetch, orgId: activeOrgId }),
         });
-
-        setUsageDocs(sortedDocuments);
-        setDocumentsCount(sortedDocuments.length);
-        setLastUpdatedAt(sortedDocuments[0]?.updatedAt || sortedDocuments[0]?.createdAt || null);
-
-        const activityRows = Array.isArray(activityPayload?.items)
-          ? (activityPayload.items as Array<Record<string, unknown>>)
-              .map((item) => {
-                const id = typeof item.id === "string" ? item.id : null;
-                if (!id) return null;
-                return {
-                  id,
-                  type: "document" as const,
-                  label:
-                    typeof item.label === "string" && item.label.trim()
-                      ? item.label
-                      : "Document activity",
-                  title:
-                    typeof item.docTitle === "string" && item.docTitle.trim()
-                      ? item.docTitle
-                      : "Untitled document",
-                  when: typeof item.when === "string" ? item.when : null,
-                  changeSummary:
-                    typeof item.changeSummary === "string" && item.changeSummary.trim()
-                      ? item.changeSummary
-                      : null,
-                } as ActivityRow;
-              })
-              .filter((row): row is ActivityRow => row !== null)
-              .slice(0, 8)
-          : ([] as ActivityRow[]);
-
-        if (activityRows.length > 0) {
-          setActivity(activityRows);
-        } else {
-          const fallbackActivity: ActivityRow[] = sortedDocuments.slice(0, 8).map((d) => ({
-            id: d.id,
-            type: "document",
-            label: "Document uploaded",
-            title: d.title || "Untitled document",
-            when: d.createdAt || d.updatedAt || null,
-            changeSummary: null,
-          }));
-          setActivity(fallbackActivity);
-        }
-
-        setTeamMembersCount(membersCountSnap.data().count);
+        if (cancelled) return;
+        setWorkspaceData(data);
       } catch {
-        setDocumentsCount(null);
-        setLastUpdatedAt(null);
-        setTeamMembersCount(null);
-        setActivity([]);
-        setUsageDocs([]);
+        if (cancelled) return;
+        setWorkspaceData(null);
       } finally {
-        setWorkspaceLoading(false);
+        if (!cancelled) setWorkspaceLoading(false);
       }
     }
 
     void loadWorkspaceData();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeOrgId, authedFetch, user]);
+
+  useEffect(() => {
+    if (!user || !activeOrgId) return;
+
+    const cacheKey = makeDashboardWorkspaceCacheKey(user.uid, activeOrgId);
+    let cancelled = false;
+
+    async function refreshInBackground() {
+      if (cancelled || backgroundRefreshInFlightRef.current) return;
+      if (document.visibilityState === "hidden") return;
+
+      backgroundRefreshInFlightRef.current = true;
+      try {
+        const refreshed = await loadDashboardWorkspaceWithCache({
+          cacheKey,
+          load: () => fetchDashboardWorkspaceData({ authedFetch, orgId: activeOrgId }),
+          force: true,
+        });
+        if (!cancelled) {
+          setWorkspaceData(refreshed);
+        }
+      } catch (err) {
+        console.error("Dashboard background refresh failed:", err);
+      } finally {
+        backgroundRefreshInFlightRef.current = false;
+      }
+    }
+
+    const intervalId = window.setInterval(() => {
+      void refreshInBackground();
+    }, 2 * 60 * 1000);
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void refreshInBackground();
+      }
+    };
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, [activeOrgId, authedFetch, user]);
 
   function openInviteModal() {
@@ -410,7 +390,7 @@ export default function DashboardPage() {
     }
   }
 
-  if (loading || checkingOrg) {
+  if (loading || checkingOrg || workspaceLoading) {
     return (
       <main className="min-h-screen flex items-center justify-center">
         <div className="auth-card text-center px-8 py-7">
@@ -437,7 +417,7 @@ export default function DashboardPage() {
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary-600">
                 Workspace Overview
               </p>
-              <h1 className="mt-2 truncate text-3xl font-semibold tracking-tight text-slate-900 md:text-4xl">
+              <h1 className="mt-2 break-words text-3xl font-semibold leading-tight text-slate-900 md:text-4xl md:leading-tight">
                 {orgName}
               </h1>
               <p className="mt-3 max-w-3xl text-sm leading-relaxed text-slate-600 md:text-base">

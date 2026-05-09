@@ -351,11 +351,11 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
                   />
                 </div>
                 <div className="min-w-0">
-                  <p className="truncate text-xs font-semibold tracking-tight text-slate-900">
-                    {headerOrgName}
-                  </p>
-                  <p className="truncate text-[10px] font-medium tracking-wide text-slate-500 uppercase">
+                  <p className="truncate text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">
                     Organization
+                  </p>
+                  <p className="truncate pt-0.5 text-xs font-semibold leading-snug text-slate-900">
+                    {headerOrgName}
                   </p>
                 </div>
               </div>
