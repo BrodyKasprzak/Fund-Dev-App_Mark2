@@ -296,15 +296,6 @@ function dedupeChatMessages(messages: ChatMessage[]) {
   return next;
 }
 
-function supportChipClasses(label: string | null) {
-  if (!label) return "bg-slate-100 text-slate-700 border-slate-200";
-  if (label.startsWith("Supported by")) return "bg-emerald-50 text-emerald-700 border-emerald-200";
-  if (label.startsWith("Low source support") || label === "Partial support") {
-    return "bg-amber-50 text-amber-700 border-amber-200";
-  }
-  return "bg-rose-50 text-rose-700 border-rose-200";
-}
-
 function ListSkeleton() {
   return (
     <div className="space-y-3">
@@ -1043,7 +1034,7 @@ export default function DocumentsPage() {
       <main className="workspace-page-fill workspace-page-no-top-gap min-h-screen bg-white [font-family:var(--font-geist-sans)]">
         <div className="w-full min-h-screen bg-white p-3 sm:p-4">
           <div className="h-12 animate-pulse rounded-2xl border border-slate-200 bg-white/90" />
-          <div className="grid grid-cols-1 gap-0 lg:grid-cols-[320px_minmax(0,1fr)]">
+          <div className="grid grid-cols-1 gap-0 lg:grid-cols-[224px_minmax(0,1fr)]">
             <aside className="rounded-2xl border border-slate-200 bg-white/90 p-4">
               <ListSkeleton />
             </aside>
@@ -1092,12 +1083,12 @@ export default function DocumentsPage() {
         <div
           className={`grid min-h-[100dvh] grid-cols-1 gap-0 ${
             leftSidebarCollapsed
-              ? "lg:grid-cols-[minmax(0,1fr)_56px]"
-              : "lg:grid-cols-[minmax(0,1fr)_320px]"
+              ? "lg:grid-cols-[56px_minmax(0,1fr)]"
+              : "lg:grid-cols-[224px_minmax(0,1fr)]"
           }`}
         >
           <aside
-            className={`sticky top-0 self-start border-l border-slate-200 bg-white lg:order-2 ${
+            className={`sticky top-0 self-start border-r border-slate-200 bg-white lg:order-1 ${
               leftSidebarCollapsed
                 ? "h-[100dvh] p-2"
                 : "h-[100dvh] overflow-y-auto p-4"
@@ -1105,7 +1096,7 @@ export default function DocumentsPage() {
             onClick={leftSidebarCollapsed ? () => setLeftSidebarCollapsed(false) : undefined}
             role={leftSidebarCollapsed ? "button" : undefined}
             tabIndex={leftSidebarCollapsed ? 0 : undefined}
-            aria-label={leftSidebarCollapsed ? "Expand right sidebar" : "Right sidebar"}
+            aria-label={leftSidebarCollapsed ? "Expand left sidebar" : "Left sidebar"}
             onKeyDown={
               leftSidebarCollapsed
                 ? (event) => {
@@ -1142,17 +1133,17 @@ export default function DocumentsPage() {
               <button
                 type="button"
                 onClick={() => setLeftSidebarCollapsed(true)}
-                className="rounded border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
+                className="rounded border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-100"
                 aria-label="Collapse sidebar"
                 aria-expanded={!leftSidebarCollapsed}
                 title="Collapse sidebar"
               >
-                {">"}
+                {"<"}
               </button>
             </div>
             <div className="flex w-full items-center gap-2 border-b border-slate-200 pb-2">
               <ChatIcon />
-              <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-700">
+              <h2 className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">
                 Chat History
               </h2>
             </div>
@@ -1381,13 +1372,13 @@ export default function DocumentsPage() {
             ) : (
               <div className="mt-4 space-y-3">
                 <div className="flex items-center justify-between gap-2">
-                  <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <h2 className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                     Chat History
                   </h2>
                   <button
                     type="button"
                     onClick={() => void loadChats()}
-                    className="rounded-md border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
+                    className="rounded-md border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-100"
                   >
                     Refresh
                   </button>
@@ -1395,7 +1386,7 @@ export default function DocumentsPage() {
                 <button
                   type="button"
                   onClick={() => void handleNewChat()}
-                  className="w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                  className="w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-[11px] font-medium text-slate-700 transition hover:bg-slate-100"
                 >
                   New chat
                 </button>
@@ -1420,11 +1411,11 @@ export default function DocumentsPage() {
                           className={`w-full rounded-lg border px-3 py-2 text-left transition ${
                             selected
                               ? "border-slate-900 bg-slate-900 text-white"
-                              : "border-slate-200 bg-white text-slate-800 hover:border-slate-300 hover:bg-slate-50"
+                              : "border-slate-200 bg-white text-slate-800 hover:border-slate-300 hover:bg-slate-100"
                           }`}
                         >
-                          <p className="truncate text-sm font-semibold">{chat.title}</p>
-                          <p className={`mt-1 text-[11px] ${selected ? "text-white/80" : "text-slate-500"}`}>
+                          <p className="truncate text-[13px] font-semibold">{chat.title}</p>
+                          <p className={`mt-1 text-[10px] ${selected ? "text-white/80" : "text-slate-500"}`}>
                             Updated {formatDate(chat.updatedAt || chat.lastMessageAt || chat.createdAt)}
                           </p>
                         </button>
@@ -1440,7 +1431,7 @@ export default function DocumentsPage() {
 
           <section
             id="chat-main-content"
-            className="min-w-0 bg-white p-5 lg:order-1 lg:min-h-[100dvh] lg:border-r lg:border-slate-200"
+            className="min-w-0 bg-white p-5 lg:order-2 lg:min-h-[100dvh]"
           >
             {workspaceMode === "documents" ? (
               !selectedDocId ? (
@@ -1580,12 +1571,12 @@ export default function DocumentsPage() {
                 <div
                   ref={chatScrollRef}
                   onScroll={onChatScroll}
-                  className="flex-1 space-y-4 overflow-y-auto rounded-[2rem] border border-slate-200/80 bg-gradient-to-b from-slate-50 to-white p-5"
+                  className="flex-1 space-y-6 overflow-y-auto px-2 pb-6"
                 >
                   {chatLoading ? (
                     <ViewerSkeleton />
                   ) : chatMessages.length === 0 ? (
-                    <div className="flex h-full min-h-[40vh] items-center justify-center text-center">
+                    <div className="flex h-full min-h-[40vh] items-center justify-center border border-dashed border-slate-300 bg-slate-50/70 text-center">
                       <div>
                         <p className="text-base font-semibold text-slate-800">Start a grounded chat</p>
                         <p className="mt-1 text-sm text-slate-500">
@@ -1604,41 +1595,11 @@ export default function DocumentsPage() {
                         return (
                           <article
                             key={chatMessage.id}
-                            className="rounded-[1.7rem] border border-slate-200/80 bg-white/95 p-4 shadow-[0_10px_28px_rgba(15,23,42,0.07)]"
+                            className="border-b border-slate-200 pb-6"
                           >
-                            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_300px]">
-                              <div className="min-w-0">
-                                <div className="flex items-center justify-between gap-3">
-                                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                                    Assistant
-                                  </p>
-                                  <div className="flex items-center gap-2">
-                                    <p className="text-xs text-slate-500">{formatDateTime(chatMessage.createdAt)}</p>
-                                    <button
-                                      type="button"
-                                      onClick={() => void copyAssistantMessage(chatMessage.id, chatMessage.content)}
-                                      className="rounded-md border border-slate-300 px-2 py-0.5 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
-                                    >
-                                      {copiedAssistantMessageId === chatMessage.id ? "Copied" : "Copy"}
-                                    </button>
-                                  </div>
-                                </div>
-                                <p className="mt-2 whitespace-pre-wrap text-[15px] leading-7 text-slate-700">
-                                  {chatMessage.content}
-                                </p>
-                                <div className="mt-3 flex flex-wrap items-center gap-2">
-                                  <span
-                                    className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${supportChipClasses(chatMessage.supportLabel)}`}
-                                  >
-                                    {supportText}
-                                  </span>
-                                  {chatMessage.contextSummary ? (
-                                    <span className="text-xs text-slate-500">{chatMessage.contextSummary}</span>
-                                  ) : null}
-                                </div>
-                              </div>
-                              <aside className="min-w-0 self-start rounded-2xl border border-slate-200/80 bg-white p-2 shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
-                                <p className="px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                            <div className="grid gap-4 lg:grid-cols-[210px_minmax(0,1fr)]">
+                              <aside className="min-w-0 self-start border border-slate-200 bg-slate-50/80 p-2 lg:max-h-52 lg:overflow-y-auto">
+                                <p className="px-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
                                   Sources
                                 </p>
                                 {chatMessage.citations.length > 0 ? (
@@ -1650,13 +1611,13 @@ export default function DocumentsPage() {
                                           key={citationKey}
                                           type="button"
                                           onClick={() => openCitationInDocument(citation)}
-                                          className="group w-full rounded-2xl border border-slate-200/80 bg-white px-3 py-2 text-left shadow-[0_8px_20px_rgba(15,23,42,0.05)] transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-[0_12px_24px_rgba(15,23,42,0.08)]"
+                                          className="group w-full border border-transparent bg-transparent px-2 py-1 text-left transition hover:rounded-md hover:border-slate-200 hover:bg-slate-100"
                                         >
-                                          <p className="truncate text-sm font-semibold text-slate-900">
+                                          <p className="truncate text-xs font-semibold text-slate-900">
                                             {citation.docTitle}
                                           </p>
                                           <p
-                                            className="mt-0.5 text-xs leading-5 text-slate-600"
+                                            className="mt-0.5 text-[11px] leading-5 text-slate-600"
                                             style={{
                                               display: "-webkit-box",
                                               WebkitLineClamp: 2,
@@ -1671,56 +1632,63 @@ export default function DocumentsPage() {
                                     })}
                                   </div>
                                 ) : (
-                                  <p className="mt-2 text-xs text-slate-500">No sources for this response.</p>
+                                  <p className="mt-2 px-1 text-[11px] text-slate-500">No sources for this response.</p>
                                 )}
                               </aside>
+
+                              <div className="min-w-0">
+                                <div className="flex items-center justify-between gap-3">
+                                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                    Assistant
+                                  </p>
+                                  <div className="flex items-center gap-2">
+                                    <p className="text-xs text-slate-500">{formatDateTime(chatMessage.createdAt)}</p>
+                                    <button
+                                      type="button"
+                                      onClick={() => void copyAssistantMessage(chatMessage.id, chatMessage.content)}
+                                      className="rounded-md border border-slate-300 px-2 py-0.5 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-100"
+                                    >
+                                      {copiedAssistantMessageId === chatMessage.id ? "Copied" : "Copy"}
+                                    </button>
+                                  </div>
+                                </div>
+                                <p className="mt-2 whitespace-pre-wrap text-[15px] leading-7 text-slate-700">
+                                  {chatMessage.content}
+                                </p>
+                                <div className="mt-3 space-y-1">
+                                  <p className="text-xs font-medium text-slate-600">{supportText}</p>
+                                  {chatMessage.contextSummary ? (
+                                    <p className="text-xs text-slate-500">{chatMessage.contextSummary}</p>
+                                  ) : null}
+                                </div>
+                              </div>
                             </div>
                           </article>
                         );
                       }
 
-                      const isOwnMessage = chatMessage.createdBy ? chatMessage.createdBy === user.uid : true;
                       const senderLabel = messageSenderLabel(chatMessage);
 
                       return (
-                        <div
-                          key={chatMessage.id}
-                          className={`flex ${isOwnMessage ? "justify-end" : "justify-start"}`}
-                        >
-                          <article
-                            className={`w-full max-w-[88%] rounded-[1.5rem] border px-4 py-3 ${
-                              isOwnMessage
-                                ? "border-slate-900 bg-slate-900 text-white shadow-[0_10px_24px_rgba(15,23,42,0.2)]"
-                                : "border-slate-200 bg-white/95 text-slate-900 shadow-sm"
-                            }`}
-                          >
+                        <article key={chatMessage.id} className="border-b border-slate-200 pb-5">
                             <div className="flex items-center justify-between gap-2">
-                              <p
-                                className={`text-[11px] font-semibold uppercase tracking-wide ${
-                                  isOwnMessage ? "text-white/80" : "text-slate-500"
-                                }`}
-                              >
+                              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                                 {senderLabel}
                               </p>
-                              <p className={`text-xs ${isOwnMessage ? "text-white/70" : "text-slate-500"}`}>
+                              <p className="text-xs text-slate-500">
                                 {formatDateTime(chatMessage.createdAt)}
                               </p>
                             </div>
-                            <p
-                              className={`mt-1 whitespace-pre-wrap text-sm leading-6 ${
-                                isOwnMessage ? "text-white" : "text-slate-800"
-                              }`}
-                            >
+                            <p className="mt-1 whitespace-pre-wrap text-[15px] leading-7 text-slate-800">
                               {chatMessage.content}
                             </p>
-                          </article>
-                        </div>
+                        </article>
                       );
                     })
                   )}
                   {assistantTyping && !chatLoading ? (
-                    <div className="flex justify-start">
-                      <article className="inline-flex max-w-[75%] items-center rounded-[1.5rem] border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-600 shadow-sm">
+                    <div className="border-b border-slate-200 pb-5">
+                      <article className="inline-flex max-w-[75%] items-center px-1 text-sm text-slate-600">
                         Assistant is typing
                         <ThinkingDots />
                       </article>
@@ -1729,7 +1697,7 @@ export default function DocumentsPage() {
                 </div>
 
                 <form
-                  className="mt-3 space-y-2 rounded-[1.6rem] border border-slate-200/80 bg-white/90 p-4 shadow-sm"
+                  className="mt-3 space-y-2 border-t border-slate-200 bg-white pt-4"
                   onSubmit={(event) => {
                     event.preventDefault();
                     void handleSendChatMessage();
@@ -1740,7 +1708,7 @@ export default function DocumentsPage() {
                     onChange={(event) => setChatInput(event.target.value)}
                     rows={3}
                     placeholder="Ask a question about your organization documents..."
-                    className="w-full rounded-2xl border border-slate-300 bg-white px-3 py-2 text-sm shadow-inner"
+                    className="w-full border border-slate-300 bg-white px-3 py-2 text-sm"
                   />
                   <div className="flex items-center justify-between gap-3">
                     <p className="text-xs text-slate-500">

@@ -261,7 +261,8 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!user || !activeOrgId) return;
 
-    const cacheKey = makeDashboardWorkspaceCacheKey(user.uid, activeOrgId);
+    const orgId = activeOrgId;
+    const cacheKey = makeDashboardWorkspaceCacheKey(user.uid, orgId);
     let cancelled = false;
 
     async function refreshInBackground() {
@@ -272,7 +273,7 @@ export default function DashboardPage() {
       try {
         const refreshed = await loadDashboardWorkspaceWithCache({
           cacheKey,
-          load: () => fetchDashboardWorkspaceData({ authedFetch, orgId: activeOrgId }),
+          load: () => fetchDashboardWorkspaceData({ authedFetch, orgId }),
           force: true,
         });
         if (!cancelled) {
