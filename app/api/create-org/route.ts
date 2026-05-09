@@ -1,7 +1,6 @@
 // app/api/create-org/route.ts
 import { NextResponse } from "next/server";
-import { adminDb } from "@/lib/firebaseAdmin";
-import { getAuth } from "firebase-admin/auth";
+import { adminAuth, adminDb } from "@/lib/firebaseAdmin";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
 import { errorToResponse } from "@/lib/serverAuth";
 
@@ -49,7 +48,7 @@ export async function POST(req: Request) {
     }
 
     // 2) Verify token
-    const decoded = await getAuth().verifyIdToken(idToken);
+    const decoded = await adminAuth.verifyIdToken(idToken);
     const uid = decoded.uid;
     const email = decoded.email ?? null;
 

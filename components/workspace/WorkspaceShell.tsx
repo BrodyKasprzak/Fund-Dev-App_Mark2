@@ -338,16 +338,26 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
         >
           <div className="grid grid-cols-[auto_1fr_auto] items-center gap-4">
             <div className="flex items-center">
-              <div className="h-8 w-8 overflow-hidden rounded border border-slate-200 bg-white">
-                <Image
-                  src="/favicon.ico?v=20260325"
-                  alt="PurposeFramework logo"
-                  width={32}
-                  height={32}
-                  unoptimized
-                  priority
-                  className="h-full w-full object-cover"
-                />
+              <div className="flex items-center gap-2.5">
+                <div className="h-8 w-8 overflow-hidden rounded border border-slate-200 bg-white">
+                  <Image
+                    src="/favicon.ico?v=20260325"
+                    alt="PurposeFramework logo"
+                    width={32}
+                    height={32}
+                    unoptimized
+                    priority
+                    className="h-full w-full object-cover"
+                  />
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate text-xs font-semibold tracking-tight text-slate-900">
+                    {headerOrgName}
+                  </p>
+                  <p className="truncate text-[10px] font-medium tracking-wide text-slate-500 uppercase">
+                    Organization
+                  </p>
+                </div>
               </div>
             </div>
 

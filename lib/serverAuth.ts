@@ -1,5 +1,4 @@
-import { getAuth } from "firebase-admin/auth";
-import { adminDb } from "@/lib/firebaseAdmin";
+import { adminAuth, adminDb } from "@/lib/firebaseAdmin";
 
 class HttpError extends Error {
   status: number;
@@ -34,6 +33,34 @@ function asNonEmptyString(v: unknown): string | null {
   return s.length ? s : null;
 }
 
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function describeError(err: unknown) {
+  const rec = (typeof err === "object" && err !== null ? err : {}) as Record<string, unknown>;
+  const errorInfo =
+    typeof rec.errorInfo === "object" && rec.errorInfo !== null
+      ? (rec.errorInfo as Record<string, unknown>)
+      : null;
+  return {
+    name: err instanceof Error ? err.name : null,
+    message: err instanceof Error ? err.message : String(err),
+    code:
+      typeof rec.code === "string" || typeof rec.code === "number"
+        ? rec.code
+        : errorInfo && (typeof errorInfo.code === "string" || typeof errorInfo.code === "number")
+          ? errorInfo.code
+          : null,
+    status:
+      typeof rec.status === "string" || typeof rec.status === "number"
+        ? rec.status
+        : errorInfo && (typeof errorInfo.status === "string" || typeof errorInfo.status === "number")
+          ? errorInfo.status
+          : null,
+  };
+}
+
 export async function requireAuth(req: Request): Promise<AuthContext> {
   const authHeader = req.headers.get("authorization");
   if (!authHeader?.startsWith("Bearer ")) {
@@ -41,14 +68,45 @@ export async function requireAuth(req: Request): Promise<AuthContext> {
   }
 
   const idToken = authHeader.slice("Bearer ".length).trim();
-  if (!idToken) throw new HttpError(401, "Missing auth token");
-
-  try {
-    const decoded = await getAuth().verifyIdToken(idToken);
-    return { uid: decoded.uid, email: decoded.email ?? null };
-  } catch {
-    throw new HttpError(401, "Invalid or expired token");
+  if (!idToken) {
+    throw new HttpError(401, "Missing auth token");
   }
+
+  const maxAttempts = 3;
+  let lastErr: unknown = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const decoded = await adminAuth.verifyIdToken(idToken);
+      return { uid: decoded.uid, email: decoded.email ?? null };
+    } catch (err: unknown) {
+      lastErr = err;
+      const errorDetails = describeError(err);
+      const message = `${String(errorDetails.code ?? "")} ${errorDetails.message}`.toLowerCase();
+
+      // Retry only for likely transient validation failures.
+      const likelyTransient =
+        message.includes("token used too early") ||
+        message.includes("not yet valid") ||
+        message.includes("certificate_fetch_failed") ||
+        message.includes("auth/internal-error") ||
+        message.includes("certificate") ||
+        message.includes("fetch") ||
+        message.includes("network") ||
+        message.includes("unavailable") ||
+        message.includes("internal");
+
+      if (!likelyTransient || attempt >= maxAttempts) break;
+      await sleep(150 * attempt);
+    }
+  }
+
+  if (process.env.NODE_ENV !== "production") {
+    const details = lastErr instanceof Error ? `: ${lastErr.message}` : "";
+    throw new HttpError(401, `Invalid or expired token${details}`);
+  }
+
+  throw new HttpError(401, "Invalid or expired token");
 }
 
 export async function requireOrgContext(req: Request): Promise<OrgContext> {

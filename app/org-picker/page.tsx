@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { signOut } from "firebase/auth";
 import { auth } from "@/lib/firebaseClient";
@@ -16,7 +16,12 @@ function normalizeNextPath(nextRaw: string | null) {
 export default function OrgPickerPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, loading, meLoading, orgs, activeOrgId, setActiveOrgId } = useAuth();
+  const { user, loading, meLoading, meResolved, meError, orgs, activeOrgId, setActiveOrgId, refreshMe } =
+    useAuth();
+  const [autoRetryCount, setAutoRetryCount] = useState(0);
+  const maxAutoRetries = 4;
+  const retriesExhausted = autoRetryCount >= maxAutoRetries;
+  const shouldShowErrorPage = Boolean(meError) && retriesExhausted;
 
   const orgsLoading = meLoading;
   const forcePicker = searchParams.get("force") === "1";
@@ -29,7 +34,7 @@ export default function OrgPickerPage() {
   }, [loading, nextPath, router, user]);
 
   useEffect(() => {
-    if (loading || orgsLoading || !user) return;
+    if (loading || orgsLoading || !meResolved || meError || !user) return;
 
     if (orgs.length === 1 && !forcePicker) {
       const onlyOrgId = orgs[0].orgId;
@@ -37,19 +42,89 @@ export default function OrgPickerPage() {
       router.replace(nextPath);
       return;
     }
-  }, [activeOrgId, forcePicker, loading, nextPath, orgs, orgsLoading, router, setActiveOrgId, user]);
+  }, [
+    activeOrgId,
+    forcePicker,
+    loading,
+    meError,
+    meResolved,
+    nextPath,
+    orgs,
+    orgsLoading,
+    router,
+    setActiveOrgId,
+    user,
+  ]);
 
-  if (loading || orgsLoading) {
+  useEffect(() => {
+    if (!user || loading || meLoading || !meError) return;
+    if (autoRetryCount >= maxAutoRetries) return;
+
+    const timer = window.setTimeout(() => {
+      setAutoRetryCount((prev) => prev + 1);
+      void refreshMe();
+    }, 240 + autoRetryCount * 180);
+
+    return () => window.clearTimeout(timer);
+  }, [autoRetryCount, loading, maxAutoRetries, meError, meLoading, refreshMe, user]);
+
+  if (loading || orgsLoading || !meResolved || (meError && !shouldShowErrorPage)) {
     return (
       <main className="public-shell flex items-center justify-center p-6">
         <div className="auth-card px-6 py-5">
-          <p className="text-sm font-medium text-slate-700">Loading organizations...</p>
+          <p className="text-sm font-medium text-slate-700">
+            {meError
+              ? `Loading organizations (retry ${Math.min(autoRetryCount + 1, maxAutoRetries)}/${maxAutoRetries})...`
+              : "Loading organizations..."}
+          </p>
         </div>
       </main>
     );
   }
 
   if (!user) return null;
+
+  if (shouldShowErrorPage) {
+    return (
+      <main className="public-shell p-6 md:p-8">
+        <div className="mx-auto flex min-h-[70vh] w-full max-w-xl items-center">
+          <section className="auth-card w-full p-8">
+            <span className="auth-brand-chip">PurposeFramework</span>
+            <h1 className="mt-4 text-3xl font-semibold tracking-tight text-slate-900">Trouble loading organizations</h1>
+            <p className="mt-2 text-sm text-slate-600">
+              We could not load your organization memberships yet. Please retry.
+            </p>
+            <p className="mt-2 text-xs text-slate-500">{meError}</p>
+            <p className="mt-2 text-xs text-slate-500">
+              Automatic retry limit reached. You can continue with manual retry.
+            </p>
+            <div className="mt-6 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className="btn-primary px-4 py-2.5 text-sm"
+                onClick={() => {
+                  setAutoRetryCount(0);
+                  void refreshMe();
+                }}
+              >
+                Retry
+              </button>
+              <button
+                type="button"
+                className="btn-secondary px-4 py-2.5 text-sm"
+                onClick={async () => {
+                  await signOut(auth);
+                  router.replace("/login");
+                }}
+              >
+                Sign out
+              </button>
+            </div>
+          </section>
+        </div>
+      </main>
+    );
+  }
 
   if (orgs.length === 0) {
     return (

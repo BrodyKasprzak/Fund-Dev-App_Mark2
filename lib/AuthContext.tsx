@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { onAuthStateChanged, User } from "firebase/auth";
 import { auth } from "@/lib/firebaseClient";
 
@@ -29,14 +29,16 @@ type AuthContextValue = {
   user: User | null;
   loading: boolean;
 
-  // Org context (client-side “active org”)
+  // Org context (client-side active org)
   activeOrgId: string | null;
   setActiveOrgId: (orgId: string | null) => void;
   clearActiveOrgId: () => void;
 
-  // “me” (discovered without requiring x-org-id)
+  // me (discovered without requiring x-org-id)
   me: Me | null;
   meLoading: boolean;
+  meResolved: boolean;
+  meError: string | null;
   orgs: OrgMembership[];
   orgsLoading: boolean;
   refreshMe: () => Promise<Me | null>;
@@ -55,6 +57,8 @@ const AuthContext = createContext<AuthContextValue>({
 
   me: null,
   meLoading: false,
+  meResolved: false,
+  meError: null,
   orgs: [],
   orgsLoading: false,
   refreshMe: async () => null,
@@ -74,6 +78,10 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
 }
 
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -81,10 +89,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Active org selection (persisted)
   const [activeOrgId, _setActiveOrgId] = useState<string | null>(null);
 
-  // “me” discovery
+  // me discovery
   const [me, setMe] = useState<Me | null>(null);
   const [meLoading, setMeLoading] = useState(false);
+  const [meResolved, setMeResolved] = useState(false);
+  const [meError, setMeError] = useState<string | null>(null);
   const [orgs, setOrgs] = useState<OrgMembership[]>([]);
+  const refreshSeqRef = useRef(0);
 
   // Load active org from localStorage (client-only)
   useEffect(() => {
@@ -115,7 +126,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Auth state listener
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
-      if (u) setMeLoading(true);
+      refreshSeqRef.current += 1;
+
+      if (u) {
+        setMeLoading(true);
+        setMeResolved(false);
+        setMeError(null);
+      }
+
       setUser(u);
       setLoading(false);
 
@@ -123,6 +141,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         clearActiveOrgId();
         setMe(null);
         setOrgs([]);
+        setMeResolved(false);
+        setMeError(null);
         setMeLoading(false);
       }
     });
@@ -133,30 +153,69 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const refreshMe = useCallback(async (): Promise<Me | null> => {
     if (!user) return null;
 
-    setMeLoading(true);
-    try {
-      const idToken = await user.getIdToken();
-      const res = await fetch("/api/me", {
-        headers: { Authorization: `Bearer ${idToken}` },
-      });
-      const json = await res.json().catch(() => ({}));
+    const requestSeq = ++refreshSeqRef.current;
+    const isStale = () => requestSeq !== refreshSeqRef.current;
+    const maxAttempts = 4;
 
-      if (!res.ok || !json?.ok) {
-        setMe(null);
-        setOrgs([]);
-        setActiveOrgId(null);
-        return null;
+    setMeLoading(true);
+    setMeError(null);
+
+    try {
+      let json: Record<string, unknown> = {};
+      let lastError: Error | null = null;
+
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const forceRefreshToken = attempt > 1;
+
+        try {
+          const idToken = await user.getIdToken(forceRefreshToken);
+          const res = await fetch("/api/me", {
+            headers: { Authorization: `Bearer ${idToken}` },
+            cache: "no-store",
+          });
+          json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+
+          if (res.ok && json?.ok) {
+            break;
+          }
+
+          const apiMessage =
+            typeof json?.error === "string" && json.error.trim()
+              ? json.error.trim()
+              : `Failed to load workspace context (${res.status})`;
+          lastError = new Error(apiMessage);
+
+          const shouldRetry =
+            attempt < maxAttempts &&
+            (res.status === 401 || res.status === 429 || res.status >= 500);
+          if (!shouldRetry) throw lastError;
+        } catch (err: unknown) {
+          lastError = err instanceof Error ? err : new Error("Failed to load workspace context");
+          if (attempt >= maxAttempts) throw lastError;
+        }
+
+        await sleep(180 * attempt);
       }
 
+      if (!json?.ok) {
+        throw lastError ?? new Error("Failed to load workspace context");
+      }
+
+      const meRaw = asRecord(json.me) ?? {};
+      const meOrgRaw = asRecord(meRaw.org);
+
       const next: Me = {
-        uid: String(json.me?.uid ?? user.uid),
-        email: (typeof json.me?.email === "string" ? json.me.email : null) ?? null,
-        orgId: cleanOrgId(json.me?.orgId),
-        role: cleanOrgId(json.me?.role),
-        name: typeof json.me?.name === "string" ? json.me.name : null,
-        position: typeof json.me?.position === "string" ? json.me.position : null,
-        org: json.me?.org && typeof json.me.org === "object"
-          ? { id: String(json.me.org.id ?? ""), name: typeof json.me.org.name === "string" ? json.me.org.name : null }
+        uid: String(meRaw.uid ?? user.uid),
+        email: (typeof meRaw.email === "string" ? meRaw.email : null) ?? null,
+        orgId: cleanOrgId(meRaw.orgId),
+        role: cleanOrgId(meRaw.role),
+        name: typeof meRaw.name === "string" ? meRaw.name : null,
+        position: typeof meRaw.position === "string" ? meRaw.position : null,
+        org: meOrgRaw
+          ? {
+              id: String(meOrgRaw.id ?? ""),
+              name: typeof meOrgRaw.name === "string" ? meOrgRaw.name : null,
+            }
           : null,
       };
 
@@ -176,8 +235,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             .filter((item: OrgMembership | null): item is OrgMembership => Boolean(item))
         : [];
 
+      if (isStale()) return null;
+
       setMe(next);
       setOrgs(nextOrgs);
+      setMeResolved(true);
+      setMeError(null);
 
       // Org selection rule:
       // - exactly 1 org -> auto-select
@@ -189,17 +252,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       return next;
-    } catch {
-      setMe(null);
-      setOrgs([]);
-      setActiveOrgId(null);
+    } catch (err: unknown) {
+      if (!isStale()) {
+        setMeResolved(true);
+        setMeError(err instanceof Error ? err.message : "Failed to load workspace context");
+      }
       return null;
     } finally {
-      setMeLoading(false);
+      if (!isStale()) setMeLoading(false);
     }
   }, [setActiveOrgId, user]);
 
-  // Load “me” after sign-in (and keep activeOrgId valid)
+  // Load me after sign-in (and keep activeOrgId valid)
   useEffect(() => {
     if (!user) return;
     void refreshMe();
@@ -215,7 +279,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const headers = new Headers(init.headers || {});
       headers.set("Authorization", `Bearer ${idToken}`);
 
-      // ✅ Attach org context: activeOrgId first, fallback to me.orgId
+      // Attach org context from active org selection
       const orgIdToUse = activeOrgId || null;
       if (orgIdToUse) headers.set("x-org-id", orgIdToUse);
 
@@ -227,9 +291,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       // If org context is stale (e.g., user removed from org), refreshMe can correct
       if (res.status === 400) {
-        // sometimes "Missing org context" — try to recover once
-        // (don’t loop forever; just refresh me and return original response)
-        // You can refine later by checking json.error.
+        // sometimes "Missing org context" - try to recover once
+        // (do not loop forever; just refresh me and return original response)
       }
 
       return res;
@@ -246,6 +309,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         clearActiveOrgId,
         me,
         meLoading,
+        meResolved,
+        meError,
         orgs,
         orgsLoading: meLoading,
         refreshMe,
@@ -260,6 +325,3 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 export function useAuth() {
   return useContext(AuthContext);
 }
-
-
-
