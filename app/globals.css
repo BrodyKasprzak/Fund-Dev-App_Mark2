@@ -255,6 +255,14 @@ select:focus-visible {
   background-color: #f8fafc !important;
 }
 
+.workspace-page > .workspace-page-fill.workspace-page-no-top-gap {
+  padding-top: 0 !important;
+}
+
+.workspace-page > .workspace-page-fill.workspace-page-no-bottom-gap {
+  padding-bottom: 0 !important;
+}
+
 .workspace-page > * h1 {
   font-family: var(--font-sora), var(--font-geist-sans), sans-serif;
 }
@@ -270,6 +278,12 @@ html.workspace-compact .workspace-page > * {
 
 html.workspace-compact .workspace-page > .workspace-page-fill.workspace-page-no-top-gap {
   padding-top: 0 !important;
+}
+
+html.workspace-compact
+  .workspace-page
+  > .workspace-page-fill.workspace-page-no-top-gap.workspace-page-no-bottom-gap {
+  padding-bottom: 0 !important;
 }
 
 html.workspace-muted .workspace-page-title {
