@@ -8,6 +8,10 @@ import {
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
 import { writeOrgAuditLog } from "@/lib/auditLog";
 import {
+  normalizeDocumentPermissions,
+  userCanReadDocument,
+} from "@/lib/documentPermissions";
+import {
   DOCX_MIME,
   buildRenderAssetsFromStoredFile,
   emptyVersionEditorPayload,
@@ -68,6 +72,10 @@ type DocumentRecord = {
   chunkUpdatedAt?: FirestoreDateLike;
   updatedAt?: FirestoreDateLike;
   updatedBy?: unknown;
+  docAccessMode?: unknown;
+  docAllowedMemberUids?: unknown;
+  docRagEnabled?: unknown;
+  docPermissionsUpdatedBy?: unknown;
 };
 
 type FirestoreDateLike =
@@ -196,6 +204,7 @@ function buildTextChunk(args: {
 }
 
 function serializeDocument(id: string, data: DocumentRecord | undefined) {
+  const docPermissions = normalizeDocumentPermissions(data);
   const resolvedVersion =
     typeof data?.currentVersionNumber === "number" &&
     Number.isFinite(data.currentVersionNumber) &&
@@ -228,6 +237,11 @@ function serializeDocument(id: string, data: DocumentRecord | undefined) {
     chunkUpdatedAt: toIso(data?.chunkUpdatedAt),
     updatedAt: toIso(data?.updatedAt),
     updatedBy: typeof data?.updatedBy === "string" ? data.updatedBy : null,
+    docPermissions: {
+      accessMode: docPermissions.accessMode,
+      allowedMemberUids: docPermissions.allowedMemberUids,
+      ragEnabled: docPermissions.ragEnabled,
+    },
   };
 }
 
@@ -236,7 +250,7 @@ export async function GET(
   context: { params: Promise<{ docId: string }> },
 ) {
   try {
-    const { orgId, uid, email } = await requireDocumentReadAccess(req);
+    const { orgId, uid, email, role } = await requireDocumentReadAccess(req);
     const { docId } = await context.params;
 
     if (!isValidDocId(docId)) {
@@ -287,6 +301,9 @@ export async function GET(
     }
 
     const data = snap.data() as DocumentRecord | undefined;
+    if (!userCanReadDocument({ permissions: normalizeDocumentPermissions(data), uid, role })) {
+      return NextResponse.json({ error: "Document not found" }, { status: 404 });
+    }
     const extractedText = typeof data?.extractedText === "string" ? data.extractedText : "";
     const { extractedText: extractedTextChunk, textWindow } = buildTextChunk({
       extractedText,
@@ -337,7 +354,7 @@ export async function PATCH(
   context: { params: Promise<{ docId: string }> },
 ) {
   try {
-    const { orgId, uid, email } = await requireDocumentWriteAccess(req);
+    const { orgId, uid, email, role } = await requireDocumentWriteAccess(req);
     const { docId } = await context.params;
 
     if (!isValidDocId(docId)) {
@@ -393,8 +410,15 @@ export async function PATCH(
           status?: unknown;
           version?: unknown;
           currentVersionNumber?: unknown;
+          docAccessMode?: unknown;
+          docAllowedMemberUids?: unknown;
+          docRagEnabled?: unknown;
+          docPermissionsUpdatedBy?: unknown;
         }
       | undefined;
+    if (!userCanReadDocument({ permissions: normalizeDocumentPermissions(current), uid, role })) {
+      return NextResponse.json({ error: "Document not found" }, { status: 404 });
+    }
 
     const currentVersion =
       typeof current?.currentVersionNumber === "number" &&

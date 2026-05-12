@@ -3,6 +3,10 @@ import { adminDb } from "@/lib/firebaseAdmin";
 import { requireDocumentWriteAccess, errorToResponse } from "@/lib/serverAuth";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
 import { writeOrgAuditLog } from "@/lib/auditLog";
+import {
+  normalizeDocumentPermissions,
+  userCanReadDocument,
+} from "@/lib/documentPermissions";
 import { LEXICAL_EDITOR_FORMAT } from "@/lib/documents/versionMetadata";
 import {
   buildEditorProcessingRenderAssets,
@@ -44,7 +48,7 @@ export async function POST(
   context: { params: Promise<{ docId: string; versionNumber: string }> },
 ) {
   try {
-    const { orgId, uid, email } = await requireDocumentWriteAccess(req);
+    const { orgId, uid, email, role } = await requireDocumentWriteAccess(req);
     const { docId, versionNumber: rawVersionNumber } = await context.params;
 
     if (!isValidDocId(docId)) {
@@ -77,6 +81,22 @@ export async function POST(
 
     const [docSnap, versionSnap] = await Promise.all([docRef.get(), versionRef.get()]);
     if (!docSnap.exists) {
+      return NextResponse.json({ error: "Document not found" }, { status: 404 });
+    }
+    if (
+      !userCanReadDocument({
+        permissions: normalizeDocumentPermissions(
+          docSnap.data() as {
+            docAccessMode?: unknown;
+            docAllowedMemberUids?: unknown;
+            docRagEnabled?: unknown;
+            docPermissionsUpdatedBy?: unknown;
+          },
+        ),
+        uid,
+        role,
+      })
+    ) {
       return NextResponse.json({ error: "Document not found" }, { status: 404 });
     }
     if (!versionSnap.exists) {

@@ -5,6 +5,10 @@ import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit"
 import { writeOrgAuditLog } from "@/lib/auditLog";
 import { CHUNKER_VERSION } from "@/lib/documentChunking";
 import {
+  normalizeAllowedMemberUids,
+  normalizeDocumentAccessMode,
+} from "@/lib/documentPermissions";
+import {
   DOCX_MIME,
   DOCX_IMPORT_PIPELINE_PHASE_A,
   buildPendingRenderAssets,
@@ -36,6 +40,7 @@ type InitUploadBody = {
   fileType?: unknown;
   size?: unknown;
   folderId?: unknown;
+  docPermissions?: unknown;
 };
 
 type VersionMetadata = {
@@ -55,6 +60,12 @@ type VersionMetadata = {
   renderAssets: ReturnType<typeof buildPendingRenderAssets>;
   createdAt: Date;
   createdBy: string;
+};
+
+type DocPermissionsInput = {
+  accessMode?: unknown;
+  allowedMemberUids?: unknown;
+  ragEnabled?: unknown;
 };
 
 function sanitizeFilename(input: string) {
@@ -92,6 +103,36 @@ function normalizeFolderId(raw: unknown) {
   return trimmed;
 }
 
+async function resolveActiveMemberUidsForAccess(args: {
+  orgId: string;
+  requestedUids: string[];
+}) {
+  const { orgId, requestedUids } = args;
+  if (requestedUids.length === 0) return { ok: true, uids: [] as string[] };
+
+  const membersRef = adminDb.collection("organizations").doc(orgId).collection("members");
+  const refs = requestedUids.map((memberUid) => membersRef.doc(memberUid));
+  const snaps = await adminDb.getAll(...refs);
+
+  const allowed: string[] = [];
+  for (let idx = 0; idx < snaps.length; idx += 1) {
+    const snap = snaps[idx];
+    const requestedUid = requestedUids[idx];
+    if (!snap.exists) {
+      return { ok: false, error: "allowedMemberUids must only include valid org members" };
+    }
+    const data = snap.data() as { status?: unknown } | undefined;
+    const status =
+      typeof data?.status === "string" ? data.status.trim().toLowerCase() : "active";
+    if (status !== "active") {
+      return { ok: false, error: "allowedMemberUids must only include active org members" };
+    }
+    allowed.push(requestedUid);
+  }
+
+  return { ok: true, uids: allowed };
+}
+
 export async function POST(req: Request) {
   try {
     const { orgId, uid, email } = await requireDocumentWriteAccess(req);
@@ -126,7 +167,16 @@ export async function POST(req: Request) {
     ) {
       return NextResponse.json({ error: "Invalid folderId" }, { status: 400 });
     }
+    if (
+      typeof body.docPermissions !== "undefined" &&
+      (body.docPermissions === null ||
+        typeof body.docPermissions !== "object" ||
+        Array.isArray(body.docPermissions))
+    ) {
+      return NextResponse.json({ error: "Invalid docPermissions" }, { status: 400 });
+    }
     const folderId = normalizeFolderId(body.folderId);
+    const requestedDocPermissions = (body.docPermissions || {}) as DocPermissionsInput;
 
     if (!rawFilename.trim()) {
       return NextResponse.json({ error: "filename is required" }, { status: 400 });
@@ -166,6 +216,25 @@ export async function POST(req: Request) {
       if (!folderSnap.exists) {
         return NextResponse.json({ error: "Folder not found" }, { status: 404 });
       }
+    }
+
+    const accessMode = normalizeDocumentAccessMode(requestedDocPermissions.accessMode);
+    const ragEnabled = requestedDocPermissions.ragEnabled !== false;
+    const requestedAllowedMemberUids =
+      accessMode === "restricted"
+        ? normalizeAllowedMemberUids(requestedDocPermissions.allowedMemberUids)
+        : [];
+    const resolvedAllowedResult = await resolveActiveMemberUidsForAccess({
+      orgId,
+      requestedUids: requestedAllowedMemberUids,
+    });
+    if (!resolvedAllowedResult.ok) {
+      return NextResponse.json({ error: resolvedAllowedResult.error }, { status: 400 });
+    }
+    const resolvedAllowedMemberUids = resolvedAllowedResult.uids || [];
+    const allowedMemberUids = [...resolvedAllowedMemberUids];
+    if (accessMode === "restricted" && !allowedMemberUids.includes(uid)) {
+      allowedMemberUids.unshift(uid);
     }
 
     const docRef = adminDb
@@ -220,6 +289,11 @@ export async function POST(req: Request) {
       originalFilename,
       filename: safeFilename,
       folderId,
+      docAccessMode: accessMode,
+      docAllowedMemberUids: allowedMemberUids,
+      docRagEnabled: ragEnabled,
+      docPermissionsUpdatedAt: now,
+      docPermissionsUpdatedBy: uid,
       editStatus: "processing",
       pendingVersion: null,
       lastVersionChangeAt: now,
@@ -254,6 +328,8 @@ export async function POST(req: Request) {
         size: rawSize,
         version: currentVersion,
         filename: safeFilename,
+        docAccessMode: accessMode,
+        docRagEnabled: ragEnabled,
       },
     });
 
@@ -274,6 +350,11 @@ export async function POST(req: Request) {
         chunkVersion: CHUNKER_VERSION,
         version: currentVersion,
         folderId,
+        docPermissions: {
+          accessMode,
+          allowedMemberUids,
+          ragEnabled,
+        },
         createdAt: now.toISOString(),
         createdBy: uid,
         textUpdatedAt: now.toISOString(),

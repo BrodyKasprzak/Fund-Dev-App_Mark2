@@ -287,3 +287,95 @@ export async function PATCH(req: Request) {
     return NextResponse.json({ error: fallbackMessage }, { status });
   }
 }
+
+export async function DELETE(req: Request) {
+  try {
+    const { orgId, uid } = await requireMemberManageAccess(req);
+
+    await enforceRateLimit({
+      scope: "org_members_remove_user",
+      key: `${orgId}:${uid}`,
+      limit: MEMBERS_UPDATE_LIMIT_PER_10_MIN,
+      windowMs: 10 * 60 * 1000,
+    });
+
+    await enforceRateLimit({
+      scope: "org_members_remove_ip",
+      key: getRequestIp(req),
+      limit: MEMBERS_UPDATE_IP_LIMIT_PER_10_MIN,
+      windowMs: 10 * 60 * 1000,
+    });
+
+    const body = (await req.json().catch(() => ({}))) as UpdateMemberBody;
+    const memberUid = asString(body.memberUid);
+    if (!memberUid) {
+      return NextResponse.json({ error: "memberUid is required" }, { status: 400 });
+    }
+
+    const membersRef = adminDb.collection("organizations").doc(orgId).collection("members");
+    const targetRef = membersRef.doc(memberUid);
+    const actorRef = membersRef.doc(uid);
+
+    await adminDb.runTransaction(async (tx) => {
+      const [actorSnap, targetSnap] = await Promise.all([tx.get(actorRef), tx.get(targetRef)]);
+      if (!actorSnap.exists) throw new Error("Actor membership not found");
+      if (!targetSnap.exists) throw new Error("Target member not found");
+
+      const actorRole = normalizeOrgRole(actorSnap.data()?.role);
+      if (actorRole !== "admin") {
+        throw new Error("Admin only");
+      }
+
+      const targetData = targetSnap.data() ?? {};
+      const currentRole = normalizeOrgRole(targetData.role);
+      const currentStatus = asString(targetData.status)?.toLowerCase() ?? "active";
+      const removingActiveAdmin = currentRole === "admin" && currentStatus === "active";
+
+      if (removingActiveAdmin) {
+        const adminsSnap = await tx.get(membersRef.where("role", "==", "admin"));
+        const activeAdminCount = adminsSnap.docs.filter((doc) => {
+          const data = doc.data();
+          const status = asString(data.status)?.toLowerCase() ?? "active";
+          return status === "active";
+        }).length;
+        if (activeAdminCount <= 1) {
+          throw new Error("Cannot remove or demote the last active admin");
+        }
+      }
+
+      tx.delete(targetRef);
+      const userMembershipRef = adminDb
+        .collection("users")
+        .doc(memberUid)
+        .collection("memberships")
+        .doc(orgId);
+      tx.delete(userMembershipRef);
+    });
+
+    return NextResponse.json({ ok: true });
+  } catch (err: unknown) {
+    if (err instanceof RateLimitError) {
+      return NextResponse.json(
+        { error: err.message },
+        {
+          status: 429,
+          headers: { "Retry-After": String(err.retryAfterSeconds) },
+        },
+      );
+    }
+
+    const message = err instanceof Error ? err.message : null;
+    if (message === "Target member not found") {
+      return NextResponse.json({ error: message }, { status: 404 });
+    }
+    if (
+      message === "Admin only" ||
+      message === "Cannot remove or demote the last active admin"
+    ) {
+      return NextResponse.json({ error: message }, { status: 403 });
+    }
+
+    const { status, message: fallbackMessage } = errorToResponse(err);
+    return NextResponse.json({ error: fallbackMessage }, { status });
+  }
+}

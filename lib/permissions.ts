@@ -50,9 +50,9 @@ const ROLE_CAPABILITIES: Record<OrgRole, ReadonlySet<OrgCapability>> = {
 
 const ROLE_LABELS: Record<OrgRole, string> = {
   admin: "Admin",
-  editor: "Member with editor permissions",
-  viewer: "Member with viewer permissions",
-  board_member: "Board member with editor permissions",
+  editor: "Member (editor)",
+  viewer: "Member (viewer)",
+  board_member: "Board member (editor)",
 };
 
 function asCleanString(value: unknown): string | null {
@@ -85,4 +85,3 @@ export function canManageMembers(role: OrgRole): boolean {
 export function getOrgRoleLabel(role: OrgRole): string {
   return ROLE_LABELS[role];
 }
-

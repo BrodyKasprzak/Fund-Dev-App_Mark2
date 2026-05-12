@@ -4,6 +4,7 @@ import { adminDb } from "@/lib/firebaseAdmin";
 import { requireAdmin, errorToResponse } from "@/lib/serverAuth";
 import { resend, requireResendEnv } from "@/lib/resend";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
+import { getOrgRoleLabel, normalizeOrgRole, type OrgRole } from "@/lib/permissions";
 
 export const runtime = "nodejs";
 
@@ -21,8 +22,9 @@ function inviteEmailHtml(opts: {
   inviterEmail?: string | null;
   link: string;
   code: string;
+  roleLabel: string;
 }) {
-  const { orgName, inviterEmail, link, code } = opts;
+  const { orgName, inviterEmail, link, code, roleLabel } = opts;
 
   return `
   <div style="font-family: ui-sans-serif, system-ui, Arial; line-height: 1.5;">
@@ -40,12 +42,24 @@ function inviteEmailHtml(opts: {
     <p style="font-size: 18px; font-weight: bold; letter-spacing: 0.5px;">
       ${code}
     </p>
+    <p><strong>Assigned role:</strong> ${roleLabel}</p>
 
     <p style="font-size: 12px; color: #555;">
       If you didn't expect this invitation, you can safely ignore this email.
     </p>
   </div>
   `;
+}
+
+function parseInviteRole(value: unknown): OrgRole | null {
+  if (value === undefined || value === null) return "editor";
+  if (typeof value !== "string") return null;
+  const cleaned = value.trim().toLowerCase();
+  if (!cleaned) return "editor";
+  if (cleaned === "member") return "editor";
+  const normalized = normalizeOrgRole(cleaned);
+  if (cleaned !== normalized && cleaned !== "member") return null;
+  return normalized;
 }
 
 export async function POST(req: Request) {
@@ -70,6 +84,14 @@ export async function POST(req: Request) {
 
     const body = await req.json().catch(() => ({}));
     const emailsRaw: unknown = body?.emails;
+    const inviteRole = parseInviteRole(body?.role);
+    if (!inviteRole) {
+      return NextResponse.json(
+        { error: "role must be one of: admin, editor, viewer, board_member" },
+        { status: 400 },
+      );
+    }
+    const roleLabel = getOrgRoleLabel(inviteRole);
 
     if (!Array.isArray(emailsRaw) || emailsRaw.length === 0) {
       return NextResponse.json(
@@ -124,6 +146,7 @@ export async function POST(req: Request) {
 
       await inviteRef.set({
         email: inviteeEmail,
+        role: inviteRole,
         codeHash,
         status: "pending",
         failedAttempts: 0,
@@ -147,6 +170,9 @@ ${link}
 Access code:
 ${rawCode}
 
+Assigned role:
+${roleLabel}
+
 This invite expires on ${expiresAt.toISOString().slice(0, 10)}.
 
 If you didn't expect this invitation, you can ignore this email.`;
@@ -160,6 +186,7 @@ If you didn't expect this invitation, you can ignore this email.`;
           inviterEmail,
           link,
           code: rawCode,
+          roleLabel,
         }),
         text,
       });

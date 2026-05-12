@@ -1,6 +1,6 @@
 "use client";
 
-import { type DragEvent, type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ChangeEvent, type DragEvent, type FormEvent, type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ref, uploadBytesResumable } from "firebase/storage";
 import { useAuth } from "@/lib/AuthContext";
@@ -14,6 +14,27 @@ type TextStatus = "pending" | "processing" | "ready" | "failed";
 type ChatVisibility = "private";
 type WorkspaceMode = "documents" | "chat-private";
 type VersionLoadMode = "current" | "all";
+type DocAccessMode = "org" | "restricted";
+
+type DocPermissions = {
+  accessMode: DocAccessMode;
+  allowedMemberUids: string[];
+  ragEnabled: boolean;
+};
+
+type OrgMemberOption = {
+  uid: string;
+  label: string;
+  status: string;
+};
+
+type DocStatusPopoverState = {
+  docId: string;
+  x: number;
+  y: number;
+  docReady: boolean;
+  aiImplemented: boolean;
+} | null;
 
 type DocumentListItem = {
   id: string;
@@ -32,6 +53,7 @@ type DocumentListItem = {
   textUpdatedAt: string | null;
   updatedAt: string | null;
   updatedBy: string | null;
+  docPermissions: DocPermissions;
 };
 
 type DocumentDetail = DocumentListItem & {
@@ -168,6 +190,11 @@ const NETWORK_REQUEST_TIMEOUT_MS = 60_000;
 const MAX_RATE_LIMIT_RETRIES = 4;
 const MAX_RETRYABLE_REQUEST_RETRIES = 2;
 const MAX_VISIBLE_UPLOAD_TOASTS = 5;
+const DEFAULT_DOC_PERMISSIONS: DocPermissions = {
+  accessMode: "org",
+  allowedMemberUids: [],
+  ragEnabled: true,
+};
 
 function parseWorkspaceMode(raw: string | null): WorkspaceMode {
   if (raw === "chat-private") return "chat-private";
@@ -186,6 +213,50 @@ function normalizeFolderIdValue(value: unknown) {
   const trimmed = value.trim();
   if (!trimmed) return null;
   return trimmed;
+}
+
+function normalizeDocAccessModeValue(value: unknown): DocAccessMode {
+  if (typeof value === "string" && value.trim().toLowerCase() === "restricted") {
+    return "restricted";
+  }
+  return "org";
+}
+
+function normalizeUidArray(value: unknown) {
+  if (!Array.isArray(value)) return [] as string[];
+  const seen = new Set<string>();
+  const output: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") continue;
+    const uid = entry.trim();
+    if (!uid || seen.has(uid)) continue;
+    seen.add(uid);
+    output.push(uid);
+  }
+  return output;
+}
+
+function normalizeDocPermissionsValue(value: unknown): DocPermissions {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return DEFAULT_DOC_PERMISSIONS;
+  }
+  const record = value as {
+    accessMode?: unknown;
+    allowedMemberUids?: unknown;
+    ragEnabled?: unknown;
+  };
+  const accessMode = normalizeDocAccessModeValue(record.accessMode);
+  const allowedMemberUids =
+    accessMode === "restricted" ? normalizeUidArray(record.allowedMemberUids) : [];
+  return {
+    accessMode,
+    allowedMemberUids,
+    ragEnabled: record.ragEnabled !== false,
+  };
+}
+
+function parseSelectMultipleValues(event: ChangeEvent<HTMLSelectElement>) {
+  return Array.from(event.target.selectedOptions).map((option) => option.value);
 }
 
 function asEditorStateObject(value: unknown) {
@@ -409,13 +480,6 @@ function supportChipClasses(label: string | null) {
   return "bg-rose-50 text-rose-700 border-rose-200";
 }
 
-function documentTextStatusClasses(status: TextStatus) {
-  if (status === "ready") return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  if (status === "failed") return "border-rose-200 bg-rose-50 text-rose-700";
-  if (status === "processing") return "border-amber-200 bg-amber-50 text-amber-700";
-  return "border-slate-200 bg-slate-100 text-slate-600";
-}
-
 function formatFileTypeLabel(fileType: string) {
   const normalized = (fileType || "").trim().toLowerCase();
   if (!normalized) return "FILE";
@@ -424,6 +488,12 @@ function formatFileTypeLabel(fileType: string) {
     return subtype.replace(/[+.-]/g, " ").trim().slice(0, 16).toUpperCase();
   }
   return normalized.replace(/[+.-]/g, " ").trim().slice(0, 16).toUpperCase();
+}
+
+function docStatusFlags(doc: DocumentListItem) {
+  const docReady = doc.status === "ready" && doc.textStatus === "ready";
+  const aiImplemented = doc.docPermissions?.ragEnabled === true && docReady;
+  return { docReady, aiImplemented };
 }
 
 function sleep(ms: number) {
@@ -559,7 +629,7 @@ function DesktopFolderIcon() {
 export default function DocumentsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, loading, authedFetch, me } = useAuth();
+  const { user, loading, authedFetch, me, activeOrgId, orgs } = useAuth();
 
   const requestedMode = useMemo(
     () => parseWorkspaceMode(searchParams.get("mode")),
@@ -592,6 +662,9 @@ export default function DocumentsPage() {
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
+  const [uploadAccessMode, setUploadAccessMode] = useState<DocAccessMode>("org");
+  const [uploadAllowedMemberUids, setUploadAllowedMemberUids] = useState<string[]>([]);
+  const [uploadRagEnabled, setUploadRagEnabled] = useState(true);
   const [desktopFolders, setDesktopFolders] = useState<DesktopFolderItem[]>([]);
   const [desktopFoldersLoading, setDesktopFoldersLoading] = useState(false);
   const [activeDesktopFolderId, setActiveDesktopFolderId] = useState<string | null>(null);
@@ -612,6 +685,16 @@ export default function DocumentsPage() {
   const [versions, setVersions] = useState<DocumentVersionItem[]>([]);
   const [loadedVersionMode, setLoadedVersionMode] = useState<VersionLoadMode | null>(null);
   const [regeneratingVersion, setRegeneratingVersion] = useState<number | null>(null);
+  const [orgMembers, setOrgMembers] = useState<OrgMemberOption[]>([]);
+  const [orgMembersLoading, setOrgMembersLoading] = useState(false);
+  const [permissionsEditorDocId, setPermissionsEditorDocId] = useState<string | null>(null);
+  const [permissionsEditorTitle, setPermissionsEditorTitle] = useState("Untitled");
+  const [permissionsEditorAccessMode, setPermissionsEditorAccessMode] =
+    useState<DocAccessMode>("org");
+  const [permissionsEditorAllowedMemberUids, setPermissionsEditorAllowedMemberUids] = useState<string[]>([]);
+  const [permissionsEditorRagEnabled, setPermissionsEditorRagEnabled] = useState(true);
+  const [permissionsEditorSaving, setPermissionsEditorSaving] = useState(false);
+  const [docStatusPopover, setDocStatusPopover] = useState<DocStatusPopoverState>(null);
 
   const [chatList, setChatList] = useState<ChatSummary[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(
@@ -631,6 +714,7 @@ export default function DocumentsPage() {
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const uploadFileInputRef = useRef<HTMLInputElement | null>(null);
   const newMenuRef = useRef<HTMLDivElement | null>(null);
+  const docStatusPopoverRef = useRef<HTMLDivElement | null>(null);
   const mainDropDepthRef = useRef(0);
   const handledDeepLinkRef = useRef<string | null>(null);
   const chatAutoScrollRef = useRef(true);
@@ -643,11 +727,25 @@ export default function DocumentsPage() {
     if (email) return email;
     return "You";
   }, [me?.name, user?.email]);
+  const activeOrgMembership = useMemo(
+    () => orgs.find((org) => org.orgId === activeOrgId) ?? null,
+    [activeOrgId, orgs],
+  );
+  const effectiveRole = (activeOrgMembership?.role ?? me?.role ?? "").trim().toLowerCase();
+  const isAdmin = effectiveRole === "admin";
 
   const isChatMode = workspaceMode === "chat-private";
   const activeDesktopFolder = useMemo(
     () => desktopFolders.find((folder) => folder.id === activeDesktopFolderId) || null,
     [activeDesktopFolderId, desktopFolders],
+  );
+  const activeOrgMembers = useMemo(
+    () => orgMembers.filter((member) => member.status === "active"),
+    [orgMembers],
+  );
+  const activeOrgMemberUidSet = useMemo(
+    () => new Set(activeOrgMembers.map((member) => member.uid)),
+    [activeOrgMembers],
   );
 
   const effectiveHighlightQuery = (viewerHighlightQuery || "").trim();
@@ -661,6 +759,33 @@ export default function DocumentsPage() {
     () => uploadQueue.some((item) => !isTerminalUploadStatus(item.status)),
     [uploadQueue],
   );
+
+  useEffect(() => {
+    setUploadAllowedMemberUids((current) =>
+      current.filter((uid) => activeOrgMemberUidSet.has(uid)),
+    );
+  }, [activeOrgMemberUidSet]);
+
+  useEffect(() => {
+    setPermissionsEditorAllowedMemberUids((current) =>
+      current.filter((uid) => activeOrgMemberUidSet.has(uid)),
+    );
+  }, [activeOrgMemberUidSet]);
+
+  useEffect(() => {
+    if (uploadAccessMode !== "restricted" && uploadAllowedMemberUids.length > 0) {
+      setUploadAllowedMemberUids([]);
+    }
+  }, [uploadAccessMode, uploadAllowedMemberUids.length]);
+
+  useEffect(() => {
+    if (
+      permissionsEditorAccessMode !== "restricted" &&
+      permissionsEditorAllowedMemberUids.length > 0
+    ) {
+      setPermissionsEditorAllowedMemberUids([]);
+    }
+  }, [permissionsEditorAccessMode, permissionsEditorAllowedMemberUids.length]);
 
   const visibleDocs = useMemo(() => {
     const q = normalizedLeftFilter.toLowerCase();
@@ -836,6 +961,40 @@ export default function DocumentsPage() {
     }
   }, [authedFetch, user]);
 
+  const loadOrgMembers = useCallback(async () => {
+    if (!user) return;
+    setOrgMembersLoading(true);
+    try {
+      const res = await authedFetch("/api/org/members?limit=500");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Failed to load org members");
+
+      const rows = Array.isArray(data?.members) ? (data.members as Array<Record<string, unknown>>) : [];
+      const members = rows
+        .map((row) => {
+          const uid = typeof row.uid === "string" ? row.uid.trim() : "";
+          if (!uid) return null;
+          const status = typeof row.status === "string" ? row.status.trim().toLowerCase() : "active";
+          const name = typeof row.name === "string" ? row.name.trim() : "";
+          const email = typeof row.email === "string" ? row.email.trim() : "";
+          const label = name && email ? `${name} (${email})` : name || email || uid;
+          return {
+            uid,
+            label,
+            status,
+          } satisfies OrgMemberOption;
+        })
+        .filter((member): member is OrgMemberOption => Boolean(member))
+        .sort((a, b) => a.label.localeCompare(b.label));
+      setOrgMembers(members);
+    } catch (err: unknown) {
+      if (err instanceof Error) setError(err.message);
+      else setError("Failed to load org members");
+    } finally {
+      setOrgMembersLoading(false);
+    }
+  }, [authedFetch, user]);
+
   const loadDocuments = useCallback(
     async (folderId: string | null) => {
       if (!user) return;
@@ -850,9 +1009,17 @@ export default function DocumentsPage() {
         if (!res.ok) throw new Error(data?.error || "Failed to load documents");
 
         const documents = Array.isArray(data?.documents)
-          ? (data.documents as Array<DocumentListItem & { folderId?: unknown }>).map((doc) => ({
+          ? (
+              data.documents as Array<
+                Omit<DocumentListItem, "docPermissions"> & {
+                  folderId?: unknown;
+                  docPermissions?: unknown;
+                }
+              >
+            ).map((doc) => ({
               ...doc,
               folderId: normalizeFolderIdValue(doc.folderId),
+              docPermissions: normalizeDocPermissionsValue(doc.docPermissions),
             }))
           : [];
 
@@ -879,6 +1046,11 @@ export default function DocumentsPage() {
 
   useEffect(() => {
     if (loading || !user) return;
+    void loadOrgMembers();
+  }, [loadOrgMembers, loading, user]);
+
+  useEffect(() => {
+    if (loading || !user) return;
     void loadDocuments(activeDesktopFolderId);
   }, [activeDesktopFolderId, loadDocuments, loading, user]);
 
@@ -897,9 +1069,14 @@ export default function DocumentsPage() {
       const res = await authedFetch(`/api/documents/${docId}?${params.toString()}`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || "Failed to load document");
-      const doc = data?.document as DocumentDetail | undefined;
+      const doc = data?.document as
+        | (Omit<DocumentDetail, "docPermissions"> & { docPermissions?: unknown })
+        | undefined;
       if (!doc?.id) throw new Error("Invalid document response");
-      return doc;
+      return {
+        ...doc,
+        docPermissions: normalizeDocPermissionsValue(doc.docPermissions),
+      } satisfies DocumentDetail;
     },
     [authedFetch],
   );
@@ -1201,6 +1378,30 @@ export default function DocumentsPage() {
     const timer = window.setTimeout(() => setMessage(null), 2000);
     return () => window.clearTimeout(timer);
   }, [message]);
+
+  useEffect(() => {
+    if (!docStatusPopover) return;
+
+    function onMouseDown(event: MouseEvent) {
+      const target = event.target as Node | null;
+      if (target && docStatusPopoverRef.current?.contains(target)) return;
+      setDocStatusPopover(null);
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setDocStatusPopover(null);
+      }
+    }
+
+    window.addEventListener("mousedown", onMouseDown);
+    window.addEventListener("keydown", onKeyDown);
+
+    return () => {
+      window.removeEventListener("mousedown", onMouseDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [docStatusPopover]);
 
   useEffect(() => {
     if (!newMenuOpen) return;
@@ -1666,6 +1867,12 @@ export default function DocumentsPage() {
                 fileType: file.type || "application/octet-stream",
                 size: file.size,
                 folderId: activeDesktopFolderId,
+                docPermissions: {
+                  accessMode: uploadAccessMode,
+                  allowedMemberUids:
+                    uploadAccessMode === "restricted" ? uploadAllowedMemberUids : [],
+                  ragEnabled: uploadRagEnabled,
+                },
               }),
             },
             deadlineAt,
@@ -1824,6 +2031,80 @@ export default function DocumentsPage() {
       }
     } finally {
       setUploading(false);
+    }
+  }
+
+  function closePermissionsEditor() {
+    setPermissionsEditorDocId(null);
+    setPermissionsEditorTitle("Untitled");
+    setPermissionsEditorAccessMode("org");
+    setPermissionsEditorAllowedMemberUids([]);
+    setPermissionsEditorRagEnabled(true);
+    setPermissionsEditorSaving(false);
+  }
+
+  function openPermissionsEditor(doc: DocumentListItem) {
+    if (!isAdmin) return;
+    setPermissionsEditorDocId(doc.id);
+    setPermissionsEditorTitle(doc.title || "Untitled");
+    setPermissionsEditorAccessMode(doc.docPermissions.accessMode);
+    setPermissionsEditorAllowedMemberUids(doc.docPermissions.allowedMemberUids);
+    setPermissionsEditorRagEnabled(doc.docPermissions.ragEnabled);
+  }
+
+  function openDocStatusPopover(args: {
+    event: ReactMouseEvent<HTMLButtonElement>;
+    doc: DocumentListItem;
+  }) {
+    const { event, doc } = args;
+    event.preventDefault();
+    event.stopPropagation();
+    const { docReady, aiImplemented } = docStatusFlags(doc);
+    setDocStatusPopover({
+      docId: doc.id,
+      x: event.clientX,
+      y: event.clientY,
+      docReady,
+      aiImplemented,
+    });
+  }
+
+  async function saveDocPermissions() {
+    if (!permissionsEditorDocId || !isAdmin || permissionsEditorSaving) return;
+    setPermissionsEditorSaving(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const payload = {
+        accessMode: permissionsEditorAccessMode,
+        allowedMemberUids:
+          permissionsEditorAccessMode === "restricted" ? permissionsEditorAllowedMemberUids : [],
+        ragEnabled: permissionsEditorRagEnabled,
+      };
+      const res = await authedFetch(`/api/documents/${permissionsEditorDocId}/permissions`, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Failed to update document permissions");
+      const nextPermissions = normalizeDocPermissionsValue(data?.docPermissions);
+
+      setDocs((current) =>
+        current.map((doc) =>
+          doc.id === permissionsEditorDocId ? { ...doc, docPermissions: nextPermissions } : doc,
+        ),
+      );
+      setSelectedDoc((current) =>
+        current && current.id === permissionsEditorDocId
+          ? { ...current, docPermissions: nextPermissions }
+          : current,
+      );
+      setMessage("Document permissions updated.");
+      closePermissionsEditor();
+    } catch (err: unknown) {
+      if (err instanceof Error) setError(err.message);
+      else setError("Failed to update document permissions");
+      setPermissionsEditorSaving(false);
     }
   }
 
@@ -2041,6 +2322,14 @@ export default function DocumentsPage() {
   }
 
   let firstMatchAssigned = false;
+  const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 1280;
+  const viewportHeight = typeof window !== "undefined" ? window.innerHeight : 720;
+  const statusPopoverLeft = docStatusPopover
+    ? Math.max(8, Math.min(docStatusPopover.x + 10, viewportWidth - 250))
+    : 8;
+  const statusPopoverTop = docStatusPopover
+    ? Math.max(8, Math.min(docStatusPopover.y + 10, viewportHeight - 120))
+    : 8;
 
   return (
     <main className="workspace-page-fill workspace-page-no-top-gap min-h-screen bg-[#e3e8ee] [font-family:var(--font-geist-sans)]">
@@ -2295,6 +2584,62 @@ export default function DocumentsPage() {
                             +{uploadFiles.length - selectedUploadPreview.length} more
                           </p>
                         ) : null}
+                        <div className="mt-3 grid gap-2 border-t border-slate-200 pt-2 text-xs">
+                          <p className="font-semibold text-slate-700">Doc permissions (new uploads)</p>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <label className="font-medium text-slate-700">Who can open:</label>
+                            <select
+                              value={uploadAccessMode}
+                              onChange={(event) =>
+                                setUploadAccessMode(
+                                  event.target.value === "restricted" ? "restricted" : "org",
+                                )
+                              }
+                              className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700"
+                            >
+                              <option value="org">Everyone in org (default)</option>
+                              <option value="restricted">Specific members</option>
+                            </select>
+                          </div>
+                          {uploadAccessMode === "restricted" ? (
+                            <div className="space-y-1">
+                              <p className="text-[11px] text-slate-500">
+                                Select active members who can view these uploaded documents.
+                              </p>
+                              <select
+                                multiple
+                                value={uploadAllowedMemberUids}
+                                onChange={(event) =>
+                                  setUploadAllowedMemberUids(parseSelectMultipleValues(event))
+                                }
+                                className="min-h-[90px] w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700"
+                              >
+                                {activeOrgMembers.map((member) => (
+                                  <option key={member.uid} value={member.uid}>
+                                    {member.label}
+                                  </option>
+                                ))}
+                              </select>
+                              {orgMembersLoading ? (
+                                <p className="text-[11px] text-slate-500">Loading members...</p>
+                              ) : null}
+                              {!orgMembersLoading && activeOrgMembers.length === 0 ? (
+                                <p className="text-[11px] text-amber-700">
+                                  No active members found; admins will still have access.
+                                </p>
+                              ) : null}
+                            </div>
+                          ) : null}
+                          <label className="inline-flex items-center gap-2 text-xs text-slate-700">
+                            <input
+                              type="checkbox"
+                              checked={uploadRagEnabled}
+                              onChange={(event) => setUploadRagEnabled(event.target.checked)}
+                              className="h-3.5 w-3.5 rounded border-slate-300"
+                            />
+                            Allow these uploaded docs in AI/RAG answers
+                          </label>
+                        </div>
                       </div>
                     ) : null}
                     {visibleDesktopItems.length === 0 ? (
@@ -2346,37 +2691,65 @@ export default function DocumentsPage() {
                           }
 
                           const doc = item.doc;
+                          const { docReady } = docStatusFlags(doc);
+                          const iconClassName = docReady
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                            : "border-rose-200 bg-rose-50 text-rose-700";
                           return (
-                            <button
+                            <div
                               key={doc.id}
-                              type="button"
-                              onClick={() => openDocument(doc.id)}
                               draggable={movingDocId !== doc.id}
                               onDragStart={(event) => handleDocumentDragStart(event, doc.id)}
                               onDragEnd={handleDocumentDragEnd}
-                              disabled={movingDocId === doc.id}
-                              className="group min-h-[136px] rounded-2xl border border-slate-300/90 bg-white/95 p-3 text-left shadow-[0_10px_25px_rgba(15,23,42,0.09)] transition hover:border-slate-400 hover:shadow-[0_14px_30px_rgba(15,23,42,0.14)] sm:min-h-[150px] sm:p-4"
+                              className={`group relative min-h-[136px] rounded-2xl border border-slate-300/90 bg-white/95 p-3 text-left shadow-[0_10px_25px_rgba(15,23,42,0.09)] transition hover:border-slate-400 hover:shadow-[0_14px_30px_rgba(15,23,42,0.14)] sm:min-h-[150px] sm:p-4 ${
+                                movingDocId === doc.id ? "opacity-70" : ""
+                              }`}
                             >
-                              <div className="flex items-start justify-between gap-2">
-                                <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-700">
-                                  <DocumentIcon />
-                                </span>
-                                <span
-                                  className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${documentTextStatusClasses(doc.textStatus)}`}
+                              <button
+                                type="button"
+                                onClick={() => openDocument(doc.id)}
+                                disabled={movingDocId === doc.id}
+                                className="absolute inset-0 rounded-2xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
+                                aria-label={`Open document ${doc.title}`}
+                              />
+                              <div className="relative z-10">
+                                <div className="flex items-start justify-between gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={(event) => openDocStatusPopover({ event, doc })}
+                                    className={`inline-flex h-9 w-9 items-center justify-center rounded-xl border transition hover:ring-2 hover:ring-slate-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 ${iconClassName}`}
+                                    aria-label="Show document status"
+                                  >
+                                    <DocumentIcon />
+                                  </button>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => openDocument(doc.id)}
+                                  disabled={movingDocId === doc.id}
+                                  className="mt-3 w-full text-left"
                                 >
-                                  {movingDocId === doc.id ? "moving" : doc.textStatus}
-                                </span>
+                                  <p className="line-clamp-2 text-sm font-semibold leading-snug text-slate-900">
+                                    {doc.title}
+                                  </p>
+                                  <div className="mt-3 flex items-center justify-between gap-2 text-[11px] text-slate-500">
+                                    <span className="truncate">{formatDate(doc.updatedAt || doc.createdAt)}</span>
+                                    <span className="truncate font-semibold text-slate-600">
+                                      {formatFileTypeLabel(doc.fileType)}
+                                    </span>
+                                  </div>
+                                </button>
                               </div>
-                              <p className="mt-3 line-clamp-2 text-sm font-semibold leading-snug text-slate-900">
-                                {doc.title}
-                              </p>
-                              <div className="mt-3 flex items-center justify-between gap-2 text-[11px] text-slate-500">
-                                <span className="truncate">{formatDate(doc.updatedAt || doc.createdAt)}</span>
-                                <span className="truncate font-semibold text-slate-600">
-                                  {formatFileTypeLabel(doc.fileType)}
-                                </span>
-                              </div>
-                            </button>
+                              {isAdmin ? (
+                                <button
+                                  type="button"
+                                  onClick={() => openPermissionsEditor(doc)}
+                                  className="relative z-20 mt-2 w-full rounded-lg border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-100"
+                                >
+                                  Doc permissions
+                                </button>
+                              ) : null}
+                            </div>
                           );
                         })}
                       </div>
@@ -2449,6 +2822,24 @@ export default function DocumentsPage() {
                         </p>
                         <p className="mt-1">
                           Current version: <span className="font-semibold">v{selectedDocVersion}</span>
+                        </p>
+                        <p className="mt-1">
+                          Access:{" "}
+                          <span className="font-semibold">
+                            {(selectedDoc?.docPermissions || selectedMeta?.docPermissions || DEFAULT_DOC_PERMISSIONS)
+                              .accessMode === "restricted"
+                              ? "Specific members"
+                              : "Everyone in org"}
+                          </span>
+                        </p>
+                        <p className="mt-1">
+                          AI/RAG:{" "}
+                          <span className="font-semibold">
+                            {(selectedDoc?.docPermissions || selectedMeta?.docPermissions || DEFAULT_DOC_PERMISSIONS)
+                              .ragEnabled
+                              ? "Allowed"
+                              : "Not allowed"}
+                          </span>
                         </p>
                       </div>
                     ) : null}
@@ -2935,6 +3326,110 @@ export default function DocumentsPage() {
               </button>
             </div>
           </form>
+        </div>
+      ) : null}
+      {permissionsEditorDocId ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/35 p-4">
+          <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_30px_60px_rgba(15,23,42,0.28)]">
+            <p className="text-sm font-semibold text-slate-900">Doc permissions</p>
+            <p className="mt-1 text-xs text-slate-600">{permissionsEditorTitle}</p>
+            <div className="mt-4 space-y-3 text-sm">
+              <div className="space-y-1">
+                <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Who can open this doc
+                </label>
+                <select
+                  value={permissionsEditorAccessMode}
+                  onChange={(event) =>
+                    setPermissionsEditorAccessMode(
+                      event.target.value === "restricted" ? "restricted" : "org",
+                    )
+                  }
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
+                >
+                  <option value="org">Everyone in org</option>
+                  <option value="restricted">Specific members</option>
+                </select>
+              </div>
+              {permissionsEditorAccessMode === "restricted" ? (
+                <div className="space-y-1">
+                  <p className="text-xs text-slate-600">Select active members with doc access.</p>
+                  <select
+                    multiple
+                    value={permissionsEditorAllowedMemberUids}
+                    onChange={(event) =>
+                      setPermissionsEditorAllowedMemberUids(parseSelectMultipleValues(event))
+                    }
+                    className="min-h-[120px] w-full rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm text-slate-800"
+                  >
+                    {activeOrgMembers.map((member) => (
+                      <option key={member.uid} value={member.uid}>
+                        {member.label}
+                      </option>
+                    ))}
+                  </select>
+                  {orgMembersLoading ? (
+                    <p className="text-xs text-slate-500">Loading members...</p>
+                  ) : null}
+                </div>
+              ) : null}
+              <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={permissionsEditorRagEnabled}
+                  onChange={(event) => setPermissionsEditorRagEnabled(event.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300"
+                />
+                Allow this doc in AI/RAG answers
+              </label>
+            </div>
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={permissionsEditorSaving}
+                onClick={closePermissionsEditor}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={permissionsEditorSaving}
+                onClick={() => void saveDocPermissions()}
+                className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {permissionsEditorSaving ? "Saving..." : "Save permissions"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {docStatusPopover ? (
+        <div
+          ref={docStatusPopoverRef}
+          className="fixed z-50 w-[240px] rounded-lg border border-slate-200 bg-white p-2.5 text-xs text-slate-700 shadow-[0_18px_35px_rgba(15,23,42,0.20)]"
+          style={{ left: statusPopoverLeft, top: statusPopoverTop }}
+          role="status"
+          aria-live="polite"
+        >
+          <p className="flex items-center gap-1.5 font-semibold">
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${
+                docStatusPopover.docReady ? "bg-emerald-500" : "bg-rose-500"
+              }`}
+              aria-hidden="true"
+            />
+            Doc status: {docStatusPopover.docReady ? "Doc ready" : "Doc not ready"}
+          </p>
+          <p className="mt-1.5 flex items-center gap-1.5 font-semibold">
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${
+                docStatusPopover.aiImplemented ? "bg-emerald-500" : "bg-rose-500"
+              }`}
+              aria-hidden="true"
+            />
+            Doc AI status: {docStatusPopover.aiImplemented ? "Implemented" : "Not implemented"}
+          </p>
         </div>
       ) : null}
       {visibleUploadToasts.length > 0 ? (

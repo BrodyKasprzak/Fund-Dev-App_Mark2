@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { errorToResponse, requireDocumentReadAccess } from "@/lib/serverAuth";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
 import { adminDb } from "@/lib/firebaseAdmin";
+import {
+  normalizeDocumentPermissions,
+  userCanReadDocument,
+} from "@/lib/documentPermissions";
 
 export const runtime = "nodejs";
 
@@ -43,7 +47,7 @@ export async function GET(
   context: { params: Promise<{ docId: string }> },
 ) {
   try {
-    const { orgId, uid } = await requireDocumentReadAccess(req);
+    const { orgId, uid, role } = await requireDocumentReadAccess(req);
     const { docId: rawDocId } = await context.params;
     const docId = safeDocId(rawDocId);
     if (!docId) {
@@ -67,6 +71,32 @@ export async function GET(
     const chunkId = safeChunkId(searchParams.get("chunkId"));
     if (!chunkId) {
       return NextResponse.json({ error: "chunkId is required" }, { status: 400 });
+    }
+
+    const docRef = adminDb
+      .collection("organizations")
+      .doc(orgId)
+      .collection("documents")
+      .doc(docId);
+    const docSnap = await docRef.get();
+    if (!docSnap.exists) {
+      return NextResponse.json({ error: "Document not found" }, { status: 404 });
+    }
+    if (
+      !userCanReadDocument({
+        permissions: normalizeDocumentPermissions(
+          docSnap.data() as {
+            docAccessMode?: unknown;
+            docAllowedMemberUids?: unknown;
+            docRagEnabled?: unknown;
+            docPermissionsUpdatedBy?: unknown;
+          },
+        ),
+        uid,
+        role,
+      })
+    ) {
+      return NextResponse.json({ error: "Document not found" }, { status: 404 });
     }
 
     const chunkRef = adminDb

@@ -18,6 +18,18 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/organizations/$(orgId)/members/$(request.auth.uid)).data.role == "admin";
     }
 
+    function docIsRestricted(docData) {
+      return ("docAccessMode" in docData) && docData.docAccessMode == "restricted";
+    }
+
+    function docAllowsMember(docData) {
+      return ("docAllowedMemberUids" in docData) && request.auth.uid in docData.docAllowedMemberUids;
+    }
+
+    function canReadOrgDocument(orgId, docData) {
+      return isOrgAdmin(orgId) || (isOrgMember(orgId) && (!docIsRestricted(docData) || docAllowsMember(docData)));
+    }
+
     // Users: allow user to read + write their own doc (so orgId can be set client-side if you want)
     match /users/{uid} {
       allow read: if isSelf(uid);
@@ -56,7 +68,7 @@ service cloud.firestore {
       }
 
       match /documents/{docId} {
-        allow read: if isOrgMember(orgId);
+        allow read: if canReadOrgDocument(orgId, resource.data);
         allow create, update, delete: if false;
       }
     }

@@ -5,6 +5,10 @@ import { requireDocumentWriteAccess, errorToResponse } from "@/lib/serverAuth";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
 import { writeOrgAuditLog } from "@/lib/auditLog";
 import {
+  normalizeDocumentPermissions,
+  userCanReadDocument,
+} from "@/lib/documentPermissions";
+import {
   DOCX_MIME,
   buildRenderAssetsFromStoredFile,
   emptyVersionEditorPayload,
@@ -57,6 +61,10 @@ type CurrentDocument = {
   originalFileType?: unknown;
   originalFilename?: unknown;
   updatedAt?: FirestoreDateLike;
+  docAccessMode?: unknown;
+  docAllowedMemberUids?: unknown;
+  docRagEnabled?: unknown;
+  docPermissionsUpdatedBy?: unknown;
 };
 
 class HttpLikeError extends Error {
@@ -113,7 +121,7 @@ export async function POST(
   context: { params: Promise<{ docId: string }> },
 ) {
   try {
-    const { orgId, uid, email } = await requireDocumentWriteAccess(req);
+    const { orgId, uid, email, role } = await requireDocumentWriteAccess(req);
     const { docId } = await context.params;
 
     if (!isValidDocId(docId)) {
@@ -162,6 +170,9 @@ export async function POST(
     }
 
     const current = (docSnap.data() ?? {}) as CurrentDocument;
+    if (!userCanReadDocument({ permissions: normalizeDocumentPermissions(current), uid, role })) {
+      return NextResponse.json({ error: "Document not found" }, { status: 404 });
+    }
     const currentVersion = normalizeVersion(
       current.currentVersionNumber,
       normalizeVersion(current.version, 1),

@@ -2,6 +2,12 @@ import { embedText } from "@/lib/embeddings";
 import { adminDb } from "@/lib/firebaseAdmin";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import type { RagChunk } from "@/lib/rag/types";
+import type { OrgRole } from "@/lib/permissions";
+import {
+  documentAllowedInRag,
+  normalizeDocumentPermissions,
+  userCanReadDocument,
+} from "@/lib/documentPermissions";
 
 const DEFAULT_TOP_K = 8;
 const MAX_TOP_K = 20;
@@ -35,6 +41,18 @@ type DocumentVersionRecord = {
   status?: unknown;
   textStatus?: unknown;
   chunkStatus?: unknown;
+  docAccessMode?: unknown;
+  docAllowedMemberUids?: unknown;
+  docRagEnabled?: unknown;
+  docPermissionsUpdatedBy?: unknown;
+};
+
+type RetrieveChunksOptions = {
+  viewer?: {
+    uid: string;
+    role: OrgRole;
+  } | null;
+  requireRagEnabled?: boolean;
 };
 
 function normalizeTopK(topK: number) {
@@ -127,7 +145,11 @@ async function getOrgIndexedChunkCount(orgId: string) {
   return typeof count === "number" ? count : 0;
 }
 
-async function loadCurrentIndexedVersionByDocId(orgId: string, docIds: string[]) {
+async function loadCurrentIndexedVersionByDocId(
+  orgId: string,
+  docIds: string[],
+  options?: RetrieveChunksOptions,
+) {
   const uniqueDocIds = [...new Set(docIds.filter((value) => value.trim().length > 0))];
   if (uniqueDocIds.length === 0) return new Map<string, number>();
 
@@ -144,6 +166,21 @@ async function loadCurrentIndexedVersionByDocId(orgId: string, docIds: string[])
   for (const snap of snaps) {
     if (!snap.exists) continue;
     const data = (snap.data() ?? {}) as DocumentVersionRecord;
+    const permissions = normalizeDocumentPermissions(data);
+
+    if (options?.viewer) {
+      const allowed = userCanReadDocument({
+        permissions,
+        uid: options.viewer.uid,
+        role: options.viewer.role,
+      });
+      if (!allowed) continue;
+    }
+
+    if (options?.requireRagEnabled === true && !documentAllowedInRag(permissions)) {
+      continue;
+    }
+
     const status = typeof data.status === "string" ? data.status : "processing";
     const textStatus = typeof data.textStatus === "string" ? data.textStatus : "pending";
     const chunkStatus = typeof data.chunkStatus === "string" ? data.chunkStatus : "pending";
@@ -165,6 +202,7 @@ export async function retrieveChunks(
   orgId: string,
   query: string,
   topK: number,
+  options?: RetrieveChunksOptions,
 ): Promise<RagChunk[]> {
   assertNonEmptyString(orgId, "orgId");
   assertNonEmptyString(query, "query");
@@ -219,6 +257,7 @@ export async function retrieveChunks(
   const currentVersionByDocId = await loadCurrentIndexedVersionByDocId(
     orgId,
     rows.map((row) => String(row.doc_id)),
+    options,
   );
   const currentRows = rows.filter((row) => {
     const docId = String(row.doc_id);

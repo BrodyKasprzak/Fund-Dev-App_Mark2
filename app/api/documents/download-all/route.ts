@@ -5,6 +5,10 @@ import { adminDb, adminStorage } from "@/lib/firebaseAdmin";
 import { requireDocumentReadAccess, errorToResponse } from "@/lib/serverAuth";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
 import { writeOrgAuditLog } from "@/lib/auditLog";
+import {
+  normalizeDocumentPermissions,
+  userCanReadDocument,
+} from "@/lib/documentPermissions";
 
 export const runtime = "nodejs";
 
@@ -23,6 +27,10 @@ type DocumentRecord = {
   filename?: unknown;
   storagePath?: unknown;
   folderId?: unknown;
+  docAccessMode?: unknown;
+  docAllowedMemberUids?: unknown;
+  docRagEnabled?: unknown;
+  docPermissionsUpdatedBy?: unknown;
 };
 
 function sanitizePathSegment(value: string, fallback: string) {
@@ -85,7 +93,7 @@ function nowDateStamp() {
 
 export async function POST(req: Request) {
   try {
-    const { orgId, uid, email } = await requireDocumentReadAccess(req);
+    const { orgId, uid, email, role } = await requireDocumentReadAccess(req);
 
     await enforceRateLimit({
       scope: "documents_download_all_user",
@@ -144,6 +152,10 @@ export async function POST(req: Request) {
     for (const docSnap of docsSnap.docs) {
       const doc = docSnap.data() as DocumentRecord;
       const docId = docSnap.id;
+      if (!userCanReadDocument({ permissions: normalizeDocumentPermissions(doc), uid, role })) {
+        skipped.push(`${docId}: not permitted`);
+        continue;
+      }
       const storagePath = normalizeStoragePath(doc.storagePath);
       if (!storagePath) {
         skipped.push(`${docId}: missing storagePath`);

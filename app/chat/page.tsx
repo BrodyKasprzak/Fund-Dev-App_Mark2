@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ref, uploadBytesResumable } from "firebase/storage";
 import { useAuth } from "@/lib/AuthContext";
@@ -12,6 +12,13 @@ type TextStatus = "pending" | "processing" | "ready" | "failed";
 type ChatVisibility = "private";
 type WorkspaceMode = "documents" | "chat-private";
 type SidebarPanel = "documents" | "history";
+type DocAccessMode = "org" | "restricted";
+
+type OrgMemberOption = {
+  uid: string;
+  label: string;
+  status: string;
+};
 
 type DocumentListItem = {
   id: string;
@@ -135,6 +142,10 @@ function deriveTitle(filename: string) {
   const noExt = filename.replace(/\.[^.]+$/, "");
   const cleaned = noExt.trim().replace(/\s+/g, " ");
   return cleaned || "Untitled Document";
+}
+
+function parseSelectMultipleValues(event: ChangeEvent<HTMLSelectElement>) {
+  return Array.from(event.target.selectedOptions).map((option) => option.value);
 }
 
 function parseFilenameFromContentDisposition(contentDisposition: string | null) {
@@ -379,6 +390,11 @@ export default function DocumentsPage() {
 
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadTitle, setUploadTitle] = useState("");
+  const [uploadAccessMode, setUploadAccessMode] = useState<DocAccessMode>("org");
+  const [uploadAllowedMemberUids, setUploadAllowedMemberUids] = useState<string[]>([]);
+  const [uploadRagEnabled, setUploadRagEnabled] = useState(true);
+  const [orgMembers, setOrgMembers] = useState<OrgMemberOption[]>([]);
+  const [orgMembersLoading, setOrgMembersLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [downloadingDocId, setDownloadingDocId] = useState<string | null>(null);
@@ -427,6 +443,14 @@ export default function DocumentsPage() {
 
   const effectiveHighlightQuery = (viewerHighlightQuery || "").trim();
   const normalizedLeftFilter = leftFilter.trim();
+  const activeOrgMembers = useMemo(
+    () => orgMembers.filter((member) => member.status === "active"),
+    [orgMembers],
+  );
+  const activeOrgMemberUidSet = useMemo(
+    () => new Set(activeOrgMembers.map((member) => member.uid)),
+    [activeOrgMembers],
+  );
 
   const visibleDocs = useMemo(() => {
     const q = normalizedLeftFilter.toLowerCase();
@@ -510,10 +534,49 @@ export default function DocumentsPage() {
     }
   }
 
+  async function loadOrgMembers() {
+    if (!user) return;
+    setOrgMembersLoading(true);
+    try {
+      const res = await authedFetch("/api/org/members?limit=500");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Failed to load org members");
+
+      const rows = Array.isArray(data?.members) ? (data.members as Array<Record<string, unknown>>) : [];
+      const members = rows
+        .map((row) => {
+          const uid = typeof row.uid === "string" ? row.uid.trim() : "";
+          if (!uid) return null;
+          const status = typeof row.status === "string" ? row.status.trim().toLowerCase() : "active";
+          const name = typeof row.name === "string" ? row.name.trim() : "";
+          const email = typeof row.email === "string" ? row.email.trim() : "";
+          const label = name && email ? `${name} (${email})` : name || email || uid;
+          return {
+            uid,
+            label,
+            status,
+          } satisfies OrgMemberOption;
+        })
+        .filter((member): member is OrgMemberOption => Boolean(member))
+        .sort((a, b) => a.label.localeCompare(b.label));
+      setOrgMembers(members);
+    } catch (err: unknown) {
+      if (err instanceof Error) setError(err.message);
+      else setError("Failed to load org members");
+    } finally {
+      setOrgMembersLoading(false);
+    }
+  }
+
   useEffect(() => {
     if (!loading && user) void loadDocuments();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   },[loading, user]);
+
+  useEffect(() => {
+    if (!loading && user) void loadOrgMembers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, user]);
 
   const fetchDocumentDetail = useCallback(
     async (args: { docId: string; offset?: number; anchorQuery?: string | null }) => {
@@ -836,6 +899,18 @@ export default function DocumentsPage() {
     return () => window.clearTimeout(timer);
   }, [message]);
 
+  useEffect(() => {
+    setUploadAllowedMemberUids((current) =>
+      current.filter((uid) => activeOrgMemberUidSet.has(uid)),
+    );
+  }, [activeOrgMemberUidSet]);
+
+  useEffect(() => {
+    if (uploadAccessMode !== "restricted" && uploadAllowedMemberUids.length > 0) {
+      setUploadAllowedMemberUids([]);
+    }
+  }, [uploadAccessMode, uploadAllowedMemberUids.length]);
+
   async function handleUpload() {
     if (!user || !uploadFile || !uploadTitle.trim()) return;
     setUploading(true);
@@ -853,6 +928,12 @@ export default function DocumentsPage() {
           title: uploadTitle.trim(),
           fileType: uploadFile.type || "application/octet-stream",
           size: uploadFile.size,
+          docPermissions: {
+            accessMode: uploadAccessMode,
+            allowedMemberUids:
+              uploadAccessMode === "restricted" ? uploadAllowedMemberUids : [],
+            ragEnabled: uploadRagEnabled,
+          },
         }),
       });
       const initData = await initRes.json().catch(() => ({}));
@@ -1142,6 +1223,56 @@ export default function DocumentsPage() {
                       placeholder="Document title"
                       className="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs"
                     />
+                    <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                        Doc permissions
+                      </p>
+                      <label className="mt-2 block text-[11px] font-medium text-slate-700">
+                        Who can open
+                      </label>
+                      <select
+                        value={uploadAccessMode}
+                        onChange={(event) =>
+                          setUploadAccessMode(
+                            event.target.value === "restricted" ? "restricted" : "org",
+                          )
+                        }
+                        className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700"
+                      >
+                        <option value="org">Everyone in org (default)</option>
+                        <option value="restricted">Specific members</option>
+                      </select>
+                      {uploadAccessMode === "restricted" ? (
+                        <div className="mt-2">
+                          <select
+                            multiple
+                            value={uploadAllowedMemberUids}
+                            onChange={(event) =>
+                              setUploadAllowedMemberUids(parseSelectMultipleValues(event))
+                            }
+                            className="min-h-[90px] w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700"
+                          >
+                            {activeOrgMembers.map((member) => (
+                              <option key={member.uid} value={member.uid}>
+                                {member.label}
+                              </option>
+                            ))}
+                          </select>
+                          {orgMembersLoading ? (
+                            <p className="mt-1 text-[11px] text-slate-500">Loading members...</p>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      <label className="mt-2 inline-flex items-center gap-1.5 text-[11px] text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={uploadRagEnabled}
+                          onChange={(event) => setUploadRagEnabled(event.target.checked)}
+                          className="h-3.5 w-3.5 rounded border-slate-300"
+                        />
+                        Allow this doc in AI/RAG answers
+                      </label>
+                    </div>
                     <button
                       type="button"
                       disabled={!uploadFile || !uploadTitle.trim() || uploading}

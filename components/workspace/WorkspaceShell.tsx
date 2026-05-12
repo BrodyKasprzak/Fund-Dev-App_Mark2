@@ -35,6 +35,8 @@ type TopNavItem = {
   icon: (className?: string) => ReactNode;
 };
 
+type MemberRole = "admin" | "editor" | "viewer" | "board_member";
+
 const TOP_NAV_ITEMS: TopNavItem[] = [
   {
     href: "/dashboard",
@@ -155,6 +157,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
 
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmails, setInviteEmails] = useState<string[]>([""]);
+  const [inviteRole, setInviteRole] = useState<MemberRole>("editor");
   const [inviteSending, setInviteSending] = useState(false);
   const [inviteMsg, setInviteMsg] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -225,6 +228,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
       inviteQueryHandledRef.current = true;
       setInviteMsg(null);
       setInviteEmails([""]);
+      setInviteRole("editor");
       setInviteOpen(true);
 
       const nextParams = new URLSearchParams(searchParams.toString());
@@ -267,6 +271,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
     if (!canManageInvites) return;
     setInviteMsg(null);
     setInviteEmails([""]);
+    setInviteRole("editor");
     setInviteOpen(true);
   }
 
@@ -297,7 +302,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
 
       const res = await authedFetch("/api/invites/create", {
         method: "POST",
-        body: JSON.stringify({ emails: cleaned }),
+        body: JSON.stringify({ emails: cleaned, role: inviteRole }),
       });
 
       const data = await res.json();
@@ -475,6 +480,19 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
 
             <div className="space-y-4">
               <p className="text-sm font-semibold text-slate-900">Email addresses</p>
+              <div>
+                <label className="field-label">Role for invited members</label>
+                <select
+                  className="field-input text-sm"
+                  value={inviteRole}
+                  onChange={(event) => setInviteRole(event.target.value as MemberRole)}
+                >
+                  <option value="editor">Member (editor)</option>
+                  <option value="viewer">Member (viewer)</option>
+                  <option value="board_member">Board member (editor)</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </div>
 
               {inviteEmails.map((email, idx) => (
                 <div key={idx} className="flex gap-2">

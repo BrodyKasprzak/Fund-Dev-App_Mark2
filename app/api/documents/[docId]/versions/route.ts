@@ -3,6 +3,10 @@ import { adminDb } from "@/lib/firebaseAdmin";
 import { requireDocumentReadAccess, errorToResponse } from "@/lib/serverAuth";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
 import {
+  normalizeDocumentPermissions,
+  userCanReadDocument,
+} from "@/lib/documentPermissions";
+import {
   DOCX_MIME,
   PDF_MIME,
   type RenderAssetStatus,
@@ -437,7 +441,7 @@ export async function GET(
   context: { params: Promise<{ docId: string }> },
 ) {
   try {
-    const { orgId, uid } = await requireDocumentReadAccess(req);
+    const { orgId, uid, role } = await requireDocumentReadAccess(req);
     const { docId } = await context.params;
     const { searchParams } = new URL(req.url);
     const modeParam = (searchParams.get("mode") || "all").trim().toLowerCase();
@@ -472,6 +476,22 @@ export async function GET(
 
     const docSnap = await docRef.get();
     if (!docSnap.exists) {
+      return NextResponse.json({ error: "Document not found" }, { status: 404 });
+    }
+    if (
+      !userCanReadDocument({
+        permissions: normalizeDocumentPermissions(
+          docSnap.data() as {
+            docAccessMode?: unknown;
+            docAllowedMemberUids?: unknown;
+            docRagEnabled?: unknown;
+            docPermissionsUpdatedBy?: unknown;
+          },
+        ),
+        uid,
+        role,
+      })
+    ) {
       return NextResponse.json({ error: "Document not found" }, { status: 404 });
     }
 

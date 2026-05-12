@@ -20,6 +20,8 @@ type OrgProfile = {
   mission?: string | null;
 };
 
+type MemberRole = "admin" | "editor" | "viewer" | "board_member";
+
 type QuickAction = {
   label: string;
   description: string;
@@ -99,6 +101,7 @@ export default function DashboardPage() {
 
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmails, setInviteEmails] = useState<string[]>([""]);
+  const [inviteRole, setInviteRole] = useState<MemberRole>("editor");
   const [inviteSending, setInviteSending] = useState(false);
   const [inviteMsg, setInviteMsg] = useState<string | null>(null);
   const [usageOpen, setUsageOpen] = useState(false);
@@ -332,6 +335,7 @@ export default function DashboardPage() {
       inviteQueryHandledRef.current = true;
       setInviteMsg(null);
       setInviteEmails([""]);
+      setInviteRole("editor");
       setInviteOpen(true);
       router.replace("/dashboard");
     }
@@ -389,7 +393,7 @@ export default function DashboardPage() {
 
       const res = await authedFetch("/api/invites/create", {
         method: "POST",
-        body: JSON.stringify({ emails: cleaned }),
+        body: JSON.stringify({ emails: cleaned, role: inviteRole }),
       });
 
       const data = await res.json();
@@ -636,6 +640,19 @@ export default function DashboardPage() {
 
             <div className="space-y-4">
               <p className="text-sm font-semibold text-slate-900">Email addresses</p>
+              <div>
+                <label className="field-label">Role for invited members</label>
+                <select
+                  className="field-input text-sm"
+                  value={inviteRole}
+                  onChange={(event) => setInviteRole(event.target.value as MemberRole)}
+                >
+                  <option value="editor">Member (editor)</option>
+                  <option value="viewer">Member (viewer)</option>
+                  <option value="board_member">Board member (editor)</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </div>
 
               {inviteEmails.map((email, idx) => (
                 <div key={idx} className="flex gap-2">

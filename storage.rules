@@ -12,6 +12,33 @@ service firebase.storage {
         );
     }
 
+    function isOrgAdmin(orgId) {
+      return isOrgMember(orgId)
+        && firestore.get(
+          /databases/(default)/documents/organizations/$(orgId)/members/$(request.auth.uid)
+        ).data.role == "admin";
+    }
+
+    function orgDocumentData(orgId, docId) {
+      return firestore.get(
+        /databases/(default)/documents/organizations/$(orgId)/documents/$(docId)
+      ).data;
+    }
+
+    function docIsRestricted(orgId, docId) {
+      return ("docAccessMode" in orgDocumentData(orgId, docId))
+        && orgDocumentData(orgId, docId).docAccessMode == "restricted";
+    }
+
+    function docAllowsMember(orgId, docId) {
+      return ("docAllowedMemberUids" in orgDocumentData(orgId, docId))
+        && request.auth.uid in orgDocumentData(orgId, docId).docAllowedMemberUids;
+    }
+
+    function canReadOrgDocumentFile(orgId, docId) {
+      return isOrgAdmin(orgId) || (isOrgMember(orgId) && (!docIsRestricted(orgId, docId) || docAllowsMember(orgId, docId)));
+    }
+
     function isSupportedUpload() {
       return request.resource != null
         && request.resource.size > 0
@@ -22,7 +49,7 @@ service firebase.storage {
     }
 
     match /organizations/{orgId}/documents/{docId}/{version}/{fileName} {
-      allow read: if isOrgMember(orgId);
+      allow read: if canReadOrgDocumentFile(orgId, docId);
       allow create: if isOrgMember(orgId) && version.matches("v[0-9]+") && isSupportedUpload();
       allow update, delete: if false;
     }
@@ -32,4 +59,3 @@ service firebase.storage {
     }
   }
 }
-

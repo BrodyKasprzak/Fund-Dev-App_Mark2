@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
 import { requireDocumentReadAccess, errorToResponse } from "@/lib/serverAuth";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
+import {
+  normalizeDocumentPermissions,
+  userCanReadDocument,
+} from "@/lib/documentPermissions";
 
 export const runtime = "nodejs";
 
@@ -40,7 +44,7 @@ function normalizeFolderFilter(raw: string | null) {
 
 export async function GET(req: Request) {
   try {
-    const { orgId, uid } = await requireDocumentReadAccess(req);
+    const { orgId, uid, role } = await requireDocumentReadAccess(req);
 
     await enforceRateLimit({
       scope: "documents_list_user",
@@ -93,7 +97,16 @@ export async function GET(req: Request) {
         updatedAt?: FirestoreDateLike;
         updatedBy?: unknown;
         folderId?: unknown;
+        docAccessMode?: unknown;
+        docAllowedMemberUids?: unknown;
+        docRagEnabled?: unknown;
+        docPermissionsUpdatedBy?: unknown;
       };
+
+      const docPermissions = normalizeDocumentPermissions(data);
+      if (!userCanReadDocument({ permissions: docPermissions, uid, role })) {
+        return null;
+      }
 
       const resolvedVersion =
         typeof data.currentVersionNumber === "number" &&
@@ -129,9 +142,15 @@ export async function GET(req: Request) {
         updatedAt: toIso(data.updatedAt),
         updatedBy: typeof data.updatedBy === "string" ? data.updatedBy : null,
         folderId: typeof data.folderId === "string" ? data.folderId : null,
+        docPermissions: {
+          accessMode: docPermissions.accessMode,
+          allowedMemberUids: docPermissions.allowedMemberUids,
+          ragEnabled: docPermissions.ragEnabled,
+        },
       };
       })
-      .filter((document) => {
+      .filter((document): document is NonNullable<typeof document> => {
+        if (!document) return false;
         if (folderFilter === "root") return !document.folderId;
         if (folderFilter) return document.folderId === folderFilter;
         return true;

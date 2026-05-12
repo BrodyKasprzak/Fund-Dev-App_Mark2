@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
 import { requireOrgContext, errorToResponse } from "@/lib/serverAuth";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
+import {
+  normalizeDocumentPermissions,
+  userCanReadDocument,
+} from "@/lib/documentPermissions";
 
 export const runtime = "nodejs";
 
@@ -72,7 +76,7 @@ function mapEventLabel(eventType: string, version: number | null) {
 
 export async function GET(req: Request) {
   try {
-    const { orgId, uid } = await requireOrgContext(req);
+    const { orgId, uid, role } = await requireOrgContext(req);
     const { searchParams } = new URL(req.url);
     const limit = normalizeLimit(searchParams.get("limit"));
     if (limit === null) {
@@ -113,6 +117,7 @@ export async function GET(req: Request) {
     )];
 
     const docTitleById = new Map<string, string>();
+    const docReadableById = new Map<string, boolean>();
     if (docIds.length > 0) {
       const docsRef = adminDb
         .collection("organizations")
@@ -123,6 +128,19 @@ export async function GET(req: Request) {
       docs.forEach((snapshot) => {
         if (!snapshot.exists) return;
         const raw = snapshot.data() as { title?: unknown };
+        const readable = userCanReadDocument({
+          permissions: normalizeDocumentPermissions(
+            snapshot.data() as {
+              docAccessMode?: unknown;
+              docAllowedMemberUids?: unknown;
+              docRagEnabled?: unknown;
+              docPermissionsUpdatedBy?: unknown;
+            },
+          ),
+          uid,
+          role,
+        });
+        docReadableById.set(snapshot.id, readable);
         docTitleById.set(
           snapshot.id,
           typeof raw?.title === "string" && raw.title.trim() ? raw.title : "Untitled document",
@@ -141,6 +159,7 @@ export async function GET(req: Request) {
       const version = normalizeVersion(metadata?.version);
       const previousVersion = normalizeVersion(metadata?.previousVersion);
       const docId = typeof data.docId === "string" ? data.docId : null;
+      const canReadDoc = docId ? docReadableById.get(docId) !== false : true;
       const changeSummary =
         typeof metadata?.changeSummary === "string"
           ? metadata.changeSummary
@@ -150,8 +169,12 @@ export async function GET(req: Request) {
         id: snapshot.id,
         eventType,
         label: mapEventLabel(eventType, version),
-        docId,
-        docTitle: docId ? docTitleById.get(docId) || "Untitled document" : "Organization activity",
+        docId: canReadDoc ? docId : null,
+        docTitle: docId
+          ? canReadDoc
+            ? docTitleById.get(docId) || "Untitled document"
+            : "Restricted document"
+          : "Organization activity",
         when: toIso(data.timestamp),
         version,
         previousVersion,

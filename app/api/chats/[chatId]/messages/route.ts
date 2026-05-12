@@ -63,7 +63,7 @@ export async function POST(
   context: { params: Promise<{ chatId: string }> },
 ) {
   try {
-    const { orgId, uid, email } = await requireOrgContext(req);
+    const { orgId, uid, email, role } = await requireOrgContext(req);
     const { chatId } = await context.params;
 
     if (!assertSafeChatId(chatId)) {
@@ -139,6 +139,7 @@ export async function POST(
       query: userMessageContent,
       topK: RAG_TOP_K,
       history: [...history, { role: "user", content: userMessageContent }],
+      viewer: { uid, role },
     });
 
     const assistantMessageRef = chatMessagesCollection(orgId, chatId).doc();

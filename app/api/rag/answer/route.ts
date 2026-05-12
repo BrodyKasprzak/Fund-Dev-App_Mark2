@@ -29,7 +29,7 @@ function parseQuery(value: unknown) {
 
 export async function POST(req: Request) {
   try {
-    const { orgId, uid } = await requireDocumentReadAccess(req);
+    const { orgId, uid, role } = await requireDocumentReadAccess(req);
     const body = (await req.json().catch(() => ({}))) as AnswerBody;
 
     await enforceRateLimit({
@@ -55,6 +55,7 @@ export async function POST(req: Request) {
       orgId,
       query,
       topK,
+      viewer: { uid, role },
     });
 
     return NextResponse.json(response);

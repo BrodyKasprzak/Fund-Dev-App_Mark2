@@ -4,6 +4,10 @@ import { requireDocumentWriteAccess, errorToResponse } from "@/lib/serverAuth";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
 import { writeOrgAuditLog } from "@/lib/auditLog";
 import {
+  normalizeDocumentPermissions,
+  userCanReadDocument,
+} from "@/lib/documentPermissions";
+import {
   ingestDocumentChunks,
   StaleDocumentVersionError,
 } from "@/lib/documentChunkIngestion";
@@ -346,7 +350,7 @@ export async function POST(
   context: { params: Promise<{ docId: string }> },
 ) {
   try {
-    const { orgId, uid, email } = await requireDocumentWriteAccess(req);
+    const { orgId, uid, email, role } = await requireDocumentWriteAccess(req);
     const { docId } = await context.params;
 
     if (!isValidDocId(docId)) {
@@ -397,8 +401,15 @@ export async function POST(
           chunkUpdatedAt?: FirestoreDateLike;
           updatedAt?: FirestoreDateLike;
           updatedBy?: unknown;
+          docAccessMode?: unknown;
+          docAllowedMemberUids?: unknown;
+          docRagEnabled?: unknown;
+          docPermissionsUpdatedBy?: unknown;
         }
       | undefined;
+    if (!userCanReadDocument({ permissions: normalizeDocumentPermissions(current), uid, role })) {
+      return NextResponse.json({ error: "Document not found" }, { status: 404 });
+    }
 
     const storagePath =
       typeof current?.storagePath === "string" ? current.storagePath.trim() : "";

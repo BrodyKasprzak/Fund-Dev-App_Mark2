@@ -3,6 +3,10 @@ import { adminDb } from "@/lib/firebaseAdmin";
 import { requireDocumentReadAccess, errorToResponse } from "@/lib/serverAuth";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
 import { writeOrgAuditLog } from "@/lib/auditLog";
+import {
+  normalizeDocumentPermissions,
+  userCanReadDocument,
+} from "@/lib/documentPermissions";
 
 export const runtime = "nodejs";
 
@@ -50,7 +54,7 @@ function buildSnippet(text: string, query: string) {
 
 export async function GET(req: Request) {
   try {
-    const { orgId, uid, email } = await requireDocumentReadAccess(req);
+    const { orgId, uid, email, role } = await requireDocumentReadAccess(req);
 
     await enforceRateLimit({
       scope: "documents_search_user",
@@ -103,7 +107,14 @@ export async function GET(req: Request) {
           textUpdatedAt?: FirestoreDateLike;
           updatedAt?: FirestoreDateLike;
           updatedBy?: unknown;
+          docAccessMode?: unknown;
+          docAllowedMemberUids?: unknown;
+          docRagEnabled?: unknown;
+          docPermissionsUpdatedBy?: unknown;
         };
+
+        const docPermissions = normalizeDocumentPermissions(data);
+        if (!userCanReadDocument({ permissions: docPermissions, uid, role })) return null;
 
         const title = toSafeString(data.title);
         const extractedText = toSafeString(data.extractedText);
@@ -126,6 +137,11 @@ export async function GET(req: Request) {
           textUpdatedAt: toIso(data.textUpdatedAt),
           updatedAt: toIso(data.updatedAt),
           updatedBy: toSafeString(data.updatedBy) || null,
+          docPermissions: {
+            accessMode: docPermissions.accessMode,
+            allowedMemberUids: docPermissions.allowedMemberUids,
+            ragEnabled: docPermissions.ragEnabled,
+          },
           match: {
             inTitle: titleMatch,
             inText: textMatch,
@@ -133,7 +149,7 @@ export async function GET(req: Request) {
           },
         };
       })
-      .filter(Boolean);
+      .filter((item): item is NonNullable<typeof item> => Boolean(item));
 
     await writeOrgAuditLog({
       orgId,

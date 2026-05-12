@@ -4,6 +4,10 @@ import { requireDocumentReadAccess, errorToResponse } from "@/lib/serverAuth";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
 import { writeOrgAuditLog } from "@/lib/auditLog";
 import {
+  normalizeDocumentPermissions,
+  userCanReadDocument,
+} from "@/lib/documentPermissions";
+import {
   DOCX_MIME,
   LEXICAL_EDITOR_FORMAT,
   PDF_MIME,
@@ -39,6 +43,10 @@ type DocumentRecord = {
   filename?: unknown;
   version?: unknown;
   currentVersionNumber?: unknown;
+  docAccessMode?: unknown;
+  docAllowedMemberUids?: unknown;
+  docRagEnabled?: unknown;
+  docPermissionsUpdatedBy?: unknown;
 };
 
 type VersionRecord = {
@@ -153,7 +161,7 @@ export async function GET(
   context: { params: Promise<{ docId: string }> },
 ) {
   try {
-    const { orgId, uid, email } = await requireDocumentReadAccess(req);
+    const { orgId, uid, email, role } = await requireDocumentReadAccess(req);
     const { docId } = await context.params;
 
     if (!isValidDocId(docId)) {
@@ -182,6 +190,10 @@ export async function GET(
 
     const docSnap = await docRef.get();
     if (!docSnap.exists) {
+      return NextResponse.json({ error: "Document not found" }, { status: 404 });
+    }
+    const docRecord = docSnap.data() as DocumentRecord | undefined;
+    if (!userCanReadDocument({ permissions: normalizeDocumentPermissions(docRecord), uid, role })) {
       return NextResponse.json({ error: "Document not found" }, { status: 404 });
     }
 
@@ -216,7 +228,7 @@ export async function GET(
       );
     }
 
-    const data = docSnap.data() as DocumentRecord | undefined;
+    const data = docRecord;
     const currentVersion = normalizeVersion(
       data?.currentVersionNumber,
       normalizeVersion(data?.version, 1),

@@ -3,6 +3,7 @@ import { adminDb } from "@/lib/firebaseAdmin";
 import { retrieveChunks } from "@/lib/rag/retrieveChunks";
 import type { RagAnswerResponse, RagChunk } from "@/lib/rag/types";
 import { buildCitationsFromChunks } from "@/lib/server/citations";
+import type { OrgRole } from "@/lib/permissions";
 
 const DEFAULT_TOP_K = 8;
 const PROMPT_CHUNK_LIMIT = 6;
@@ -33,6 +34,10 @@ type GenerateGroundedAnswerArgs = {
   query: string;
   topK?: number;
   history?: ChatTurn[];
+  viewer?: {
+    uid: string;
+    role: OrgRole;
+  } | null;
 };
 
 export function supportLabelForCitationCount(citationCount: number) {
@@ -176,7 +181,10 @@ export async function generateGroundedAnswer(
   let retrievedChunks: RagChunk[] = [];
   let retrievalIssue: string | null = null;
   try {
-    retrievedChunks = await retrieveChunks(orgId, normalizedQuery, topK);
+    retrievedChunks = await retrieveChunks(orgId, normalizedQuery, topK, {
+      viewer: args.viewer ?? null,
+      requireRagEnabled: true,
+    });
   } catch (err: unknown) {
     if (isNoIndexedChunksError(err)) {
       retrievalIssue = "No indexed chunks available for this organization.";

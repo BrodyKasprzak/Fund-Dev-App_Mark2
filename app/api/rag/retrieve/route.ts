@@ -42,7 +42,7 @@ function isNoIndexedChunksError(err: unknown) {
 
 export async function POST(req: Request) {
   try {
-    const { orgId, uid } = await requireDocumentReadAccess(req);
+    const { orgId, uid, role } = await requireDocumentReadAccess(req);
     const body = (await req.json().catch(() => ({}))) as RetrieveBody;
 
     await enforceRateLimit({
@@ -64,7 +64,10 @@ export async function POST(req: Request) {
     }
 
     const topK = normalizeTopK(body.topK);
-    const chunks = await retrieveChunks(orgId, query, topK);
+    const chunks = await retrieveChunks(orgId, query, topK, {
+      viewer: { uid, role },
+      requireRagEnabled: true,
+    });
 
     const response: RagRetrieveResponse = {
       chunks,

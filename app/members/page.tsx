@@ -42,10 +42,10 @@ function formatMemberIdentity(name: string | null, email: string | null, uid: st
 function normalizeRoleLabel(roleRaw: string | null | undefined) {
   const role = String(roleRaw ?? "").trim().toLowerCase();
   if (role === "admin") return "Admin";
-  if (role === "editor" || role === "member") return "Member with editor permissions";
-  if (role === "viewer") return "Member with viewer permissions";
-  if (role === "board_member") return "Board member with editor permissions";
-  return role || "Member with editor permissions";
+  if (role === "editor" || role === "member") return "Member (editor)";
+  if (role === "viewer") return "Member (viewer)";
+  if (role === "board_member") return "Board member (editor)";
+  return role || "Member (editor)";
 }
 
 function normalizeRoleValue(roleRaw: string | null | undefined): MemberRole {
@@ -65,6 +65,7 @@ export default function MembersPage() {
   const [error, setError] = useState<string | null>(null);
   const [roleDraftByUid, setRoleDraftByUid] = useState<Record<string, MemberRole>>({});
   const [savingUid, setSavingUid] = useState<string | null>(null);
+  const [removingUid, setRemovingUid] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -140,6 +141,41 @@ export default function MembersPage() {
       else setError("Failed to update member role");
     } finally {
       setSavingUid(null);
+    }
+  }
+
+  async function removeMember(member: MemberRow) {
+    const identity = formatMemberIdentity(member.name, member.email, member.uid);
+    const confirmed = window.confirm(
+      `Remove ${identity} from this organization?\n\nThey will lose access immediately.`,
+    );
+    if (!confirmed) return;
+
+    setRemovingUid(member.uid);
+    setError(null);
+    setMessage(null);
+    try {
+      const res = await authedFetch("/api/org/members", {
+        method: "DELETE",
+        body: JSON.stringify({ memberUid: member.uid }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(typeof data?.error === "string" ? data.error : "Failed to remove member");
+      }
+
+      setMembers((prev) => prev.filter((row) => row.uid !== member.uid));
+      setRoleDraftByUid((prev) => {
+        const next = { ...prev };
+        delete next[member.uid];
+        return next;
+      });
+      setMessage("Member removed from organization.");
+    } catch (err: unknown) {
+      if (err instanceof Error) setError(err.message);
+      else setError("Failed to remove member");
+    } finally {
+      setRemovingUid(null);
     }
   }
 
@@ -222,6 +258,7 @@ export default function MembersPage() {
                     <th className="px-4 py-3 font-semibold">Role</th>
                     <th className="px-4 py-3 font-semibold">Status</th>
                     <th className="px-4 py-3 font-semibold">Added</th>
+                    {canManageMembers ? <th className="px-4 py-3 font-semibold">Actions</th> : null}
                   </tr>
                 </thead>
                 <tbody>
@@ -248,9 +285,9 @@ export default function MembersPage() {
                               aria-label={`Role for ${m.name || m.email || m.uid}`}
                             >
                               <option value="admin">Admin</option>
-                              <option value="editor">Member with editor permissions</option>
-                              <option value="board_member">Board member with editor permissions</option>
-                              <option value="viewer">Member with viewer permissions</option>
+                              <option value="editor">Member (editor)</option>
+                              <option value="board_member">Board member (editor)</option>
+                              <option value="viewer">Member (viewer)</option>
                             </select>
                             <button
                               type="button"
@@ -267,6 +304,22 @@ export default function MembersPage() {
                       </td>
                       <td className="px-4 py-3 text-slate-700">{m.status || "active"}</td>
                       <td className="px-4 py-3 text-slate-700">{formatDateTime(m.createdAt)}</td>
+                      {canManageMembers ? (
+                        <td className="px-4 py-3">
+                          {m.uid === user.uid ? (
+                            <span className="text-xs text-slate-500">Current account</span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => void removeMember(m)}
+                              disabled={removingUid === m.uid || savingUid === m.uid}
+                              className="rounded-md border border-rose-300 bg-white px-2 py-1 text-xs font-semibold text-rose-700 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {removingUid === m.uid ? "Removing..." : "Remove"}
+                            </button>
+                          )}
+                        </td>
+                      ) : null}
                     </tr>
                   ))}
                 </tbody>

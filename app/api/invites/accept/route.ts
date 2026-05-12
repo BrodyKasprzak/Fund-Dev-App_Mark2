@@ -4,6 +4,7 @@ import { FieldValue } from "firebase-admin/firestore";
 import { adminDb } from "@/lib/firebaseAdmin";
 import { requireAuth, errorToResponse } from "@/lib/serverAuth";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
+import { normalizeOrgRole } from "@/lib/permissions";
 
 export const runtime = "nodejs";
 
@@ -93,6 +94,7 @@ export async function POST(req: Request) {
           expiresAt?: unknown;
           failedAttempts?: unknown;
           email?: unknown;
+          role?: unknown;
           codeHash?: unknown;
           createdBy?: unknown;
         }
@@ -185,13 +187,14 @@ export async function POST(req: Request) {
       ? orgData.name
       : null;
     const inviteCreatedBy = asNonEmptyString(invite.createdBy) ?? uid;
+    const inviteRole = normalizeOrgRole(invite.role);
 
     batch.set(
       memberRef,
       {
         uid,
         email,
-        role: "editor",
+        role: inviteRole,
         status: "active",
         name,
         position: position ?? null,
@@ -217,7 +220,7 @@ export async function POST(req: Request) {
       userMembershipRef,
       {
         orgId,
-        role: "editor",
+        role: inviteRole,
         status: "active",
         orgName,
         ...(existingMembershipSnap.exists ? {} : { createdAt: now }),
