@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
-import { requireOrgContext, errorToResponse } from "@/lib/serverAuth";
+import { requirePlanReadAccess, errorToResponse } from "@/lib/serverAuth";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 
 export const runtime = "nodejs";
@@ -28,7 +28,7 @@ export async function POST(
   context: { params: Promise<{ planId: string }> }
 ) {
   try {
-    const { orgId } = await requireOrgContext(req);
+    const { orgId } = await requirePlanReadAccess(req);
     const { planId } = await context.params;
 
     const ref = adminDb

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
-import { requireOrgContext, errorToResponse } from "@/lib/serverAuth";
+import { requirePlanWriteAccess, errorToResponse } from "@/lib/serverAuth";
 
 export const runtime = "nodejs";
 
@@ -14,7 +14,7 @@ const TEMPLATE_DEFAULT_TITLES: Record<string, string> = {
 
 export async function POST(req: Request) {
   try {
-    const { orgId, uid } = await requireOrgContext(req);
+    const { orgId, uid } = await requirePlanWriteAccess(req);
     const body = await req.json().catch(() => ({}));
 
     const templateType = String(body?.templateType ?? "").trim();

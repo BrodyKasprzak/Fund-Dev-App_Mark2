@@ -1,38 +1,16 @@
 import { NextResponse } from "next/server";
-import { adminDb } from "@/lib/firebaseAdmin";
-import { requireOrgContext, errorToResponse } from "@/lib/serverAuth";
 import { FieldValue } from "firebase-admin/firestore";
+import { adminDb } from "@/lib/firebaseAdmin";
+import { requirePlanWriteAccess, errorToResponse } from "@/lib/serverAuth";
 
 export const runtime = "nodejs";
 
-/**
- * POST /api/plans/[planId]/approve
- * Marks a plan as approved (scoped to org) and stores approval metadata.
- */
-
-type OrgContext = {
-  orgId: string;
-  uid: string;
-  email?: string | null;
-};
-
 export async function POST(
   req: Request,
-  context: { params: Promise<{ planId: string }> }
+  context: { params: Promise<{ planId: string }> },
 ) {
   try {
-    // requireOrgContext should throw if invalid; we still validate shape defensively.
-    const ctx = (await requireOrgContext(req)) as OrgContext;
-
-    const orgId = typeof ctx?.orgId === "string" ? ctx.orgId : "";
-    const uid = typeof ctx?.uid === "string" ? ctx.uid : "";
-    const email = typeof ctx?.email === "string" ? ctx.email : null;
-
-    if (!orgId || !uid) {
-      return NextResponse.json({ error: "Missing org context" }, { status: 401 });
-    }
-
-    // ✅ IMPORTANT: params is a Promise in your project
+    const { orgId, uid, email } = await requirePlanWriteAccess(req);
     const { planId } = await context.params;
 
     if (!planId) {
@@ -56,15 +34,15 @@ export async function POST(
         approvedAt: FieldValue.serverTimestamp(),
         approvedBy: { uid, email },
         updatedAt: FieldValue.serverTimestamp(),
+        updatedBy: uid,
       },
-      { merge: true }
+      { merge: true },
     );
 
     return NextResponse.json({ ok: true });
-  } catch (e: unknown) {
-    const { status, message } = errorToResponse(e);
+  } catch (err: unknown) {
+    const { status, message } = errorToResponse(err);
     return NextResponse.json({ error: message }, { status });
   }
 }
-
 

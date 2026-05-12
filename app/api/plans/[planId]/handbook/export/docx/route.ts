@@ -1,7 +1,7 @@
 // app/api/plans/[planId]/handbook/export/docx/route.ts
 import { NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
-import { requireOrgContext, errorToResponse } from "@/lib/serverAuth";
+import { requirePlanReadAccess, errorToResponse } from "@/lib/serverAuth";
 import {
   Document,
   Packer,
@@ -17,7 +17,7 @@ export const runtime = "nodejs";
 
 /**
  * PROFESSIONAL FUND DEVELOPMENT HANDBOOK EXPORT (DOCX)
- * - Org-scoped via requireOrgContext (authoritative)
+ * - Org-scoped via requirePlanReadAccess (authoritative)
  * - Plan loaded from organizations/{orgId}/plans/{planId}
  * - Exports ONLY completed sections with non-empty content
  * - Title page is vertically centered + no page number
@@ -92,7 +92,7 @@ export async function POST(
 ) {
   try {
     // ✅ Authoritative org context (membership verified here)
-    const { orgId } = await requireOrgContext(req);
+    const { orgId } = await requirePlanReadAccess(req);
 
     const { planId } = await context.params;
 

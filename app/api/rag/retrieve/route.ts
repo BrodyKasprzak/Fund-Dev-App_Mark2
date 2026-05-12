@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { errorToResponse, requireOrgContext } from "@/lib/serverAuth";
+import { errorToResponse, requireDocumentReadAccess } from "@/lib/serverAuth";
 import { retrieveChunks } from "@/lib/rag/retrieveChunks";
 import type { RagRetrieveResponse } from "@/lib/rag/types";
 import { enforceRateLimit, getRequestIp, RateLimitError } from "@/lib/rateLimit";
@@ -42,7 +42,7 @@ function isNoIndexedChunksError(err: unknown) {
 
 export async function POST(req: Request) {
   try {
-    const { orgId, uid } = await requireOrgContext(req);
+    const { orgId, uid } = await requireDocumentReadAccess(req);
     const body = (await req.json().catch(() => ({}))) as RetrieveBody;
 
     await enforceRateLimit({

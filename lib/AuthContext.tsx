@@ -227,7 +227,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               if (!orgId) return null;
               return {
                 orgId,
-                role: cleanOrgId(rec?.role) ?? "member",
+                role: cleanOrgId(rec?.role) ?? "editor",
                 status: cleanOrgId(rec?.status) ?? "active",
                 name: typeof rec?.name === "string" ? rec.name : null,
               } as OrgMembership;

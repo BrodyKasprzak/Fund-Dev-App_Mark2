@@ -7,6 +7,7 @@ import { signOut } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebaseClient";
 import { useAuth } from "@/lib/AuthContext";
+import { normalizeOrgRole } from "@/lib/permissions";
 
 type OrgProfile = {
   id: string;
@@ -112,6 +113,7 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
     signedInName && signedInName.toLowerCase() !== signedInEmail.toLowerCase()
       ? `${signedInName} (${signedInEmail})`
       : signedInName || signedInEmail;
+  const canManageInvites = normalizeOrgRole(me?.role) === "admin";
 
   useEffect(() => {
     const root = document.documentElement;
@@ -423,20 +425,22 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
                   );
                 })}
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (onInviteClick) onInviteClick();
-                    else router.push("/dashboard?invite=1");
-                  }}
-                  className={`w-full rounded-xl border border-white/15 bg-white/8 ${navPad} text-left backdrop-blur-sm transition hover:bg-white/15`}
-                >
-                  <div className="flex items-center gap-2">
-                    <div className="h-2 w-2 rounded-full bg-amber-300" />
-                    <div className="text-[13px] font-semibold">Invite Member</div>
-                  </div>
-                  <div className={`${navDesc} text-slate-200/90`}>Invite teammates to this organization</div>
-                </button>
+                {canManageInvites ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (onInviteClick) onInviteClick();
+                      else router.push("/dashboard?invite=1");
+                    }}
+                    className={`w-full rounded-xl border border-white/15 bg-white/8 ${navPad} text-left backdrop-blur-sm transition hover:bg-white/15`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <div className="h-2 w-2 rounded-full bg-amber-300" />
+                      <div className="text-[13px] font-semibold">Invite Member</div>
+                    </div>
+                    <div className={`${navDesc} text-slate-200/90`}>Invite teammates to this organization</div>
+                  </button>
+                ) : null}
 
                 <button
                   type="button"
@@ -484,17 +488,19 @@ export function WorkspaceSidebar({ onInviteClick }: { onInviteClick?: () => void
               </button>
             ))}
 
-            <button
-              type="button"
-              onClick={() => {
-                if (onInviteClick) onInviteClick();
-                else router.push("/dashboard?invite=1");
-              }}
-              className="flex h-10 w-10 items-center justify-center rounded-2xl border border-white/15 bg-white/8 backdrop-blur-sm transition hover:bg-white/15"
-              title="Invite member"
-            >
-              <div className="h-2 w-2 rounded-full bg-amber-300" />
-            </button>
+            {canManageInvites ? (
+              <button
+                type="button"
+                onClick={() => {
+                  if (onInviteClick) onInviteClick();
+                  else router.push("/dashboard?invite=1");
+                }}
+                className="flex h-10 w-10 items-center justify-center rounded-2xl border border-white/15 bg-white/8 backdrop-blur-sm transition hover:bg-white/15"
+                title="Invite member"
+              >
+                <div className="h-2 w-2 rounded-full bg-amber-300" />
+              </button>
+            ) : null}
 
             <button
               type="button"

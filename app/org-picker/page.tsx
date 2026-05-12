@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { signOut } from "firebase/auth";
 import { auth } from "@/lib/firebaseClient";
 import { useAuth } from "@/lib/AuthContext";
+import { getOrgRoleLabel, normalizeOrgRole } from "@/lib/permissions";
 
 function normalizeNextPath(nextRaw: string | null) {
   const trimmed = (nextRaw || "").trim();
@@ -184,7 +185,7 @@ export default function OrgPickerPage() {
               >
                 <p className="text-base font-semibold text-slate-900">{org.name || "Unnamed organization"}</p>
                 <p className="mt-1 text-xs text-slate-500">
-                  Role: {org.role} | Status: {org.status} | ID: {org.orgId}
+                  Role: {getOrgRoleLabel(normalizeOrgRole(org.role))} | Status: {org.status} | ID: {org.orgId}
                 </p>
               </button>
             ))}

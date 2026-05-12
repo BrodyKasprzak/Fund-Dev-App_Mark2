@@ -1,4 +1,10 @@
 import { adminAuth, adminDb } from "@/lib/firebaseAdmin";
+import {
+  type OrgCapability,
+  type OrgRole,
+  hasOrgCapability,
+  normalizeOrgRole,
+} from "@/lib/permissions";
 
 class HttpError extends Error {
   status: number;
@@ -15,17 +21,11 @@ type AuthContext = {
 
 type OrgContext = AuthContext & {
   orgId: string;
-  role: string;
+  role: OrgRole;
   memberStatus: string;
 };
 
-export type OrgCapability = "documents.read" | "documents.write";
-
 const ACTIVE_MEMBER_STATUSES = new Set(["active"]);
-const CAPABILITY_ROLE_ALLOWLIST: Record<OrgCapability, Set<string>> = {
-  "documents.read": new Set(["admin", "member", "viewer"]),
-  "documents.write": new Set(["admin", "member"]),
-};
 
 function asNonEmptyString(v: unknown): string | null {
   if (typeof v !== "string") return null;
@@ -124,7 +124,7 @@ export async function requireOrgContext(req: Request): Promise<OrgContext> {
   const memberSnap = await memberRef.get();
   if (!memberSnap.exists) throw new HttpError(403, "Not a member of this org");
 
-  const role = (asNonEmptyString(memberSnap.data()?.role) ?? "member").toLowerCase();
+  const role = normalizeOrgRole(memberSnap.data()?.role);
   const memberStatus = (
     asNonEmptyString(memberSnap.data()?.status) ?? "active"
   ).toLowerCase();
@@ -142,8 +142,7 @@ export async function requireAdmin(req: Request): Promise<OrgContext> {
 }
 
 export function assertOrgCapability(ctx: OrgContext, capability: OrgCapability) {
-  const allowed = CAPABILITY_ROLE_ALLOWLIST[capability];
-  if (!allowed?.has(ctx.role)) {
+  if (!hasOrgCapability(ctx.role, capability)) {
     throw new HttpError(403, "Insufficient permissions");
   }
 }
@@ -163,6 +162,22 @@ export async function requireDocumentReadAccess(req: Request): Promise<OrgContex
 
 export async function requireDocumentWriteAccess(req: Request): Promise<OrgContext> {
   return requireOrgCapability(req, "documents.write");
+}
+
+export async function requireMemberReadAccess(req: Request): Promise<OrgContext> {
+  return requireOrgCapability(req, "members.read");
+}
+
+export async function requireMemberManageAccess(req: Request): Promise<OrgContext> {
+  return requireOrgCapability(req, "members.manage");
+}
+
+export async function requirePlanReadAccess(req: Request): Promise<OrgContext> {
+  return requireOrgCapability(req, "plans.read");
+}
+
+export async function requirePlanWriteAccess(req: Request): Promise<OrgContext> {
+  return requireOrgCapability(req, "plans.write");
 }
 
 export function errorToResponse(err: unknown): { status: number; message: string } {

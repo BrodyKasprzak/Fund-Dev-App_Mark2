@@ -12,6 +12,7 @@ import {
   makeDashboardWorkspaceCacheKey,
   type DashboardWorkspaceData,
 } from "@/lib/dashboardWorkspace";
+import { normalizeOrgRole } from "@/lib/permissions";
 
 type OrgProfile = {
   id: string;
@@ -161,6 +162,18 @@ export default function DashboardPage() {
       : orgs.find((orgRow) => orgRow.orgId === activeOrgId)?.name?.trim() ||
         (me?.org?.id === activeOrgId ? me.org?.name?.trim() || "" : "") ||
         "Your organization";
+  const activeOrgMembership = useMemo(
+    () => orgs.find((orgRow) => orgRow.orgId === activeOrgId) ?? null,
+    [activeOrgId, orgs],
+  );
+  const canManageInvites = normalizeOrgRole(activeOrgMembership?.role ?? me?.role) === "admin";
+  const visibleQuickActions = useMemo(
+    () =>
+      canManageInvites
+        ? QUICK_ACTIONS
+        : QUICK_ACTIONS.filter((action) => action.href !== "/dashboard?invite=1"),
+    [canManageInvites],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -305,27 +318,27 @@ export default function DashboardPage() {
     };
   }, [activeOrgId, authedFetch, user]);
 
-  function openInviteModal() {
-    setInviteMsg(null);
-    setInviteEmails([""]);
-    setInviteOpen(true);
-  }
-
   function closeInviteModal() {
     setInviteOpen(false);
   }
 
   useEffect(() => {
     const shouldOpenInvite = searchParams.get("invite") === "1";
+    if (shouldOpenInvite && !canManageInvites) {
+      router.replace("/dashboard");
+      return;
+    }
     if (shouldOpenInvite && !inviteQueryHandledRef.current) {
       inviteQueryHandledRef.current = true;
-      openInviteModal();
+      setInviteMsg(null);
+      setInviteEmails([""]);
+      setInviteOpen(true);
       router.replace("/dashboard");
     }
     if (!shouldOpenInvite) {
       inviteQueryHandledRef.current = false;
     }
-  }, [router, searchParams]);
+  }, [canManageInvites, router, searchParams]);
 
   useEffect(() => {
     if (!inviteOpen) return;
@@ -463,7 +476,7 @@ export default function DashboardPage() {
           </div>
 
           <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {QUICK_ACTIONS.map((action, idx) => (
+            {visibleQuickActions.map((action, idx) => (
               <button
                 key={action.label}
                 type="button"
@@ -682,4 +695,3 @@ export default function DashboardPage() {
     </main>
   );
 }
-

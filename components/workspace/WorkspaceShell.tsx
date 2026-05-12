@@ -7,6 +7,7 @@ import Image from "next/image";
 import { signOut } from "firebase/auth";
 import { useAuth } from "@/lib/AuthContext";
 import { auth } from "@/lib/firebaseClient";
+import { normalizeOrgRole } from "@/lib/permissions";
 
 const WORKSPACE_ROUTE_PREFIXES = [
   "/dashboard",
@@ -169,6 +170,11 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
       : orgs.find((org) => org.orgId === activeOrgId)?.name?.trim() ||
         (me?.org?.id === activeOrgId ? me.org?.name?.trim() || "" : "") ||
         "Your organization";
+  const activeOrgMembership = useMemo(
+    () => orgs.find((org) => org.orgId === activeOrgId) ?? null,
+    [activeOrgId, orgs],
+  );
+  const canManageInvites = normalizeOrgRole(activeOrgMembership?.role ?? me?.role) === "admin";
 
   useEffect(() => {
     if (!pathname || !workspaceRoute) return;
@@ -208,9 +214,18 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
     if (!pathname) return;
     if (pathname === "/dashboard" || pathname.startsWith("/dashboard/")) return;
     const shouldOpenInvite = searchParams.get("invite") === "1";
+    if (shouldOpenInvite && !canManageInvites) {
+      const nextParams = new URLSearchParams(searchParams.toString());
+      nextParams.delete("invite");
+      const next = nextParams.toString();
+      router.replace(next ? `${pathname}?${next}` : pathname);
+      return;
+    }
     if (shouldOpenInvite && !inviteQueryHandledRef.current) {
       inviteQueryHandledRef.current = true;
-      openInviteModal();
+      setInviteMsg(null);
+      setInviteEmails([""]);
+      setInviteOpen(true);
 
       const nextParams = new URLSearchParams(searchParams.toString());
       nextParams.delete("invite");
@@ -220,7 +235,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
     if (!shouldOpenInvite) {
       inviteQueryHandledRef.current = false;
     }
-  }, [pathname, router, searchParams]);
+  }, [canManageInvites, pathname, router, searchParams]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -249,6 +264,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   }, [inviteOpen]);
 
   function openInviteModal() {
+    if (!canManageInvites) return;
     setInviteMsg(null);
     setInviteEmails([""]);
     setInviteOpen(true);
@@ -401,13 +417,15 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
                 {signedInIdentity}
               </div>
               <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={openInviteModal}
-                  className="rounded-md bg-slate-900 px-2.5 py-1 text-[11px] font-semibold text-white transition hover:bg-slate-800"
-                >
-                  Invite
-                </button>
+                {canManageInvites ? (
+                  <button
+                    type="button"
+                    onClick={openInviteModal}
+                    className="rounded-md bg-slate-900 px-2.5 py-1 text-[11px] font-semibold text-white transition hover:bg-slate-800"
+                  >
+                    Invite
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => setSettingsOpen(true)}
@@ -430,7 +448,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
         <div className="workspace-page">{children}</div>
       </section>
 
-      {inviteOpen ? (
+      {inviteOpen && canManageInvites ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
           <div className="absolute inset-0 bg-black/35 backdrop-blur-sm" onClick={closeInviteModal} />
 

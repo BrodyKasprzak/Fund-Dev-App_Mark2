@@ -1,13 +1,13 @@
 // app/api/org/profile/route.ts
 import { NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
-import { requireOrgContext, errorToResponse } from "@/lib/serverAuth";
+import { requireOrgCapability, errorToResponse } from "@/lib/serverAuth";
 
 export const runtime = "nodejs";
 
 export async function GET(req: Request) {
   try {
-    const { orgId } = await requireOrgContext(req);
+    const { orgId } = await requireOrgCapability(req, "organization.read");
 
     const orgSnap = await adminDb.collection("organizations").doc(orgId).get();
     if (!orgSnap.exists) {

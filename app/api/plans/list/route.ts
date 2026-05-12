@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
-import { requireOrgContext, errorToResponse } from "@/lib/serverAuth";
+import { requirePlanReadAccess, errorToResponse } from "@/lib/serverAuth";
 
 export const runtime = "nodejs";
 
 export async function GET(req: Request) {
   try {
-    const { orgId } = await requireOrgContext(req);
+    const { orgId } = await requirePlanReadAccess(req);
 
     const url = new URL(req.url);
     const status = (url.searchParams.get("status") ?? "all").trim();

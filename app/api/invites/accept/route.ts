@@ -191,7 +191,7 @@ export async function POST(req: Request) {
       {
         uid,
         email,
-        role: "member",
+        role: "editor",
         status: "active",
         name,
         position: position ?? null,
@@ -217,7 +217,7 @@ export async function POST(req: Request) {
       userMembershipRef,
       {
         orgId,
-        role: "member",
+        role: "editor",
         status: "active",
         orgName,
         ...(existingMembershipSnap.exists ? {} : { createdAt: now }),

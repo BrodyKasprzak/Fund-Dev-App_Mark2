@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
 import { requireAuth, errorToResponse } from "@/lib/serverAuth";
+import { type OrgRole, normalizeOrgRole } from "@/lib/permissions";
 
 export const runtime = "nodejs";
 const MAX_PROFILE_NAME_LENGTH = 120;
@@ -49,7 +50,7 @@ async function readWithRetry<T>(
 
 type OrgSummary = {
   orgId: string;
-  role: string;
+  role: OrgRole;
   status: string;
   name: string | null;
 };
@@ -120,7 +121,7 @@ export async function GET(req: Request) {
         indexedNameByOrgId.set(orgId, orgName);
         return {
           orgId,
-          role: asNonEmptyString(m.role) ?? "member",
+          role: normalizeOrgRole(m.role),
           status: asNonEmptyString(m.status) ?? "active",
           name: orgName,
         } satisfies OrgSummary;
@@ -145,7 +146,7 @@ export async function GET(req: Request) {
           const canonical = memberSnap.data() as OrgMemberRecord | undefined;
           return {
             orgId: indexed.orgId,
-            role: asNonEmptyString(canonical?.role) ?? indexed.role,
+            role: normalizeOrgRole(canonical?.role, normalizeOrgRole(indexed.role)),
             status: asNonEmptyString(canonical?.status) ?? indexed.status,
             name: indexed.name,
           } satisfies OrgSummary;
@@ -177,7 +178,7 @@ export async function GET(req: Request) {
           const member = docSnap.data() as OrgMemberRecord;
           byOrgId.set(orgId, {
             orgId,
-            role: asNonEmptyString(member.role) ?? "member",
+            role: normalizeOrgRole(member.role),
             status: asNonEmptyString(member.status) ?? "active",
             name: indexedNameByOrgId.get(orgId) ?? null,
           });
@@ -242,7 +243,7 @@ export async function GET(req: Request) {
           orgs = [
             {
               orgId: lastOrgId,
-              role: asNonEmptyString(memberSnap.data()?.role) ?? "member",
+              role: normalizeOrgRole(memberSnap.data()?.role),
               status: asNonEmptyString(memberSnap.data()?.status) ?? "active",
               name: indexedNameByOrgId.get(lastOrgId) ?? null,
             },

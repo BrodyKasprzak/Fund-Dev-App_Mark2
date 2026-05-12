@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
-import { requireOrgContext, errorToResponse } from "@/lib/serverAuth";
+import {
+  requirePlanReadAccess,
+  requirePlanWriteAccess,
+  errorToResponse,
+} from "@/lib/serverAuth";
 
 export const runtime = "nodejs";
 
@@ -13,7 +17,7 @@ export async function GET(
   context: { params: Promise<{ planId: string }> }
 ) {
   try {
-    const { orgId } = await requireOrgContext(req);
+    const { orgId } = await requirePlanReadAccess(req);
     const { planId } = await context.params;
 
     const ref = adminDb
@@ -49,7 +53,7 @@ export async function PATCH(
   context: { params: Promise<{ planId: string }> }
 ) {
   try {
-    const { orgId, uid } = await requireOrgContext(req);
+    const { orgId, uid } = await requirePlanWriteAccess(req);
     const { planId } = await context.params;
 
     const body = await req.json().catch(() => ({}));
