@@ -11,6 +11,7 @@ import { writeOrgAuditLog } from "@/lib/auditLog";
 export const runtime = "nodejs";
 
 const LIST_LIMIT = 250;
+const SIBLING_SCAN_LIMIT = 1000;
 const FOLDER_LIST_LIMIT_PER_5_MIN = 300;
 const FOLDER_CREATE_LIMIT_PER_10_MIN = 120;
 const MAX_FOLDER_NAME_LENGTH = 120;
@@ -25,6 +26,7 @@ type FirestoreDateLike =
 
 type CreateFolderBody = {
   name?: unknown;
+  parentFolderId?: unknown;
 };
 
 function toIso(value: FirestoreDateLike) {
@@ -42,6 +44,16 @@ function normalizeFolderName(raw: unknown) {
   const trimmed = raw.trim().replace(/\s+/g, " ");
   if (!trimmed) return null;
   return trimmed.slice(0, MAX_FOLDER_NAME_LENGTH);
+}
+
+function normalizeFolderId(raw: unknown) {
+  if (raw === null || typeof raw === "undefined") return null;
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (trimmed.length > 128) return null;
+  if (trimmed.includes("/") || trimmed.includes("\\")) return null;
+  return trimmed;
 }
 
 export async function GET(req: Request) {
@@ -73,6 +85,7 @@ export async function GET(req: Request) {
     const folders = snap.docs.map((folderDoc) => {
       const data = folderDoc.data() as {
         name?: unknown;
+        parentFolderId?: unknown;
         createdAt?: FirestoreDateLike;
         createdBy?: unknown;
         updatedAt?: FirestoreDateLike;
@@ -82,6 +95,7 @@ export async function GET(req: Request) {
       return {
         id: folderDoc.id,
         name: typeof data.name === "string" ? data.name : "Untitled Folder",
+        parentFolderId: typeof data.parentFolderId === "string" ? data.parentFolderId : null,
         createdAt: toIso(data.createdAt),
         createdBy: typeof data.createdBy === "string" ? data.createdBy : null,
         updatedAt: toIso(data.updatedAt),
@@ -129,18 +143,61 @@ export async function POST(req: Request) {
     if (!folderName) {
       return NextResponse.json({ error: "name is required" }, { status: 400 });
     }
+    const parentFolderId = normalizeFolderId(body?.parentFolderId);
+    if (
+      body?.parentFolderId !== null &&
+      typeof body?.parentFolderId !== "undefined" &&
+      !parentFolderId
+    ) {
+      return NextResponse.json({ error: "Invalid parentFolderId" }, { status: 400 });
+    }
+
+    if (parentFolderId) {
+      const parentSnap = await adminDb
+        .collection("organizations")
+        .doc(orgId)
+        .collection("documentFolders")
+        .doc(parentFolderId)
+        .get();
+      if (!parentSnap.exists) {
+        return NextResponse.json({ error: "Parent folder not found" }, { status: 404 });
+      }
+    }
 
     const folderNameLower = folderName.toLowerCase();
-    const existingSnap = await adminDb
+    const siblingSnap = await adminDb
       .collection("organizations")
       .doc(orgId)
       .collection("documentFolders")
-      .where("nameLower", "==", folderNameLower)
-      .limit(1)
+      .where("parentFolderId", "==", parentFolderId)
+      .limit(SIBLING_SCAN_LIMIT)
       .get();
-    if (!existingSnap.empty) {
+    const duplicateSibling = siblingSnap.docs.some((docSnap) => {
+      const data = docSnap.data() as { nameLower?: unknown };
+      return typeof data.nameLower === "string" && data.nameLower === folderNameLower;
+    });
+    let duplicateRootFromLegacyRecord = false;
+    if (!parentFolderId && !duplicateSibling) {
+      const legacyRootSnap = await adminDb
+        .collection("organizations")
+        .doc(orgId)
+        .collection("documentFolders")
+        .where("nameLower", "==", folderNameLower)
+        .limit(25)
+        .get();
+      duplicateRootFromLegacyRecord = legacyRootSnap.docs.some((docSnap) => {
+        const data = docSnap.data() as { parentFolderId?: unknown };
+        return (
+          typeof data.parentFolderId === "undefined" ||
+          data.parentFolderId === null ||
+          (typeof data.parentFolderId === "string" && !data.parentFolderId.trim())
+        );
+      });
+    }
+
+    if (duplicateSibling || duplicateRootFromLegacyRecord) {
       return NextResponse.json(
-        { error: "A folder with this name already exists" },
+        { error: "A folder with this name already exists in this location" },
         { status: 409 },
       );
     }
@@ -154,6 +211,7 @@ export async function POST(req: Request) {
     await folderRef.set({
       name: folderName,
       nameLower: folderNameLower,
+      parentFolderId,
       createdAt: now,
       createdBy: uid,
       updatedAt: now,
@@ -168,6 +226,7 @@ export async function POST(req: Request) {
       metadata: {
         folderId: folderRef.id,
         folderName,
+        parentFolderId,
       },
     });
 
@@ -176,6 +235,7 @@ export async function POST(req: Request) {
       folder: {
         id: folderRef.id,
         name: folderName,
+        parentFolderId,
         createdAt: now.toISOString(),
         createdBy: uid,
         updatedAt: now.toISOString(),

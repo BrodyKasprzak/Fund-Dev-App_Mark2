@@ -482,7 +482,7 @@ export default function DocumentsPage() {
 
   const switchToChatMode = useCallback(
     (chatId?: string | null) => {
-      const nextChatId = chatId ?? activeChatId ?? null;
+      const nextChatId = typeof chatId === "undefined" ? (activeChatId ?? null) : chatId;
       setWorkspaceMode("chat-private");
       setSidebarPanel("history");
       if (nextChatId) {
@@ -753,16 +753,10 @@ export default function DocumentsPage() {
 
   async function handleNewChat() {
     setChatError(null);
-    try {
-      const nextChat = await createChat("New chat");
-      setChatList((current) =>[nextChat, ...current.filter((chat) => chat.id !== nextChat.id)]);
-      setActiveChatId(nextChat.id);
-      setChatMessages([]);
-      switchToChatMode(nextChat.id);
-    } catch (err: unknown) {
-      if (err instanceof Error) setChatError(err.message);
-      else setChatError("Failed to create chat");
-    }
+    setActiveChatId(null);
+    setChatMessages([]);
+    setChatInput("");
+    switchToChatMode(null);
   }
 
   async function ensureActiveChatId(seedTitle: string) {
