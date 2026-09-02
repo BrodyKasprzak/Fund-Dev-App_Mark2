@@ -52,6 +52,13 @@ const QUICK_ACTIONS: QuickAction[] = [
       "border-slate-200 bg-white text-slate-900 hover:border-accent-300",
   },
   {
+    label: "Time Management",
+    description: "Track contract hours, utilization, and project time",
+    href: "/time",
+    style:
+      "border-slate-200 bg-white text-slate-900 hover:border-emerald-300",
+  },
+  {
     label: "Invite Member",
     description: "Invite teammates with secure access codes",
     href: "/dashboard?invite=1",
@@ -479,7 +486,7 @@ export default function DashboardPage() {
             <p className="text-xs text-slate-500">Fast paths into your core org workflows</p>
           </div>
 
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
             {visibleQuickActions.map((action, idx) => (
               <button
                 key={action.label}
@@ -495,7 +502,9 @@ export default function DashboardPage() {
                         ? "bg-success-400"
                         : idx === 2
                           ? "bg-accent-400"
-                          : "bg-slate-400"
+                          : idx === 3
+                            ? "bg-emerald-500"
+                            : "bg-slate-400"
                   }`}
                 />
                 <p className="text-sm font-semibold">{action.label}</p>

@@ -16,6 +16,7 @@ const WORKSPACE_ROUTE_PREFIXES = [
   "/chat",
   "/products",
   "/activity",
+  "/time",
   "/members",
   "/fund-development",
   "/handbook",
@@ -137,6 +138,18 @@ const TOP_NAV_ITEMS: TopNavItem[] = [
           strokeLinecap="round"
           strokeLinejoin="round"
         />
+      </svg>
+    ),
+  },
+  {
+    href: "/time",
+    label: "Time Management",
+    shortLabel: "Time",
+    matchPathPrefix: "/time",
+    icon: (className = "h-4 w-4") => (
+      <svg viewBox="0 0 20 20" fill="none" className={className} aria-hidden="true">
+        <circle cx="10" cy="10" r="6.25" stroke="currentColor" strokeWidth="1.5" />
+        <path d="M10 6.5v4l2.75 1.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     ),
   },
