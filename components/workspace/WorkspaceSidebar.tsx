@@ -48,6 +48,13 @@ const NAV_ITEMS: NavItem[] = [
     matchPathPrefix: "/documents",
   },
   {
+    href: "/documents-lab",
+    label: "Docs Lab",
+    description: "Test DOCX/PDF conversion fidelity",
+    indicatorClass: "bg-amber-300",
+    matchPathPrefix: "/documents-lab",
+  },
+  {
     href: "/chat",
     label: "Ask",
     description: "Grounded chat over org documents",

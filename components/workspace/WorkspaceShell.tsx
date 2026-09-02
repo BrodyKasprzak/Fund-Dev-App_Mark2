@@ -12,6 +12,7 @@ import { normalizeOrgRole } from "@/lib/permissions";
 const WORKSPACE_ROUTE_PREFIXES = [
   "/dashboard",
   "/documents",
+  "/documents-lab",
   "/chat",
   "/products",
   "/activity",
@@ -68,6 +69,24 @@ const TOP_NAV_ITEMS: TopNavItem[] = [
           strokeLinejoin="round"
         />
         <path d="M11 3.5v3h3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      </svg>
+    ),
+  },
+  {
+    href: "/documents-lab",
+    label: "Docs Lab",
+    shortLabel: "Lab",
+    matchPathPrefix: "/documents-lab",
+    icon: (className = "h-4 w-4") => (
+      <svg viewBox="0 0 20 20" fill="none" className={className} aria-hidden="true">
+        <path
+          d="M7.25 3.75v3.5l-3 5.25a2 2 0 0 0 1.74 3h8.02a2 2 0 0 0 1.74-3l-3-5.25v-3.5M6 3.75h8"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path d="M7.5 11.5h5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
       </svg>
     ),
   },
