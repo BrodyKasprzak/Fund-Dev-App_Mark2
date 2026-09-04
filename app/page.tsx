@@ -348,17 +348,21 @@ export default function Home() {
                     <div className="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-700">
                       <LayoutTemplate className="h-5 w-5" />
                     </div>
-                    <h2 className="text-xl font-bold text-slate-900 mb-2">Current status</h2>
-                    <p className="text-slate-600 text-sm leading-relaxed mb-6">
-                      Contact intake is being finalized. For now, create an organization to view the full product flow.
-                    </p>
+                    <h2 className="text-xl font-bold text-slate-900 mb-2">Contact Ashley Kasprzak</h2>
+                    <p className="text-slate-600 text-sm leading-relaxed mb-1">Co-Founder</p>
+                    <a
+                      className="inline-block text-sm font-semibold text-primary-700 underline decoration-primary-200 underline-offset-4 transition hover:text-primary-900 hover:decoration-primary-500"
+                      href="mailto:ashley@partnerforpurpose.com"
+                    >
+                      ashley@partnerforpurpose.com
+                    </a>
                   </div>
-                  <button
-                    onClick={() => router.push("/register")}
-                    className="w-full rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800"
+                  <a
+                    href="mailto:ashley@partnerforpurpose.com"
+                    className="mt-6 block w-full rounded-md bg-slate-900 px-4 py-2 text-center text-sm font-medium text-white transition-colors hover:bg-slate-800"
                   >
-                    Start now
-                  </button>
+                    Email Ashley
+                  </a>
                 </div>
               </div>
             </motion.div>
